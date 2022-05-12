@@ -2,47 +2,41 @@ name: napari-deeplabcut
 display_name: napari DeepLabCut
 contributions:
   commands:
-    - id: napari-deeplabcut.get_reader
-      python_name: napari_deeplabcut._reader:napari_get_reader
+    - id: napari-deeplabcut.get_hdf_reader
+      python_name: napari_deeplabcut._reader:get_hdf_reader
       title: Open data with napari DeepLabCut
-    - id: napari-deeplabcut.write_multiple
-      python_name: napari_deeplabcut._writer:write_multiple
-      title: Save multi-layer data with napari DeepLabCut
-    - id: napari-deeplabcut.write_single_image
-      python_name: napari_deeplabcut._writer:write_single_image
-      title: Save image data with napari DeepLabCut
-    - id: napari-deeplabcut.make_sample_data
-      python_name: napari_deeplabcut._sample_data:make_sample_data
-      title: Load sample data from napari DeepLabCut 
-    - id: napari-deeplabcut.make_qwidget
-      python_name: napari_deeplabcut._widget:ExampleQWidget
-      title: Make example QWidget
-    - id: napari-deeplabcut.make_magic_widget
-      python_name: napari_deeplabcut._widget:example_magic_widget
-      title: Make example magic widget
-    - id: napari-deeplabcut.make_func_widget
-      python_name: napari_deeplabcut._widget:example_function_widget
-      title: Make example function widget 
+    - id: napari-deeplabcut.get_image_reader
+      python_name: napari_deeplabcut._reader:get_image_reader
+      title: Open images with napari DeepLabCut
+    - id: napari-deeplabcut.get_folder_parser
+      python_name: napari_deeplabcut._reader:get_folder_parser
+      title: Open folder with napari DeepLabCut
+    - id: napari-deeplabcut.get_config_reader
+      python_name: napari_deeplabcut._reader:get_config_reader
+      title: Open config with napari DeepLabCut
+    - id: napari-deeplabcut.write_hdf
+      python_name: napari_deeplabcut._writer:write_hdf
+      title: Save keypoint annotations with napari DeepLabCut
+    - id: napari-deeplabcut.make_keypoint_controls
+      python_name: napari_deeplabcut._widgets:KeypointControls
+      title: Make keypoint controls
   readers:
-    - command: napari-deeplabcut.get_reader
+    - command: napari-deeplabcut.get_hdf_reader
       accepts_directories: false
-      filename_patterns: ['*.npy'] 
+      filename_patterns: ['*.h5']
+    - command: napari-deeplabcut.get_image_reader
+      accepts_directories: true
+      filename_patterns: ['*.png', '*.jpg', '*.jpeg']
+    - command: napari-deeplabcut.get_config_reader
+      accepts_directories: false
+      filename_patterns: ['*.yaml']
+    - command: napari-deeplabcut.get_folder_parser
+      accepts_directories: true
+      filename_patterns: ['*']
   writers:
-    - command: napari-deeplabcut.write_multiple
-      layer_types: ['image*','labels*']
-      filename_extensions: []
-    - command: napari-deeplabcut.write_single_image
-      layer_types: ['image']
-      filename_extensions: ['.npy'] 
-  sample_data:
-    - command: napari-deeplabcut.make_sample_data
-      display_name: napari DeepLabCut
-      key: unique_id.1 
+    - command: napari-deeplabcut.write_hdf
+      layer_types: ["points{1}"]
+      filename_extensions: [".h5"]
   widgets:
-    - command: napari-deeplabcut.make_qwidget
-      display_name: Example QWidget
-    - command: napari-deeplabcut.make_magic_widget
-      display_name: Example Magic Widget
-    - command: napari-deeplabcut.make_func_widget
-      autogenerate: true
-      display_name: Example Function Widget 
+    - command: napari-deeplabcut.make_keypoint_controls
+      display_name: Keypoint controls
