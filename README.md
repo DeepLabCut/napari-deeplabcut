@@ -1,10 +1,10 @@
 # napari-deeplabcut
 
-[![License](https://img.shields.io/pypi/l/napari-deeplabcut.svg?color=green)](https://github.com/jeylau/napari-deeplabcut/raw/main/LICENSE)
+[![License](https://img.shields.io/pypi/l/napari-deeplabcut.svg?color=green)](https://github.com/DeepLabCut/napari-deeplabcut/raw/main/LICENSE)
 [![PyPI](https://img.shields.io/pypi/v/napari-deeplabcut.svg?color=green)](https://pypi.org/project/napari-deeplabcut)
 [![Python Version](https://img.shields.io/pypi/pyversions/napari-deeplabcut.svg?color=green)](https://python.org)
-[![tests](https://github.com/jeylau/napari-deeplabcut/workflows/tests/badge.svg)](https://github.com/jeylau/napari-deeplabcut/actions)
-[![codecov](https://codecov.io/gh/jeylau/napari-deeplabcut/branch/main/graph/badge.svg)](https://codecov.io/gh/jeylau/napari-deeplabcut)
+[![tests](https://github.com/DeepLabCut/napari-deeplabcut/workflows/tests/badge.svg)](https://github.com/DeepLabCut/napari-deeplabcut/actions)
+[![codecov](https://codecov.io/gh/DeepLabCut/napari-deeplabcut/branch/main/graph/badge.svg)](https://codecov.io/gh/DeepLabCut/napari-deeplabcut)
 [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-deeplabcut)](https://napari-hub.org/plugins/napari-deeplabcut)
 
 napari + DeepLabCut annotation tool
@@ -31,7 +31,7 @@ You can install `napari-deeplabcut` via [pip]:
 
 To install latest development version :
 
-    pip install git+https://github.com/jeylau/napari-deeplabcut.git
+    pip install git+https://github.com/DeepLabCut/napari-deeplabcut.git
 
 
 ## Usage
@@ -42,7 +42,7 @@ To use the plugin, please run:
 
 Then, activate the plugin in Plugins > napari-deeplabcut: Keypoint controls.
 
-All accepted files (config.yaml, images, h5 data files) can be loaded 
+All accepted files (config.yaml, images, h5 data files) can be loaded
 either by dropping them directly onto the canvas or via the File menu.
 
 The easiest way to get started is to drop a folder (typically a folder from within a DeepLabCut's `labeled-data` directory), and, if labeling from scratch, drop the corresponding `config.yaml` to automatically add a `Points layer` and populate the dropdown menus.
@@ -54,7 +54,7 @@ The easiest way to get started is to drop a folder (typically a folder from with
 - `M`, to cycle through regular (sequential), quick, and cycle annotation mode (see the description [here](https://github.com/DeepLabCut/DeepLabCut-label/blob/ee71b0e15018228c98db3b88769e8a8f4e2c0454/dlclabel/layers.py#L9-L19))
 - `E`, to enable edge coloring (by default, if using this in refinement GUI mode, points with a confidence lower than 0.6 are marked
 in red)
-- `F`, to toggle between animal and body part color scheme. 
+- `F`, to toggle between animal and body part color scheme.
 - `backspace` to delete a point.
 - Check the box "display text" to show the label names on the canvas.
 - To move to another folder, be sure to save (Ctrl+S), then delete the layers, and re-drag/drop the next folder.
@@ -63,7 +63,7 @@ in red)
 ### Save Layers
 
 Annotations and segmentations are saved with `File > Save Selected Layer(s)...`
-(or its shortcut `Ctrl+S`). For convenience, the save file dialog opens automatically into the folder containing your images or your h5 data file. 
+(or its shortcut `Ctrl+S`). For convenience, the save file dialog opens automatically into the folder containing your images or your h5 data file.
 - As a reminder, DLC will only use the H5 file; so be sure if you open already labeled images you save/overwrite the H5. If you label from scratch, you should save the file as `CollectedData_YourName.h5`
 - Note, before saving a layer, make sure the points layer is selected. If the user clicked on the image(s) layer first, does `Save As`, then closes the window, any labeling work during that session will be lost!
 
@@ -119,4 +119,4 @@ Distributed under the terms of the [BSD-3] license,
 
 If you encounter any problems, please [file an issue] along with a detailed description.
 
-[file an issue]: https://github.com/jeylau/napari-deeplabcut/issues
+[file an issue]: https://github.com/DeepLabCut/napari-deeplabcut/issues
