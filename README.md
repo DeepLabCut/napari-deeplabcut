@@ -102,6 +102,8 @@ Now, another image folder can be labeled, following the process described in *1*
 Contributions are very welcome. Tests can be run with [tox], please ensure
 the coverage at least stays the same before you submit a pull request.
 
+To locally install the code, please git clone the repo and then run `pip install -e.`
+
 ## License
 
 Distributed under the terms of the [BSD-3] license,
@@ -114,7 +116,7 @@ If you encounter any problems, please [file an issue] along with a detailed desc
 [file an issue]: https://github.com/DeepLabCut/napari-deeplabcut/issues
 
 
-## Acknowledgements 
+## Acknowledgements
 
 
 This [napari] plugin was generated with [Cookiecutter] using [@napari]'s [cookiecutter-napari-plugin] template. We thank the Chan Zuckerberg Initiative (CZI) for funding this work!
