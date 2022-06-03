@@ -23,6 +23,15 @@ from napari_deeplabcut import keypoints
 from napari_deeplabcut.misc import to_os_dir_sep
 
 
+def _get_and_try_preferred_reader(
+    self, dialog, *args,
+):
+    self.viewer.open(
+        dialog._current_file,
+        plugin="napari-deeplabcut",
+    )
+
+
 # Hack to save a KeyPoints layer without showing the Save dialog
 def _save_layers_dialog(self, selected=False):
     """Save layers (all or selected) to disk, using ``LayerList.save()``.
@@ -66,6 +75,10 @@ class KeypointControls(QWidget):
         self.viewer = napari_viewer
         self.viewer.layers.events.inserted.connect(self.on_insert)
         self.viewer.layers.events.removed.connect(self.on_remove)
+
+        self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
+            _get_and_try_preferred_reader, self.viewer.window.qt_viewer,
+        )
 
         self._label_mode = keypoints.LabelMode.default()
 
