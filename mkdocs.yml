@@ -1,11 +1,11 @@
 site_name: napari-deeplabcut
 site_description: napari + DeepLabCut annotation tool
-site_author: Jessy Lauer
+site_author: Jessy Lauer for the DeeplabCut organization
 
 theme: readthedocs
 
 
-repo_url: https://github.com/jeylau/napari-deeplabcut
+repo_url: https://github.com/DeepLabCut/napari-deeplabcut
 
 pages:
 - Home: index.md
