@@ -46,6 +46,7 @@ def _save_layers_dialog(self, selected=False):
         return
     if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
         self.viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+        self.viewer.status = "Data successfully saved"
     else:
         dlg = QFileDialog()
         hist = get_save_history()
@@ -53,7 +54,7 @@ def _save_layers_dialog(self, selected=False):
         filename, _ = dlg.getSaveFileName(
             parent=self,
             caption=f'Save {"selected" if selected else "all"} layers',
-            directory=hist[0],  # home dir by default
+            dir=hist[0],  # home dir by default
         )
         if filename:
             self.viewer.layers.save(filename, selected=selected)
