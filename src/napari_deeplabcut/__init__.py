@@ -1,3 +1,8 @@
+import warnings
+
+# FIXME: Circumvent the need to access window.qt_viewer
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 try:
     from ._version import version as __version__
 except ImportError:

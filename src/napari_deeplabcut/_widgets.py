@@ -6,12 +6,14 @@ import numpy as np
 from napari.layers import Image, Points
 from napari.layers.points._points_key_bindings import register_points_action
 from napari.utils.events import Event
-from napari.utils.history import update_save_history
+from napari.utils.history import update_save_history, get_save_history
 from qtpy.QtWidgets import (
     QButtonGroup,
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QRadioButton,
     QVBoxLayout,
     QWidget,
@@ -28,6 +30,43 @@ def _get_and_try_preferred_reader(
         dialog._current_file,
         plugin="napari-deeplabcut",
     )
+
+
+# Hack to save a KeyPoints layer without showing the Save dialog
+def _save_layers_dialog(self, selected=False):
+    """Save layers (all or selected) to disk, using ``LayerList.save()``.
+    Parameters
+    ----------
+    selected : bool
+        If True, only layers that are selected in the viewer will be saved.
+        By default, all layers are saved.
+    """
+    selected_layers = list(self.viewer.layers.selection)
+    msg = ""
+    if not len(self.viewer.layers):
+        msg = "There are no layers in the viewer to save."
+    elif selected and not len(selected_layers):
+        msg = (
+            'Please select one or more layers to save,'
+            '\nor use "Save all layers..."'
+        )
+    if msg:
+        QMessageBox.warning(self, "Nothing to save", msg, QMessageBox.Ok)
+        return
+    if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
+        self.viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+        self.viewer.status = "Data successfully saved"
+    else:
+        dlg = QFileDialog()
+        hist = get_save_history()
+        dlg.setHistory(hist)
+        filename, _ = dlg.getSaveFileName(
+            parent=self,
+            caption=f'Save {"selected" if selected else "all"} layers',
+            dir=hist[0],  # home dir by default
+        )
+        if filename:
+            self.viewer.layers.save(filename, selected=selected)
 
 
 class KeypointControls(QWidget):
@@ -56,6 +95,18 @@ class KeypointControls(QWidget):
         self._menus = []
         self._radio_group = self._form_mode_radio_buttons()
         # TODO Slider point size
+
+        # Substitute default menu action with custom one
+        for action in self.viewer.window.file_menu.actions():
+            if "save selected layer" in action.text().lower():
+                action.triggered.disconnect()
+                action.triggered.connect(
+                    lambda: _save_layers_dialog(
+                        self.viewer.window.qt_viewer,
+                        selected=True,
+                    )
+                )
+                break
 
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)
