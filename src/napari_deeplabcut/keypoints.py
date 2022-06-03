@@ -4,8 +4,20 @@ from typing import List, Sequence
 
 import numpy as np
 from napari.layers import Points
+from napari._qt.layer_controls.qt_points_controls import QtPointsControls
 
 from napari_deeplabcut.misc import CycleEnum
+
+# Monkeypatch the point size slider
+def _change_size(self, value):
+    """Resize all points at once regardless of the current selection."""
+    self.layer._current_size = value
+    if self.layer._update_properties:
+        self.layer.size = (self.layer.size > 0) * value
+        self.layer.refresh()
+        self.layer.events.size()
+
+QtPointsControls.changeSize = _change_size
 
 
 class LabelMode(CycleEnum):
