@@ -121,17 +121,10 @@ class KeypointControls(QWidget):
         layout1.addWidget(title)
         layout2 = QHBoxLayout()
         group = QButtonGroup(self)
-        tooltips = [
-            "SEQUENTIAL: points are placed in sequence, then frame after frame;\n"
-            "clicking to add an already annotated point has no effect.",
-            "QUICK: similar to SEQUENTIAL, but trying to add an already\n"
-            "annotated point actually moves it to the cursor location.",
-            "LOOP: the first point is placed frame by frame, then it wraps\n"
-            "to the next label at the end and restart from frame 1, etc.",
-        ]
+
         for i, mode in enumerate(keypoints.LabelMode.__members__, start=1):
             btn = QRadioButton(mode.lower())
-            btn.setToolTip(tooltips[i-1])
+            btn.setToolTip(keypoints.TOOLTIPS[mode])
             group.addButton(btn, i)
             layout2.addWidget(btn)
         group.button(1).setChecked(True)
