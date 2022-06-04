@@ -40,15 +40,16 @@ class LabelMode(CycleEnum):
         return cls.SEQUENTIAL
 
 
+# Description tooltips for the labeling modes radio buttons.
 TOOLTIPS = {
-        "SEQUENTIAL": "Points are placed in sequence, then frame after frame;\n"
-                      "clicking to add an already annotated point has no effect.",
-        "QUICK": "Similar to SEQUENTIAL, but trying to add an already\n"
-                 "annotated point actually moves it to the cursor location.",
-        "LOOP": "The first point is placed frame by frame, then it wraps\n"
-                "to the next label at the end and restart from frame 1, etc.",
-    }
-"""Description tooltips for the labeling modes radio buttons."""
+    "SEQUENTIAL": "Points are placed in sequence, then frame after frame;\n"
+                  "clicking to add an already annotated point has no effect.",
+    "QUICK": "Similar to SEQUENTIAL, but trying to add an already\n"
+             "annotated point actually moves it to the cursor location.",
+    "LOOP": "The first point is placed frame by frame, then it wraps\n"
+            "to the next label at the end and restart from frame 1, etc.",
+}
+
 
 Keypoint = namedtuple("Keypoint", ["label", "id"])
 
