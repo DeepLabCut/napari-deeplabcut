@@ -121,8 +121,10 @@ class KeypointControls(QWidget):
         layout1.addWidget(title)
         layout2 = QHBoxLayout()
         group = QButtonGroup(self)
+
         for i, mode in enumerate(keypoints.LabelMode.__members__, start=1):
             btn = QRadioButton(mode.lower())
+            btn.setToolTip(keypoints.TOOLTIPS[mode])
             group.addButton(btn, i)
             layout2.addWidget(btn)
         group.button(1).setChecked(True)
