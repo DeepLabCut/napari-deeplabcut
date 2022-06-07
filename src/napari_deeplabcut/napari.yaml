@@ -17,6 +17,9 @@ contributions:
     - id: napari-deeplabcut.write_hdf
       python_name: napari_deeplabcut._writer:write_hdf
       title: Save keypoint annotations with napari DeepLabCut
+    - id: napari-deeplabcut.write_masks
+      python_name: napari_deeplabcut._writer:write_masks
+      title: Save segmentation masks with napari DeepLabCut
     - id: napari-deeplabcut.make_keypoint_controls
       python_name: napari_deeplabcut._widgets:KeypointControls
       title: Make keypoint controls
@@ -37,6 +40,9 @@ contributions:
     - command: napari-deeplabcut.write_hdf
       layer_types: ["points{1}"]
       filename_extensions: [".h5"]
+    - command: napari-deeplabcut.write_masks
+      layer_types: ["shapes{1}"]
+      filename_extensions: [".csv"]
   widgets:
     - command: napari-deeplabcut.make_keypoint_controls
       display_name: Keypoint controls

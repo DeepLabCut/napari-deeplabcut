@@ -26,10 +26,16 @@ from napari_deeplabcut.misc import to_os_dir_sep
 def _get_and_try_preferred_reader(
     self, dialog, *args,
 ):
-    self.viewer.open(
-        dialog._current_file,
-        plugin="napari-deeplabcut",
-    )
+    try:
+        self.viewer.open(
+            dialog._current_file,
+            plugin="napari-deeplabcut",
+        )
+    except ValueError:
+        self.viewer.open(
+            dialog._current_file,
+            plugin="builtins",
+        )
 
 
 # Hack to save a KeyPoints layer without showing the Save dialog
@@ -61,7 +67,6 @@ def _save_layers_dialog(self, selected=False):
         hist = get_save_history()
         dlg.setHistory(hist)
         filename, _ = dlg.getSaveFileName(
-            parent=self,
             caption=f'Save {"selected" if selected else "all"} layers',
             dir=hist[0],  # home dir by default
         )

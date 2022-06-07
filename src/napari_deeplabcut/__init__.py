@@ -15,4 +15,4 @@ from ._reader import (
     get_folder_parser,
     get_config_reader,
 )
-from ._writer import write_hdf
+from ._writer import write_hdf, write_masks
