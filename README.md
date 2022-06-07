@@ -54,9 +54,10 @@ in red)
 
 ### Save Layers
 
-Annotations and segmentations are saved with `File > Save Selected Layer(s)...`
-(or its shortcut `Ctrl+S`). For convenience, the save file dialog opens automatically into the folder containing your images or your h5 data file.
-- As a reminder, DLC will only use the H5 file; so be sure if you open already labeled images you save/overwrite the H5. If you label from scratch, you should save the file as `CollectedData_YourName.h5`
+Annotations and segmentations are saved with `File > Save Selected Layer(s)...` (or its shortcut `Ctrl+S`).
+Only when saving segmentation masks does a save file dialog pop up to name the destination folder;
+keypoint annotations are otherwise automatically saved in the corresponding folder as `CollectedData_<ScorerName>.h5`.
+- As a reminder, DLC will only use the H5 file; so be sure if you open already labeled images you save/overwrite the H5.
 - Note, before saving a layer, make sure the points layer is selected. If the user clicked on the image(s) layer first, does `Save As`, then closes the window, any labeling work during that session will be lost!
 
 
@@ -71,23 +72,30 @@ Suggested workflows, depending on the image folder contents:
     Supported image formats are: `jpg`, `jpeg`, `png`.
     The `config.yaml` file creates a *Points layer*, which holds metadata (such as keypoints read from the config file) necessary for labeling.
     Select the *Points layer* in the layer list (lower left pane on the GUI) and click on the *+*-symbol in the layer controls menu (upper left pane) to start labeling.
-    The current keypoint can be viewed/selected in the keypoints dropdown menu (bottom pane).
+    The current keypoint can be viewed/selected in the keypoints dropdown menu (right pane).
     The slider below the displayed image (or the left/right arrow keys) allows selecting the image to label.
 
     To save the labeling progress refer to [Save Layers](#save-layers).
-    If the console window does not display any errors, the image folder should now contain a `CollectedData_<ScorerName>.h5` file.
+    `Data successfully saved` should be shown in the status bar, and the image folder should now contain a `CollectedData_<ScorerName>.h5` file.
     (Note: For convenience, a CSV file with the same name is also saved.)
 
-1. **Resuming labeling** – the image folder contains a `CollectedData_<ScorerName>.h5` file.
+2. **Resuming labeling** – the image folder contains a `CollectedData_<ScorerName>.h5` file.
 
     Open *napari* and open an image folder (which needs to contain a `CollectedData_<ScorerName>.h5` file).
     In this case, it is not necessary to open the DLC project's `config.yaml` file, as all necessary metadata is read from the `h5` data file.
 
     Saving works as described in *1*.
 
-1. **Refining labels** – the image folder contains a `machinelabels-iter<#>.h5` file.
+3. **Refining labels** – the image folder contains a `machinelabels-iter<#>.h5` file.
 
     The process is analog to *2*.
+
+4. **Drawing segmentation masks**
+
+    Drop an image folder as in *1*, manually add a *shapes layer*. Then select the *rectangle* in the layer controls (top left pane),
+    and start drawing rectangles over the images. Masks and rectangle vertices are saved as described in [Save Layers](#save-layers).
+    Note that masks can be reloaded and edited at a later stage by dropping the `vertices.csv` file onto the canvas. 
+
 
 ### Labeling multiple image folders
 
@@ -102,7 +110,7 @@ Now, another image folder can be labeled, following the process described in *1*
 Contributions are very welcome. Tests can be run with [tox], please ensure
 the coverage at least stays the same before you submit a pull request.
 
-To locally install the code, please git clone the repo and then run `pip install -e.`
+To locally install the code, please git clone the repo and then run `pip install -e .`
 
 ## License
 
@@ -130,19 +138,11 @@ https://napari.org/plugins/stable/index.html
 -->
 
 
-[file an issue]: https://github.com/AdaptiveMotorControlLab/CellSeg3d/issues
 [napari]: https://github.com/napari/napari
 [Cookiecutter]: https://github.com/audreyr/cookiecutter
 [@napari]: https://github.com/napari
-[MIT]: http://opensource.org/licenses/MIT
-[BSD-3]: http://opensource.org/licenses/BSD-3-Clause
-[GNU GPL v3.0]: http://www.gnu.org/licenses/gpl-3.0.txt
-[GNU LGPL v3.0]: http://www.gnu.org/licenses/lgpl-3.0.txt
-[Apache Software License 2.0]: http://www.apache.org/licenses/LICENSE-2.0
-[Mozilla Public License 2.0]: https://www.mozilla.org/media/MPL/2.0/index.txt
 [cookiecutter-napari-plugin]: https://github.com/napari/cookiecutter-napari-plugin
-
-[napari]: https://github.com/napari/napari
+[BSD-3]: http://opensource.org/licenses/BSD-3-Clause
 [tox]: https://tox.readthedocs.io/en/latest/
 [pip]: https://pypi.org/project/pip/
 [PyPI]: https://pypi.org/
