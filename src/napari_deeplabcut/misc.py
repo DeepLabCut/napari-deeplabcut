@@ -27,27 +27,7 @@ def encode_categories(
     return inds
 
 
-def to_os_dir_sep(path: str) -> str:
-    """
-    Replace all directory separators in `path` with `os.path.sep`.
-    Function originally written by @pyzun:
-    https://github.com/DeepLabCut/napari-DeepLabCut/pull/13
-
-    Raises
-    ------
-    ValueError: if `path` contains both UNIX and Windows directory separators.
-
-    """
-    win_sep, unix_sep = "\\", "/"
-
-    # On UNIX systems, `win_sep` is a valid character in directory and file
-    # names. This function fails if both are present.
-    if win_sep in path and unix_sep in path:
-        raise ValueError(f'"{path}" may not contain both "{win_sep}" and "{unix_sep}"!')
-
-    sep = win_sep if win_sep in path else unix_sep
-
-    return os.path.sep.join(path.split(sep))
+to_os_dir_sep = os.path.normpath
 
 
 def guarantee_multiindex_rows(df):
