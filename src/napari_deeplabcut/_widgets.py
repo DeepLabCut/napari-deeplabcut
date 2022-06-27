@@ -5,6 +5,7 @@ from typing import Optional, Sequence, Union
 import numpy as np
 from napari.layers import Image, Points
 from napari.layers.points._points_key_bindings import register_points_action
+from napari.layers.utils import color_manager
 from napari.utils.events import Event
 from napari.utils.history import update_save_history, get_save_history
 from qtpy.QtWidgets import (
@@ -36,6 +37,19 @@ def _get_and_try_preferred_reader(
             dialog._current_file,
             plugin="builtins",
         )
+
+
+# Hack to avoid napari's silly variable type guess,
+# where property is understood as continuous if
+# there are more than 16 unique categories...
+def guess_continuous(property):
+    if issubclass(property.dtype.type, np.floating):
+        return True
+    else:
+        return False
+
+
+color_manager.guess_continuous = guess_continuous
 
 
 # Hack to save a KeyPoints layer without showing the Save dialog
@@ -99,7 +113,6 @@ class KeypointControls(QWidget):
         self._layout = QVBoxLayout(self)
         self._menus = []
         self._radio_group = self._form_mode_radio_buttons()
-        # TODO Slider point size
 
         # Substitute default menu action with custom one
         for action in self.viewer.window.file_menu.actions():
