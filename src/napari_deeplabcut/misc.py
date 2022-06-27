@@ -27,7 +27,11 @@ def encode_categories(
     return inds
 
 
-to_os_dir_sep = os.path.normpath
+def to_os_dir_sep(self, path: str):
+    """
+    Replace all directory separators in `path` with `os.path.sep`.
+    """
+    return str(path).replace('\\', os.path.sep).replace('/', os.path.sep)
 
 
 def guarantee_multiindex_rows(df):
