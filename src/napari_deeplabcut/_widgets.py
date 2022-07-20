@@ -225,6 +225,8 @@ class KeypointControls(QWidget):
             layer.add = MethodType(keypoints._add, store)
             layer.events.add(query_next_frame=Event)
             layer.events.query_next_frame.connect(store._advance_step)
+            layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
+            layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
             self.viewer.dims.events.current_step.connect(
                 store.smart_reset,
                 position="last",

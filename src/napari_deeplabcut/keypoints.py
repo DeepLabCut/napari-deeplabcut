@@ -152,6 +152,14 @@ class KeypointStore:
         ind = (self.current_step + 1) % self.n_steps
         self.viewer.dims.set_current_step(0, ind)
 
+    def _find_first_unlabeled_frame(self, event):
+        inds = set(range(self.n_steps))
+        unlabeled_inds = inds.difference(self.layer.data[:, 0].astype(int))
+        if not unlabeled_inds:
+            self.viewer.dims.set_current_step(0, self.n_steps - 1)
+        else:
+            self.viewer.dims.set_current_step(0, min(unlabeled_inds))
+
 
 def _add(store, coord):
     if store.current_keypoint not in store.annotated_keypoints:
