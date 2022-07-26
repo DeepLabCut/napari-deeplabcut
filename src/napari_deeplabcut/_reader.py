@@ -11,6 +11,7 @@ from napari.types import LayerData
 from napari_deeplabcut import misc
 
 SUPPORTED_IMAGES = "jpg", "jpeg", "png"
+SUPPORTED_VIDEOS = "mp4", "mov", "avi"
 
 
 def get_hdf_reader(path):
@@ -31,6 +32,15 @@ def get_image_reader(path):
         return None
 
     return read_images
+
+
+def get_video_reader(path):
+    if (
+        isinstance(path, str)
+        and any(path.lower().endswith(ext) for ext in SUPPORTED_VIDEOS)
+    ):
+        return read_video
+    return None
 
 
 def get_config_reader(path):
@@ -201,3 +211,18 @@ def read_hdf(filename: str) -> List[LayerData]:
         metadata["metadata"]["root"] = os.path.split(filename)[0]
         layers.append((data, metadata, "points"))
     return layers
+
+
+def read_video(filename: str) -> List[LayerData]:
+    import dask.array as da
+    from dask import delayed
+    from pims import PyAVReaderIndexed
+
+    stream = PyAVReaderIndexed(filename)
+    shape = stream.frame_shape
+    lazy_imread = delayed(stream.get_frame)
+    movie = da.stack(
+        [da.from_delayed(lazy_imread(i), shape=shape, dtype=np.uint8)
+         for i in range(len(stream))]
+    )
+    return [(movie,)]
