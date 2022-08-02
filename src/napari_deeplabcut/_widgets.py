@@ -2,12 +2,14 @@ from collections import defaultdict
 from types import MethodType
 from typing import Optional, Sequence, Union
 
+import napari
 import numpy as np
 from napari.layers import Image, Points
 from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
 from napari.utils.events import Event
-from napari.utils.history import update_save_history, get_save_history
+from napari.utils.history import get_save_history, update_save_history
+from qtpy.QtGui import QGuiApplication
 from qtpy.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -15,7 +17,9 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QPushButton,
     QRadioButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -25,7 +29,9 @@ from napari_deeplabcut.misc import to_os_dir_sep
 
 
 def _get_and_try_preferred_reader(
-    self, dialog, *args,
+    self,
+    dialog,
+    *args,
 ):
     try:
         self.viewer.open(
@@ -67,8 +73,7 @@ def _save_layers_dialog(self, selected=False):
         msg = "There are no layers in the viewer to save."
     elif selected and not len(selected_layers):
         msg = (
-            'Please select one or more layers to save,'
-            '\nor use "Save all layers..."'
+            "Please select one or more layers to save," '\nor use "Save all layers..."'
         )
     if msg:
         QMessageBox.warning(self, "Nothing to save", msg, QMessageBox.Ok)
@@ -96,7 +101,8 @@ class KeypointControls(QWidget):
         self.viewer.layers.events.removed.connect(self.on_remove)
 
         self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
-            _get_and_try_preferred_reader, self.viewer.window.qt_viewer,
+            _get_and_try_preferred_reader,
+            self.viewer.window.qt_viewer,
         )
 
         self._label_mode = keypoints.LabelMode.default()
@@ -125,6 +131,9 @@ class KeypointControls(QWidget):
                     )
                 )
                 break
+
+        view_controls = MultiViewControls(self)
+        self._layout.addWidget(view_controls)
 
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)
@@ -361,3 +370,55 @@ def create_dropdown_menu(store, items, attr):
 
     menu.currentIndexChanged.connect(item_changed)
     return menu
+
+
+class MultiViewControls(QWidget):
+    def __init__(self, parent):
+        super().__init__()
+        self.parent = parent
+        layout = QVBoxLayout(self)
+        self._viewers = []
+        label = QLabel("# of views")
+        self._box = QSpinBox()
+        self._box.setMinimum(2)
+        self._box.setMaximum(4)
+        layout.addWidget(label)
+        layout.addWidget(self._box)
+        button = QPushButton("Open Viewers")
+        button.clicked.connect(self._open_viewers)
+        layout.addWidget(button)
+        self.setLayout(layout)
+
+        # Grid-like positioning in screen
+        self._screen_size = QGuiApplication.primaryScreen().size()
+        self._half_w = self._screen_size.width() // 2
+        self._half_h = self._screen_size.height() // 2
+        self._pos = [
+            (0, 0),
+            (self._half_w, 0),
+            (0, self._half_h),
+            (self._half_w, self._half_h),
+        ]
+
+    def _open_viewers(self, *args):
+        n = self._box.value()
+        self.parent.viewer.title = "Camera 1"
+        self._viewers.append(self.parent.viewer)
+        for i in range(n - 1):
+            viewer = napari.Viewer(title=f"Camera {i + 2}")
+            # Auto activate plugin
+            action = viewer.window.plugins_menu.actions()[-1]
+            action.trigger()
+            self._viewers.append(viewer)
+        for n, viewer in enumerate(self._viewers):
+            viewer.window.resize(self._half_w, self._half_h)
+            viewer.window._qt_window.move(*self._pos[n % 4])
+            viewer.dims.events.current_step.connect(self._update_viewers)
+
+        # TODO Connect to layers.set_data upon inserting new layers
+        #  so data get added simultaneously on all viewers
+
+    def _update_viewers(self, event):
+        ind = event.value[0]
+        for viewer in self._viewers:
+            viewer.dims.set_current_step(0, ind)
