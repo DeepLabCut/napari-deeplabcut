@@ -132,8 +132,8 @@ class KeypointControls(QWidget):
                 )
                 break
 
-        view_controls = MultiViewControls(self)
-        self._layout.addWidget(view_controls)
+        self._multiview_controls = MultiViewControls(self)
+        self._layout.addWidget(self._multiview_controls)
 
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)
@@ -244,11 +244,15 @@ class KeypointControls(QWidget):
             layer.bind_key("Down", store.next_keypoint, overwrite=True)
             layer.bind_key("Up", store.prev_keypoint, overwrite=True)
             layer.face_color_mode = "cycle"
+            layer.events.data.connect(self.update_data)
             if not self._menus:
                 self._form_dropdown_menus(store)
         for layer_ in self.viewer.layers:
             if not isinstance(layer_, Image):
                 self._remap_frame_indices(layer_)
+
+    def update_data(self, event):
+        self._multiview_controls._update_viewers_data(event.value)
 
     def on_remove(self, event):
         layer = event.value
@@ -415,10 +419,15 @@ class MultiViewControls(QWidget):
             viewer.window._qt_window.move(*self._pos[n % 4])
             viewer.dims.events.current_step.connect(self._update_viewers)
 
-        # TODO Connect to layers.set_data upon inserting new layers
-        #  so data get added simultaneously on all viewers
-
     def _update_viewers(self, event):
         ind = event.value[0]
         for viewer in self._viewers:
             viewer.dims.set_current_step(0, ind)
+
+    # TODO Need to update layer properties as well
+    def _update_viewers_data(self, data):
+        for viewer in self._viewers:
+            for layer in viewer.layers:
+                if isinstance(layer, Points):
+                    with layer.events.data.blocker():
+                        layer.data = data
