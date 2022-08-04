@@ -12,6 +12,7 @@ except ImportError:
 from ._reader import (
     get_hdf_reader,
     get_image_reader,
+    get_video_reader,
     get_folder_parser,
     get_config_reader,
 )
