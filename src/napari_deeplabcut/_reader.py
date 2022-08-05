@@ -1,3 +1,4 @@
+from asyncore import read
 import glob
 import os
 from typing import Dict, List, Optional, Sequence
@@ -201,3 +202,7 @@ def read_hdf(filename: str) -> List[LayerData]:
         metadata["metadata"]["root"] = os.path.split(filename)[0]
         layers.append((data, metadata, "points"))
     return layers
+
+
+
+

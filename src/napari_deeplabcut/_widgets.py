@@ -1,8 +1,12 @@
 from collections import defaultdict
+from re import S
+import pandas as pd
 from types import MethodType
 from typing import Optional, Sequence, Union
-
+from PyQt5.QtCore import pyqtSlot
+from napari_deeplabcut import _reader
 import numpy as np
+from napari.types import ImageData
 from napari.layers import Image, Points
 from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
@@ -18,7 +22,11 @@ from qtpy.QtWidgets import (
     QRadioButton,
     QVBoxLayout,
     QWidget,
+    QPushButton,
 )
+from napari_deeplabcut.kmeans import read_data
+
+
 
 from napari_deeplabcut import keypoints
 from napari_deeplabcut.misc import to_os_dir_sep
@@ -125,6 +133,36 @@ class KeypointControls(QWidget):
                     )
                 )
                 break
+        
+        self.left = 10
+        self.top = 10
+        self.width = 320
+        self.height = 200
+        self.initUI()
+        
+    def initUI(self):
+        self.setGeometry(self.left, self.top, self.width, self.height)
+        
+        button = QPushButton('cluster pose', self)
+        #button.setToolTip('This is an example button')
+        button.move(100,70)
+        button.clicked.connect(self.on_click)
+        
+        self.show()
+
+    @pyqtSlot()
+    def on_click(self):
+        filename_path = list(self.viewer.layers[0]._source)[0][1]
+        fil2 = filename_path.replace("\\", "/")
+        print(list(self.viewer.layers[0]._source)[0][1])
+        df = pd.read_hdf(filename_path)
+        points_cluster , _, names = read_data(fil2)
+        x = list(points_cluster[0])
+        y = list(points_cluster[1])
+        points_cluster1 = np.column_stack((y,x))
+        #names = self.viewer.layers[0]._metadata['paths']
+        self.viewer.add_points(points_cluster1, size=10,name='cluster',properties=names)
+
 
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)
@@ -182,6 +220,7 @@ class KeypointControls(QWidget):
             # Check now whether there are new frames
             temp = {k: new_paths.index(v) for k, v in paths_map.items()}
             data = layer.data
+            #print(data)
             if isinstance(data, list):
                 for verts in data:
                     verts[:, 0] = np.vectorize(temp.get)(verts[:, 0])
@@ -192,6 +231,7 @@ class KeypointControls(QWidget):
 
     def on_insert(self, event):
         layer = event.source[-1]
+        print(layer)
         if isinstance(layer, Image):
             paths = layer.metadata.get("paths")
             if paths is None:
@@ -216,6 +256,7 @@ class KeypointControls(QWidget):
         elif isinstance(layer, Points):
             store = keypoints.KeypointStore(self.viewer, layer)
             self._stores[layer] = store
+            print(store)
             # TODO Set default dir of the save file dialog
             if root := layer.metadata.get("root"):
                 update_save_history(root)
@@ -310,6 +351,7 @@ class KeypointsDropdownMenu(QWidget):
     ):
         super().__init__(parent)
         self.store = store
+        
         self.store.layer.events.current_properties.connect(self.update_menus)
 
         # Map individuals to their respective bodyparts
@@ -361,3 +403,4 @@ def create_dropdown_menu(store, items, attr):
 
     menu.currentIndexChanged.connect(item_changed)
     return menu
+

@@ -14,12 +14,11 @@ A napari plugin for keypoint annotation with DeepLabCut
 
 
 ## Installation
-
-You can install `napari-deeplabcut` via [pip]:
+In your env with deeplabcut, you can install `napari-deeplabcut` via [pip]:
 
     pip install napari-deeplabcut
 
-
+and pip install PyQt5
 
 To install latest development version :
 
