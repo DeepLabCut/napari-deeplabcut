@@ -2,15 +2,19 @@ import glob
 import os
 from typing import Dict, List, Optional, Sequence
 
+import cv2
+import dask.array as da
 import numpy as np
 import pandas as pd
 import yaml
+from dask import delayed
 from dask_image.imread import imread
 from napari.types import LayerData
 
 from napari_deeplabcut import misc
 
 SUPPORTED_IMAGES = "jpg", "jpeg", "png"
+SUPPORTED_VIDEOS = "mp4", "mov", "avi"
 
 
 def get_hdf_reader(path):
@@ -31,6 +35,14 @@ def get_image_reader(path):
         return None
 
     return read_images
+
+
+def get_video_reader(path):
+    if isinstance(path, str) and any(
+        path.lower().endswith(ext) for ext in SUPPORTED_VIDEOS
+    ):
+        return read_video
+    return None
 
 
 def get_config_reader(path):
@@ -154,6 +166,7 @@ def read_config(configname: str) -> List[LayerData]:
     metadata["name"] = f"CollectedData_{config['scorer']}"
     metadata["ndim"] = 3
     metadata["property_choices"] = metadata.pop("properties")
+    metadata["metadata"]["project"] = os.path.dirname(configname)
     return [(None, metadata, "points")]
 
 
@@ -199,5 +212,86 @@ def read_hdf(filename: str) -> List[LayerData]:
         )
         metadata["name"] = os.path.split(filename)[1].split(".")[0]
         metadata["metadata"]["root"] = os.path.split(filename)[0]
+        # Store file name in case the layer's name is edited by the user
+        metadata["metadata"]["name"] = metadata["name"]
         layers.append((data, metadata, "points"))
     return layers
+
+
+class Video:
+    def __init__(self, video_path):
+        if not os.path.isfile(video_path):
+            raise ValueError(f'Video path "{video_path}" does not point to a file.')
+
+        self.path = video_path
+        self.stream = cv2.VideoCapture(video_path)
+        if not self.stream.isOpened():
+            raise OSError("Video could not be opened.")
+
+        self._n_frames = int(self.stream.get(cv2.CAP_PROP_FRAME_COUNT))
+        self._width = int(self.stream.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self._height = int(self.stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self._frame = cv2.UMat(self._height, self._width, cv2.CV_8UC3)
+
+    def __len__(self):
+        return self._n_frames
+
+    @property
+    def width(self):
+        return self._width
+
+    @property
+    def height(self):
+        return self._height
+
+    def set_to_frame(self, ind):
+        ind = min(ind, len(self) - 1)
+        self.stream.set(cv2.CAP_PROP_POS_FRAMES, ind)
+
+    def read_frame(self):
+        self.stream.retrieve(self._frame)
+        cv2.cvtColor(self._frame, cv2.COLOR_BGR2RGB, self._frame, 3)
+        return self._frame.get()
+
+    def close(self):
+        self.stream.release()
+
+
+def read_video(filename: str, opencv: bool = True):
+    if opencv:
+        stream = Video(filename)
+        shape = stream.width, stream.height, 3
+
+        def _read_frame(ind):
+            stream.set_to_frame(ind)
+            return stream.read_frame()
+
+        lazy_imread = delayed(_read_frame)
+    else:
+        from pims import PyAVReaderIndexed
+
+        try:
+            stream = PyAVReaderIndexed(filename)
+        except ImportError:
+            raise ImportError("`pip install av` to use the PyAV video reader.")
+
+        shape = stream.frame_shape
+        lazy_imread = delayed(stream.get_frame)
+
+    movie = da.stack(
+        [
+            da.from_delayed(lazy_imread(i), shape=shape, dtype=np.uint8)
+            for i in range(len(stream))
+        ]
+    )
+    elems = filename.split(os.path.sep)
+    elems[-2] = "labeled-data"
+    elems[-1] = elems[-1].split(".")[0]
+    root = os.path.join(*elems)
+    params = {
+        "name": os.path.split(filename)[1],
+        "metadata": {
+            "root": root,
+        },
+    }
+    return [(movie, params)]

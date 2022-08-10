@@ -1,31 +1,38 @@
+import os
 from collections import defaultdict
 from types import MethodType
 from typing import Optional, Sequence, Union
 
 import numpy as np
-from napari.layers import Image, Points
+from napari.layers import Image, Points, Shapes
 from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
 from napari.utils.events import Event
-from napari.utils.history import update_save_history, get_save_history
+from napari.utils.history import get_save_history, update_save_history
 from qtpy.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QFileDialog,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QPushButton,
     QRadioButton,
     QVBoxLayout,
     QWidget,
 )
 
 from napari_deeplabcut import keypoints
+from napari_deeplabcut._reader import _load_config
+from napari_deeplabcut._writer import _write_config
 from napari_deeplabcut.misc import to_os_dir_sep
 
 
 def _get_and_try_preferred_reader(
-    self, dialog, *args,
+    self,
+    dialog,
+    *args,
 ):
     try:
         self.viewer.open(
@@ -67,8 +74,7 @@ def _save_layers_dialog(self, selected=False):
         msg = "There are no layers in the viewer to save."
     elif selected and not len(selected_layers):
         msg = (
-            'Please select one or more layers to save,'
-            '\nor use "Save all layers..."'
+            "Please select one or more layers to save," '\nor use "Save all layers..."'
         )
     if msg:
         QMessageBox.warning(self, "Nothing to save", msg, QMessageBox.Ok)
@@ -96,7 +102,8 @@ class KeypointControls(QWidget):
         self.viewer.layers.events.removed.connect(self.on_remove)
 
         self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
-            _get_and_try_preferred_reader, self.viewer.window.qt_viewer,
+            _get_and_try_preferred_reader,
+            self.viewer.window.qt_viewer,
         )
 
         self._label_mode = keypoints.LabelMode.default()
@@ -112,6 +119,12 @@ class KeypointControls(QWidget):
         # Add some more controls
         self._layout = QVBoxLayout(self)
         self._menus = []
+
+        self.crop_button = QPushButton("Store crop coordinates")
+        self.crop_button.clicked.connect(self._store_crop_coordinates)
+        self.crop_button.setEnabled(False)
+        self._layout.addWidget(self.crop_button)
+
         self._radio_group = self._form_mode_radio_buttons()
 
         # Substitute default menu action with custom one
@@ -126,6 +139,31 @@ class KeypointControls(QWidget):
                 )
                 break
 
+    def _store_crop_coordinates(self, *args):
+        if not (project_path := self._images_meta.get("project")):
+            return
+
+        for layer in self.viewer.layers:
+            if isinstance(layer, Shapes):
+                try:
+                    ind = layer.shape_type.index("rectangle")
+                except ValueError:
+                    return
+                bbox = layer.data[ind][:, 1:]
+                h = self.viewer.dims.range[2][1]
+                bbox[:, 0] = h - bbox[:, 0]
+                bbox = np.clip(bbox, 0, a_max=None).astype(int)
+                y1, x1 = bbox.min(axis=0)
+                y2, x2 = bbox.max(axis=0)
+                temp = {"crop": ", ".join(map(str, [x1, x2, y1, y2]))}
+                config_path = os.path.join(project_path, "config.yaml")
+                cfg = _load_config(config_path)
+                cfg["video_sets"][
+                    os.path.join(project_path, "videos", self._images_meta["name"])
+                ] = temp
+                _write_config(config_path, cfg)
+                break
+
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)
         self._menus.append(menu)
@@ -134,20 +172,17 @@ class KeypointControls(QWidget):
         self._layout.addLayout(layout)
 
     def _form_mode_radio_buttons(self):
-        layout1 = QVBoxLayout()
-        title = QLabel("Labeling mode")
-        layout1.addWidget(title)
-        layout2 = QHBoxLayout()
+        group_box = QGroupBox("Labeling mode")
+        layout = QHBoxLayout()
         group = QButtonGroup(self)
-
         for i, mode in enumerate(keypoints.LabelMode.__members__, start=1):
             btn = QRadioButton(mode.lower())
             btn.setToolTip(keypoints.TOOLTIPS[mode])
             group.addButton(btn, i)
-            layout2.addWidget(btn)
+            layout.addWidget(btn)
         group.button(1).setChecked(True)
-        layout1.addLayout(layout2)
-        self._layout.addLayout(layout1)
+        group_box.setLayout(layout)
+        self._layout.addWidget(group_box)
 
         def _func():
             self.label_mode = group.checkedButton().text()
@@ -156,7 +191,7 @@ class KeypointControls(QWidget):
         return group
 
     def _remap_frame_indices(self, layer):
-        if "paths" not in self._images_meta:
+        if not self._images_meta.get("paths"):
             return
 
         new_paths = [to_os_dir_sep(p) for p in self._images_meta["paths"]]
@@ -194,14 +229,15 @@ class KeypointControls(QWidget):
         layer = event.source[-1]
         if isinstance(layer, Image):
             paths = layer.metadata.get("paths")
-            if paths is None:
-                return
+            if paths is None:  # Then it's a video file
+                self.crop_button.setEnabled(True)
             # Store the metadata and pass them on to the other layers
             self._images_meta.update(
                 {
                     "paths": paths,
                     "shape": layer.level_shapes[0],
                     "root": layer.metadata["root"],
+                    "name": layer.name,
                 }
             )
             # FIXME Ensure the images are always underneath the other layers
@@ -237,6 +273,11 @@ class KeypointControls(QWidget):
             layer.face_color_mode = "cycle"
             if not self._menus:
                 self._form_dropdown_menus(store)
+            self._images_meta.update(
+                {
+                    "project": layer.metadata.get("project"),
+                }
+            )
         for layer_ in self.viewer.layers:
             if not isinstance(layer_, Image):
                 self._remap_frame_indices(layer_)
@@ -252,6 +293,7 @@ class KeypointControls(QWidget):
                 menu.destroy()
         elif isinstance(layer, Image):
             self._images_meta = dict()
+            self.crop_button.setEnabled(False)
 
     @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):
@@ -328,13 +370,15 @@ class KeypointsDropdownMenu(QWidget):
         self.menus["label"] = create_dropdown_menu(
             store, self.id2label[store.ids[0]], "label"
         )
-        layout = QVBoxLayout()
-        title = QLabel("Keypoint selection")
-        layout.addWidget(title)
+        layout1 = QVBoxLayout()
+        layout1.addStretch(1)
+        group_box = QGroupBox("Keypoint selection")
+        layout2 = QVBoxLayout()
         for menu in self.menus.values():
-            layout.addWidget(menu)
-        layout.addStretch(1)
-        self.setLayout(layout)
+            layout2.addWidget(menu)
+        group_box.setLayout(layout2)
+        layout1.addWidget(group_box)
+        self.setLayout(layout1)
 
     def update_menus(self, event):
         keypoint = self.store.current_keypoint

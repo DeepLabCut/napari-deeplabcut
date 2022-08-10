@@ -2,6 +2,7 @@ import os
 from itertools import groupby
 
 import pandas as pd
+import yaml
 from napari.layers import Shapes
 from napari.plugins._builtins import napari_write_shapes
 from skimage.io import imsave
@@ -9,6 +10,11 @@ from skimage.util import img_as_ubyte
 
 from napari_deeplabcut import misc
 from napari_deeplabcut._reader import _load_config
+
+
+def _write_config(config_path: str, params: dict):
+    with open(config_path, "w") as file:
+        yaml.safe_dump(params, file)
 
 
 def write_hdf(filename, data, metadata):
@@ -35,7 +41,7 @@ def write_hdf(filename, data, metadata):
         df.index = [meta["paths"][i] for i in df.index]
     misc.guarantee_multiindex_rows(df)
 
-    name = metadata["name"]
+    name = meta["name"]
     root = meta["root"]
     if "machine" in name:  # We are attempting to save refined model predictions
         df.drop("likelihood", axis=1, level="coords", inplace=True, errors="ignore")
