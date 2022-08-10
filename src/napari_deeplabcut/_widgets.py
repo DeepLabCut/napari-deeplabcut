@@ -119,6 +119,12 @@ class KeypointControls(QWidget):
         # Add some more controls
         self._layout = QVBoxLayout(self)
         self._menus = []
+
+        self.crop_button = QPushButton("Store crop coordinates")
+        self.crop_button.clicked.connect(self._store_crop_coordinates)
+        self.crop_button.setEnabled(False)
+        self._layout.addWidget(self.crop_button)
+
         self._radio_group = self._form_mode_radio_buttons()
 
         # Substitute default menu action with custom one
@@ -132,11 +138,6 @@ class KeypointControls(QWidget):
                     )
                 )
                 break
-
-        self.crop_button = QPushButton("Store crop coordinates")
-        self.crop_button.clicked.connect(self._store_crop_coordinates)
-        self.crop_button.setEnabled(False)
-        self._layout.addWidget(self.crop_button)
 
     def _store_crop_coordinates(self, *args):
         if not (project_path := self._images_meta.get("project")):
@@ -369,13 +370,15 @@ class KeypointsDropdownMenu(QWidget):
         self.menus["label"] = create_dropdown_menu(
             store, self.id2label[store.ids[0]], "label"
         )
-        layout = QVBoxLayout()
-        title = QLabel("Keypoint selection")
-        layout.addWidget(title)
+        layout1 = QVBoxLayout()
+        layout1.addStretch(1)
+        group_box = QGroupBox("Keypoint selection")
+        layout2 = QVBoxLayout()
         for menu in self.menus.values():
-            layout.addWidget(menu)
-        layout.addStretch(1)
-        self.setLayout(layout)
+            layout2.addWidget(menu)
+        group_box.setLayout(layout2)
+        layout1.addWidget(group_box)
+        self.setLayout(layout1)
 
     def update_menus(self, event):
         keypoint = self.store.current_keypoint
