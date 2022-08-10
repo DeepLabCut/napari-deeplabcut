@@ -41,7 +41,7 @@ def write_hdf(filename, data, metadata):
         df.index = [meta["paths"][i] for i in df.index]
     misc.guarantee_multiindex_rows(df)
 
-    name = metadata["name"]
+    name = meta["name"]
     root = meta["root"]
     if "machine" in name:  # We are attempting to save refined model predictions
         df.drop("likelihood", axis=1, level="coords", inplace=True, errors="ignore")

@@ -212,6 +212,8 @@ def read_hdf(filename: str) -> List[LayerData]:
         )
         metadata["name"] = os.path.split(filename)[1].split(".")[0]
         metadata["metadata"]["root"] = os.path.split(filename)[0]
+        # Store file name in case the layer's name is edited by the user
+        metadata["metadata"]["name"] = metadata["name"]
         layers.append((data, metadata, "points"))
     return layers
 
