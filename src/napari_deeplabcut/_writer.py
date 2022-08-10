@@ -75,6 +75,15 @@ def write_hdf(filename, data, metadata):
     return filename
 
 
+def _write_image(data, output_path, plugin=None):
+    imsave(
+        output_path,
+        img_as_ubyte(data).squeeze(),
+        plugin=plugin,
+        check_contrast=False,
+    )
+
+
 def write_masks(foldername, data, metadata):
     folder, _ = os.path.splitext(foldername)
     os.makedirs(folder, exist_ok=True)
@@ -89,6 +98,6 @@ def write_masks(foldername, data, metadata):
     for n, mask in enumerate(masks):
         image_name = os.path.basename(meta["paths"][frame_inds[n]])
         output_path = filename.format(os.path.splitext(image_name)[0], shape_inds[n])
-        imsave(output_path, img_as_ubyte(mask).squeeze(), check_contrast=False)
+        _write_image(mask, output_path)
     napari_write_shapes(os.path.join(folder, "vertices.csv"), data, metadata)
     return folder

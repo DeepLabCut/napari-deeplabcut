@@ -1,5 +1,6 @@
 import os
 from collections import defaultdict
+from math import ceil, log10
 from types import MethodType
 from typing import Optional, Sequence, Union
 
@@ -15,7 +16,6 @@ from qtpy.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
-    QLabel,
     QMessageBox,
     QPushButton,
     QRadioButton,
@@ -25,7 +25,7 @@ from qtpy.QtWidgets import (
 
 from napari_deeplabcut import keypoints
 from napari_deeplabcut._reader import _load_config
-from napari_deeplabcut._writer import _write_config
+from napari_deeplabcut._writer import _write_config, _write_image
 from napari_deeplabcut.misc import to_os_dir_sep
 
 
@@ -120,11 +120,7 @@ class KeypointControls(QWidget):
         self._layout = QVBoxLayout(self)
         self._menus = []
 
-        self.crop_button = QPushButton("Store crop coordinates")
-        self.crop_button.clicked.connect(self._store_crop_coordinates)
-        self.crop_button.setEnabled(False)
-        self._layout.addWidget(self.crop_button)
-
+        self._video_group = self._form_video_action_menu()
         self._radio_group = self._form_mode_radio_buttons()
 
         # Substitute default menu action with custom one
@@ -138,6 +134,35 @@ class KeypointControls(QWidget):
                     )
                 )
                 break
+
+    def _form_video_action_menu(self):
+        group_box = QGroupBox("Video")
+        layout = QVBoxLayout()
+        extract_button = QPushButton("Extract frame")
+        extract_button.clicked.connect(self._extract_single_frame)
+        extract_button.setEnabled(False)
+        layout.addWidget(extract_button)
+        crop_button = QPushButton("Store crop coordinates")
+        crop_button.clicked.connect(self._store_crop_coordinates)
+        crop_button.setEnabled(False)
+        layout.addWidget(crop_button)
+        group_box.setLayout(layout)
+        self._layout.addWidget(group_box)
+        return extract_button, crop_button
+
+    def _extract_single_frame(self, *args):
+        layer = None
+        for layer_ in self.viewer.layers:
+            if isinstance(layer_, Image):
+                layer = layer_
+                break
+        if layer is not None:
+            ind = self.viewer.dims.current_step[0]
+            frame = layer.data[ind]
+            n_frames = layer.data.shape[0]
+            name = f"img{str(ind).zfill(int(ceil(log10(n_frames))))}.png"
+            output_path = os.path.join(layer.metadata["root"], name)
+            _write_image(frame, str(output_path))
 
     def _store_crop_coordinates(self, *args):
         if not (project_path := self._images_meta.get("project")):
@@ -230,7 +255,8 @@ class KeypointControls(QWidget):
         if isinstance(layer, Image):
             paths = layer.metadata.get("paths")
             if paths is None:  # Then it's a video file
-                self.crop_button.setEnabled(True)
+                for widget in self._video_group:
+                    widget.setEnabled(True)
             # Store the metadata and pass them on to the other layers
             self._images_meta.update(
                 {
@@ -293,7 +319,10 @@ class KeypointControls(QWidget):
                 menu.destroy()
         elif isinstance(layer, Image):
             self._images_meta = dict()
-            self.crop_button.setEnabled(False)
+            paths = layer.metadata.get("paths")
+            if paths is None:
+                for widget in self._video_group:
+                    widget.setEnabled(False)
 
     @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):

@@ -1,5 +1,6 @@
 import glob
 import os
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 import cv2
@@ -284,7 +285,7 @@ def read_video(filename: str, opencv: bool = True):
             for i in range(len(stream))
         ]
     )
-    elems = filename.split(os.path.sep)
+    elems = list(Path(filename).parts)
     elems[-2] = "labeled-data"
     elems[-1] = elems[-1].split(".")[0]
     root = os.path.join(*elems)
