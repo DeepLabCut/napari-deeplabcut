@@ -13,6 +13,7 @@ from qtpy.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QFileDialog,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -170,20 +171,17 @@ class KeypointControls(QWidget):
         self._layout.addLayout(layout)
 
     def _form_mode_radio_buttons(self):
-        layout1 = QVBoxLayout()
-        title = QLabel("Labeling mode")
-        layout1.addWidget(title)
-        layout2 = QHBoxLayout()
+        group_box = QGroupBox("Labeling mode")
+        layout = QHBoxLayout()
         group = QButtonGroup(self)
-
         for i, mode in enumerate(keypoints.LabelMode.__members__, start=1):
             btn = QRadioButton(mode.lower())
             btn.setToolTip(keypoints.TOOLTIPS[mode])
             group.addButton(btn, i)
-            layout2.addWidget(btn)
+            layout.addWidget(btn)
         group.button(1).setChecked(True)
-        layout1.addLayout(layout2)
-        self._layout.addLayout(layout1)
+        group_box.setLayout(layout)
+        self._layout.addWidget(group_box)
 
         def _func():
             self.label_mode = group.checkedButton().text()
