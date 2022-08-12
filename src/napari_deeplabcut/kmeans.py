@@ -3,7 +3,7 @@ from sklearn.decomposition import PCA
 import numpy as np
 import pandas as pd 
 from itertools import *
-
+import random
 
 def find_y_size(df, filenames, num, scorer, bodyparts):
     # function for finding the height of the horse in the selected image
@@ -63,8 +63,8 @@ def read_data(url):
     df = df.dropna()
     #print(df.head())
     filenames = df.index # names of images
-    scorer = 'Byron'
-    #print(df)
+    scorer = df.columns[0][0] # if scorer change FIX
+    print(scorer)
     bodyparts = np.zeros(len(df.columns)).astype(str)
     coord = np.zeros(len(df.columns)).astype(str)
     a = df.columns
@@ -75,18 +75,20 @@ def read_data(url):
     bodyparts = np.unique(bodyparts) # 22 unique labels
     #print("Unique body parts:",bodyparts)
 
-    #inx = np.where(filenames == 'BrownHorseinShadow/0135.png')
-    sample =df.loc['BrownHorseinShadow/0135.png', (scorer, bodyparts, 'y')]
+    frame_aux = random.choice(df.index)
+    sample =df.loc[frame_aux, (scorer, bodyparts, 'y')]
     samp_size = max(sample) - min(sample)
-    print(samp_size)
+    #print(samp_size)
     features = pd.DataFrame()
 
     for bodypart_list in combinations(bodyparts, 2):
         features = comp_dist(features,df, scorer,bodypart_list[0], bodypart_list[1])
+    
     distances = features.columns
 
     resized_features = resizing_images(samp_size, features, filenames, distances, df, scorer,bodyparts)
     names = resized_features.index
     PCA_components, cluster1 = cluster(resized_features)
     point_c , color = to_plot(PCA_components,cluster1)
+    #print(names)
     return point_c , color ,names 

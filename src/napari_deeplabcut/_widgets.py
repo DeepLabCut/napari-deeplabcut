@@ -1,11 +1,18 @@
+from ast import Not
 from collections import defaultdict
 from re import S
+from xml.etree.ElementInclude import XINCLUDE
 import pandas as pd
 from types import MethodType
+from PIL import Image as pilImage
 from typing import Optional, Sequence, Union
 from PyQt5.QtCore import pyqtSlot
-from napari_deeplabcut import _reader
+from matplotlib.backends.backend_qt5agg import FigureCanvas
+from matplotlib.figure import Figure
 import numpy as np
+import napari
+from typing import List, Tuple
+from PyQt5 import QtCore, QtWidgets
 from napari.types import ImageData
 from napari.layers import Image, Points
 from napari.layers.points._points_key_bindings import register_points_action
@@ -25,7 +32,6 @@ from qtpy.QtWidgets import (
     QPushButton,
 )
 from napari_deeplabcut.kmeans import read_data
-
 
 
 from napari_deeplabcut import keypoints
@@ -139,30 +145,131 @@ class KeypointControls(QWidget):
         self.width = 320
         self.height = 200
         self.initUI()
+        self.show()
+        self.fig = Figure()
+        self.ax = self.fig.add_subplot(111)
+        #self.ax.axis('off')
+        #self.im = self.ax.imshow([[]])
+        self.canvas = FigureCanvas(self.fig)
+        self.canvas.figure.set_tight_layout(True)
+        self.img_refine = [[]]
+        self.bdpts_refine = [[]]
+        self.bodyparts_name = [[]]
+        self.file_relabel = str()
+        self.step = []
+        self.collect_data = [[]] #empty df????
+        #self.fig.subplots_adjust(0.2, 0.2, 0.8, 0.8)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self.canvas)
+        self.setLayout(layout)
+        
+        #self.show()
+
         
     def initUI(self):
+        
         self.setGeometry(self.left, self.top, self.width, self.height)
         
-        button = QPushButton('cluster pose', self)
+        button1 = QPushButton('cluster pose', self)
         #button.setToolTip('This is an example button')
-        button.move(100,70)
-        button.clicked.connect(self.on_click)
+        button1.move(5,70)
+        button1.clicked.connect(self.on_click)
+        self.setGeometry(self.left, self.top, self.width, self.height)
+        button2 = QPushButton('show img', self)
+        #button.setToolTip('This is an example button')
+        button2.move(120,70)
         
+        button3 = QPushButton('close img', self)
+        #button.setToolTip('This is an example button')
+        button3.move(230,70)
+        button3.clicked.connect(self.on_click_close_img)      
+        button2.clicked.connect(self.on_click_show_img)   
         self.show()
+
+        return button2, button3
+      
 
     @pyqtSlot()
     def on_click(self):
+        
         filename_path = list(self.viewer.layers[0]._source)[0][1]
-        fil2 = filename_path.replace("\\", "/")
+        fil2 = filename_path.replace("\\", "/")  #work in other os?
         print(list(self.viewer.layers[0]._source)[0][1])
-        df = pd.read_hdf(filename_path)
+        #df = pd.read_hdf(filename_path)
         points_cluster , _, names = read_data(fil2)
         x = list(points_cluster[0])
         y = list(points_cluster[1])
         points_cluster1 = np.column_stack((y,x))
         #names = self.viewer.layers[0]._metadata['paths']
-        self.viewer.add_points(points_cluster1, size=10,name='cluster',properties=names)
+        #print(self.viewer.window.qt_viewer.canvas.events.mouse_press(pos=(x, y), modifiers=(), button=0))
+        clust_layer = self.viewer.add_points(points_cluster1, size=10,name='cluster',properties=list(names)) #fix not see keypoints!
+        self.viewer.window.add_dock_widget(self.canvas,name = 'frames')
+        clust_layer.mode = 'select'
+        df = pd.read_hdf(fil2)
+        df2 = df.reset_index()
+        df = df.dropna()
+        self.collect_data = df
+        self.viewer.layers[0].visible = False
+        #bodyparts_name = np.zeros(len(df.columns)).astype(str)
+        #a = df.columns
+        #for i in range(len(df.columns)):
+        #    bodyparts_name[i] = a[i][1]
 
+        #self.bodyparts_name = list(dict.fromkeys(bodyparts_name)) #para que no hay repetidos unique cambia el orden
+
+        
+
+        @clust_layer.mouse_drag_callbacks.append
+        def get_event(clust_layer, event):
+            inds = list(clust_layer.selected_data)
+            if len(inds) == 1:
+                ind = inds[0]
+                filename = clust_layer.properties[0][ind]
+                print(filename)
+                self.file_relabel = filename
+                path = 'C:/Users/Sabrina/Documents/Horses-Byron-2019-05-08/'+ filename # FIX ME
+                im = pilImage.open(path)
+                bdpts = df.loc[filename].values
+        
+                
+                self.step = df2.index[df2['index']==str(filename)].to_list()
+                print(self.step)
+
+                self.img_refine = np.array(im)
+                xbdpts = bdpts[::2]
+                ybdpts = bdpts[1::2]
+                #self.bdpts_refine = np.concatenate((np.array(ybdpts).reshape(-1,1),np.array(xbdpts).reshape(-1,1)),axis=1)
+                self.ax.clear()
+                self.ax.set_xlim(0, np.array(im).shape[1])
+                self.ax.set_ylim(0, np.array(im).shape[0])      
+                #self.im.set_extent((0, np.array(im).shape[0], 0,np.array(im).shape[1]))
+                #self.im.set_data #FIX!
+                self.ax.imshow(im)
+                #xmove = map(lambda x:x- (np.max(xbdpts)- np.array(im).shape[1]), xbdpts)
+                #ymove = map(lambda x:x+(np.max(ybdpts)- np.array(im).shape[0]), ybdpts)
+                self.ax.scatter(xbdpts,ybdpts)
+                self.ax.invert_yaxis()
+                #self.ax.imshow(im,extent=[-750, 750, -400, 450])
+                self.canvas.draw()
+
+                return im, bdpts
+
+    @pyqtSlot()
+    def on_click_show_img(self):
+        self.viewer.layers[0].visible = True #collect
+        self.viewer.layers[1].visible = False #cluster
+        self.viewer.dims.set_current_step(0,self.step[0])
+        self.viewer.add_image(self.img_refine, name = 'image refine label')
+        self.viewer.layers.move_selected(0,2)
+
+    @pyqtSlot()
+    def on_click_close_img(self):
+        self.viewer.layers.remove('image refine label')
+        self.viewer.layers.move_selected(0,1)
+        #self.viewer.layers.remove('refine label')
+        self.viewer.layers[0].visible = False
+        self.viewer.layers[1].visible = True
+           
 
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)
@@ -232,55 +339,56 @@ class KeypointControls(QWidget):
     def on_insert(self, event):
         layer = event.source[-1]
         print(layer)
-        if isinstance(layer, Image):
-            paths = layer.metadata.get("paths")
-            if paths is None:
-                return
-            # Store the metadata and pass them on to the other layers
-            self._images_meta.update(
-                {
-                    "paths": paths,
-                    "shape": layer.level_shapes[0],
-                    "root": layer.metadata["root"],
-                }
-            )
-            # FIXME Ensure the images are always underneath the other layers
-            # self.viewer.layers.selection = []
-            # if (ind := event.index) != 0:
-            #     order = list(range(len(self.viewer.layers)))
-            #     order.remove(ind)
-            #     new_order = [ind] + order
-            #     self.viewer.layers.move_multiple(new_order)
-            # if (ind := event.index) != 0:
-            #     self.viewer.layers.move_selected(ind, 0)
-        elif isinstance(layer, Points):
-            store = keypoints.KeypointStore(self.viewer, layer)
-            self._stores[layer] = store
-            print(store)
-            # TODO Set default dir of the save file dialog
-            if root := layer.metadata.get("root"):
-                update_save_history(root)
-            layer.metadata["controls"] = self
-            layer.text.visible = False
-            layer.bind_key("M", self.cycle_through_label_modes)
-            layer.add = MethodType(keypoints._add, store)
-            layer.events.add(query_next_frame=Event)
-            layer.events.query_next_frame.connect(store._advance_step)
-            layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
-            layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
-            self.viewer.dims.events.current_step.connect(
-                store.smart_reset,
-                position="last",
-            )
-            store.smart_reset(event=None)
-            layer.bind_key("Down", store.next_keypoint, overwrite=True)
-            layer.bind_key("Up", store.prev_keypoint, overwrite=True)
-            layer.face_color_mode = "cycle"
-            if not self._menus:
-                self._form_dropdown_menus(store)
-        for layer_ in self.viewer.layers:
-            if not isinstance(layer_, Image):
-                self._remap_frame_indices(layer_)
+        if str(layer) != 'cluster' and str(layer) != 'image refine label' :
+            if isinstance(layer, Image):
+                paths = layer.metadata.get("paths")
+                if paths is None:
+                    return
+                # Store the metadata and pass them on to the other layers
+                self._images_meta.update(
+                    {
+                        "paths": paths,
+                        "shape": layer.level_shapes[0],
+                        "root": layer.metadata["root"],
+                    }
+                )
+                # FIXME Ensure the images are always underneath the other layers
+                # self.viewer.layers.selection = []
+                # if (ind := event.index) != 0:
+                #     order = list(range(len(self.viewer.layers)))
+                #     order.remove(ind)
+                #     new_order = [ind] + order
+                #     self.viewer.layers.move_multiple(new_order)
+                # if (ind := event.index) != 0:
+                #     self.viewer.layers.move_selected(ind, 0)
+            elif isinstance(layer, Points):
+                store = keypoints.KeypointStore(self.viewer, layer)
+                self._stores[layer] = store
+                print(store)
+                # TODO Set default dir of the save file dialog
+                if root := layer.metadata.get("root"):
+                    update_save_history(root)
+                layer.metadata["controls"] = self
+                layer.text.visible = False
+                layer.bind_key("M", self.cycle_through_label_modes)
+                layer.add = MethodType(keypoints._add, store)
+                layer.events.add(query_next_frame=Event)
+                layer.events.query_next_frame.connect(store._advance_step)
+                layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
+                layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
+                self.viewer.dims.events.current_step.connect(
+                    store.smart_reset,
+                    position="last",
+                )
+                store.smart_reset(event=None)
+                layer.bind_key("Down", store.next_keypoint, overwrite=True)
+                layer.bind_key("Up", store.prev_keypoint, overwrite=True)
+                layer.face_color_mode = "cycle"
+                if not self._menus:
+                    self._form_dropdown_menus(store)
+            for layer_ in self.viewer.layers:
+                if not isinstance(layer_, Image):
+                    self._remap_frame_indices(layer_)
 
     def on_remove(self, event):
         layer = event.value
