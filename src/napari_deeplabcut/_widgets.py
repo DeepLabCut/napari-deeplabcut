@@ -5,28 +5,31 @@ from types import MethodType
 from typing import Optional, Sequence, Union
 
 import numpy as np
-from napari.layers import Image, Points, Shapes
+from napari.layers import Image, Points, Shapes, Tracks
 from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
 from qtpy.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QLabel,
     QMessageBox,
     QPushButton,
     QRadioButton,
     QVBoxLayout,
     QWidget,
 )
+from qtpy.QtCore import Qt
 
 from napari_deeplabcut import keypoints
 from napari_deeplabcut._reader import _load_config
 from napari_deeplabcut._writer import _write_config, _write_image
-from napari_deeplabcut.misc import to_os_dir_sep
+from napari_deeplabcut.misc import to_os_dir_sep, encode_categories
 
 
 def _get_and_try_preferred_reader(
@@ -121,6 +124,19 @@ class KeypointControls(QWidget):
         self._menus = []
 
         self._video_group = self._form_video_action_menu()
+
+        vlayout = QHBoxLayout()
+        trail_label = QLabel("Show trails")
+        self._trail_cb = QCheckBox()
+        self._trail_cb.setToolTip("toggle trails visibility")
+        self._trail_cb.setChecked(False)
+        self._trail_cb.setEnabled(False)
+        self._trail_cb.stateChanged.connect(self._show_trails)
+        self._trails = None
+        vlayout.addWidget(trail_label)
+        vlayout.addWidget(self._trail_cb)
+        self._layout.addLayout(vlayout)
+
         self._radio_group = self._form_mode_radio_buttons()
 
         # Substitute default menu action with custom one
@@ -134,6 +150,24 @@ class KeypointControls(QWidget):
                     )
                 )
                 break
+
+    def _show_trails(self, state):
+        if state == Qt.Checked:
+            if self._trails is None:
+                store = list(self._stores.values())[0]
+                inds = encode_categories(store.layer.properties["label"])
+                temp = np.c_[inds, store.layer.data]
+                self._trails = self.viewer.add_tracks(
+                    temp,
+                    tail_length=50,
+                    head_length=50,
+                    tail_width=6,
+                    name='trails',
+                    colormap='viridis',
+                )
+            self._trails.visible = True
+        else:
+            self._trails.visible = False
 
     def _form_video_action_menu(self):
         group_box = QGroupBox("Video")
@@ -304,6 +338,7 @@ class KeypointControls(QWidget):
                     "project": layer.metadata.get("project"),
                 }
             )
+            self._trail_cb.setEnabled(True)
         for layer_ in self.viewer.layers:
             if not isinstance(layer_, Image):
                 self._remap_frame_indices(layer_)
@@ -317,12 +352,16 @@ class KeypointControls(QWidget):
                 self._layout.removeWidget(menu)
                 menu.setParent(None)
                 menu.destroy()
+            self._trail_cb.setEnabled(False)
         elif isinstance(layer, Image):
             self._images_meta = dict()
             paths = layer.metadata.get("paths")
             if paths is None:
                 for widget in self._video_group:
                     widget.setEnabled(False)
+        elif isinstance(layer, Tracks):
+            self._trail_cb.setChecked(False)
+            self._trails = None
 
     @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):
