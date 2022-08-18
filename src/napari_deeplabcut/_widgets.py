@@ -33,8 +33,8 @@ from qtpy.QtWidgets import (
     QPushButton,
     QProgressBar
 )
-print('Hi ')
-from napari_deeplabcut.kmeans import read_data
+
+from napari_deeplabcut.kmeans import cluster_data
 from napari_deeplabcut import keypoints
 from napari_deeplabcut.misc import to_os_dir_sep
 
@@ -279,7 +279,7 @@ class KeypointControls(QWidget):
         print(list(self.viewer.layers[0]._source)[0][1])
         
         
-        func = partial(read_data, self.file_path)
+        func = partial(cluster_data, self.file_path)
 
         self.worker, self.thread = Worker.move_to_separate_thread(func)
         #self.worker.percentageChanged.connect(self.progress.setValue) # ?????
