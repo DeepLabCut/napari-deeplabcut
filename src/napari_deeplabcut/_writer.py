@@ -64,6 +64,11 @@ def write_hdf(filename, data, metadata):
     df.sort_index(inplace=True)
     filename = name + ".h5"
     path = os.path.join(root, filename)
+    row_name = []
+    for i in df.index:
+        row_name.append(str('/'.join(i)))
+
+    df.index = row_name
     df.to_hdf(path, key="keypoints", mode="w")
     df.to_csv(path.replace(".h5", ".csv"))
     return filename

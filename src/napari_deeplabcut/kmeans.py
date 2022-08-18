@@ -42,7 +42,7 @@ def cluster(resized_scaled_data):
     # putting components in a dataframe for later
     PCA_components = pd.DataFrame(principalComponents)
 
-    dbscan=DBSCAN(eps = 1.4, min_samples = 20)
+    dbscan=DBSCAN(eps=9.7, min_samples=20, algorithm='ball_tree', metric='minkowski', leaf_size=90, p=2)
 
     # fit - perform DBSCAN clustering from features, or distance matrix.
     dbscan = dbscan.fit(PCA_components)
@@ -53,18 +53,16 @@ def cluster(resized_scaled_data):
 def to_plot(X,cluster):
     df = X
     df.loc[:,'label'] = cluster
-    colors = {-1: 'red', 0: 'blue', 1:'orange', 2:'green', 3:'yellow', 4:'black', 5:'gold', 6:'lightblue', 7:'darkgreen'}
-    return df, colors #check!
-
+    return df
 
 def read_data(url):
     header = [0,1,2] #change if ma
     df = pd.read_hdf(url)
     df = df.dropna()
-    #print(df.head())
+    
     filenames = df.index # names of images
     scorer = df.columns[0][0] # if scorer change FIX
-    print(scorer)
+    
     bodyparts = np.zeros(len(df.columns)).astype(str)
     coord = np.zeros(len(df.columns)).astype(str)
     a = df.columns
@@ -74,21 +72,23 @@ def read_data(url):
     
     bodyparts = np.unique(bodyparts) # 22 unique labels
     #print("Unique body parts:",bodyparts)
-
+    
     frame_aux = random.choice(df.index)
     sample =df.loc[frame_aux, (scorer, bodyparts, 'y')]
     samp_size = max(sample) - min(sample)
     #print(samp_size)
-    features = pd.DataFrame()
-
-    for bodypart_list in combinations(bodyparts, 2):
-        features = comp_dist(features,df, scorer,bodypart_list[0], bodypart_list[1])
+    features_a = {}
     
+    for bodypart_list in combinations(bodyparts, 2):
+        features_a = comp_dist(features_a,df, scorer,bodypart_list[0], bodypart_list[1])
+    
+    features = pd.DataFrame.from_dict(features_a)
     distances = features.columns
-
+    
     resized_features = resizing_images(samp_size, features, filenames, distances, df, scorer,bodyparts)
     names = resized_features.index
     PCA_components, cluster1 = cluster(resized_features)
-    point_c , color = to_plot(PCA_components,cluster1)
+    point_c = to_plot(PCA_components,cluster1)
     #print(names)
-    return point_c , color ,names 
+    print(2)
+    return point_c , cluster1 ,names 

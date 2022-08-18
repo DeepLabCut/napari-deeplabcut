@@ -1,12 +1,13 @@
 from ast import Not
 from collections import defaultdict
 from re import S
+from functools import partial
 from xml.etree.ElementInclude import XINCLUDE
 import pandas as pd
 from types import MethodType
 from PIL import Image as pilImage
 from typing import Optional, Sequence, Union
-from PyQt5.QtCore import pyqtSlot
+from PyQt5.QtCore import pyqtSlot, QObject, QThread, pyqtSignal, QTimer
 from matplotlib.backends.backend_qt5agg import FigureCanvas
 from matplotlib.figure import Figure
 import numpy as np
@@ -30,12 +31,60 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QPushButton,
+    QProgressBar
 )
 from napari_deeplabcut.kmeans import read_data
-
-
 from napari_deeplabcut import keypoints
 from napari_deeplabcut.misc import to_os_dir_sep
+
+class Worker(QObject):
+
+    started = pyqtSignal()
+    percentageChanged = pyqtSignal(int)
+    finished = QtCore.Signal()
+    value = pyqtSignal(object)
+
+    def __init__(self, func):
+        super().__init__()
+        self._percentage = 0
+        self.func = func
+
+    def __add__(self, other):
+        if isinstance(other, int):
+            self._percentage += other
+            self.percentageChanged.emit(self._percentage)
+            return self
+        return super().__add__(other)
+
+    def __lt__(self, other):
+        if isinstance(other, int):
+            return self._percentage < other
+        return super().__lt__(other)
+
+    def run(self):
+
+        self._percentage = 0
+        points_cluster , color, names = self.func()
+        
+        #thread.join()
+        #self.data = points_cluster
+        self.value.emit((points_cluster,color, names))
+        #self.names.emit(names)
+        #  QTimer.singleShot(0, self.func) # ????
+        self.finished.emit()
+
+    def move_to_separate_thread(func):
+        thread = QtCore.QThread()
+        worker = Worker(func)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        #self.worker.percentageChanged.connect(self.progress.setValue) # ??? #creo que esto no porque necesita ir abajo
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(thread.deleteLater)
+
+        return worker, thread
+
 
 
 def _get_and_try_preferred_reader(
@@ -108,10 +157,9 @@ class KeypointControls(QWidget):
         self.viewer = napari_viewer
         self.viewer.layers.events.inserted.connect(self.on_insert)
         self.viewer.layers.events.removed.connect(self.on_remove)
-
+        self.file_path = str()
         self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
-            _get_and_try_preferred_reader, self.viewer.window.qt_viewer,
-        )
+            _get_and_try_preferred_reader, self.viewer.window.qt_viewer,)
 
         self._label_mode = keypoints.LabelMode.default()
 
@@ -184,50 +232,43 @@ class KeypointControls(QWidget):
         button3.move(230,70)
         button3.clicked.connect(self.on_click_close_img)      
         button2.clicked.connect(self.on_click_show_img)   
+        #self.setWindowTitle('Progress Bar')
+        self.progress = QProgressBar(self)
+        self.progress.setGeometry(10,120, 300, 25)
+        self.progress.setMaximum(100)
         self.show()
 
         return button2, button3
-      
 
-    @pyqtSlot()
-    def on_click(self):
-        
-        filename_path = list(self.viewer.layers[0]._source)[0][1]
-        fil2 = filename_path.replace("\\", "/")  #work in other os?
-        print(list(self.viewer.layers[0]._source)[0][1])
-        #df = pd.read_hdf(filename_path)
-        points_cluster , _, names = read_data(fil2)
+    def _plot(self,input):
+        points_cluster ,color, names = input
         x = list(points_cluster[0])
         y = list(points_cluster[1])
         points_cluster1 = np.column_stack((y,x))
-        #names = self.viewer.layers[0]._metadata['paths']
-        #print(self.viewer.window.qt_viewer.canvas.events.mouse_press(pos=(x, y), modifiers=(), button=0))
-        clust_layer = self.viewer.add_points(points_cluster1, size=10,name='cluster',properties=list(names)) #fix not see keypoints!
+        color2 = [(i + 1)/(max(color)+1) for i in color]
+        #print(color2)
+        dict_prop_points = {'colorn':color2,'frame' : names}
+        clust_layer = self.viewer.add_points(points_cluster1, size=8 , features=dict_prop_points, face_color='colorn',face_colormap = 'plasma',name='cluster',) 
         self.viewer.window.add_dock_widget(self.canvas,name = 'frames')
         clust_layer.mode = 'select'
-        df = pd.read_hdf(fil2)
+        df = pd.read_hdf(self.file_path)
         df2 = df.reset_index()
         df = df.dropna()
-        self.collect_data = df
-        self.viewer.layers[0].visible = False
-        #bodyparts_name = np.zeros(len(df.columns)).astype(str)
-        #a = df.columns
-        #for i in range(len(df.columns)):
-        #    bodyparts_name[i] = a[i][1]
-
-        #self.bodyparts_name = list(dict.fromkeys(bodyparts_name)) #para que no hay repetidos unique cambia el orden
-
         
+        
+        self.collect_data = df
+        self.viewer.layers[0].visible = False #collect
 
         @clust_layer.mouse_drag_callbacks.append
-        def get_event(clust_layer, event):
+        def get_event(clust_layer,event):
+            print("click")
             inds = list(clust_layer.selected_data)
             if len(inds) == 1:
                 ind = inds[0]
-                filename = clust_layer.properties[0][ind]
+                filename = clust_layer.properties['frame'][ind]
                 print(filename)
                 self.file_relabel = filename
-                path = 'C:/Users/Sabrina/Documents/Horses-Byron-2019-05-08/'+ filename # FIX ME
+                path = self.file_path.split('training-datasets')[0] + filename # the user is going to use the h5 from training no?
                 im = pilImage.open(path)
                 bdpts = df.loc[filename].values
         
@@ -238,21 +279,32 @@ class KeypointControls(QWidget):
                 self.img_refine = np.array(im)
                 xbdpts = bdpts[::2]
                 ybdpts = bdpts[1::2]
-                #self.bdpts_refine = np.concatenate((np.array(ybdpts).reshape(-1,1),np.array(xbdpts).reshape(-1,1)),axis=1)
                 self.ax.clear()
                 self.ax.set_xlim(0, np.array(im).shape[1])
                 self.ax.set_ylim(0, np.array(im).shape[0])      
-                #self.im.set_extent((0, np.array(im).shape[0], 0,np.array(im).shape[1]))
                 #self.im.set_data #FIX!
                 self.ax.imshow(im)
-                #xmove = map(lambda x:x- (np.max(xbdpts)- np.array(im).shape[1]), xbdpts)
-                #ymove = map(lambda x:x+(np.max(ybdpts)- np.array(im).shape[0]), ybdpts)
                 self.ax.scatter(xbdpts,ybdpts)
                 self.ax.invert_yaxis()
-                #self.ax.imshow(im,extent=[-750, 750, -400, 450])
                 self.canvas.draw()
+      
 
-                return im, bdpts
+    @pyqtSlot()
+    def on_click(self):
+        
+        filename_path = list(self.viewer.layers[0]._source)[0][1]
+        self.file_path = filename_path.replace("\\", "/")  #work in other os?
+        print(list(self.viewer.layers[0]._source)[0][1])
+        
+        
+        func = partial(read_data, self.file_path)
+
+        self.worker, self.thread = Worker.move_to_separate_thread(func)
+        #self.thread.finished.connect(self._show_success_message)
+        self.worker.percentageChanged.connect(self.progress.setValue) # ?????
+        self.worker.value.connect(self._plot)
+        self.thread.start() #add progress bar!
+
 
     @pyqtSlot()
     def on_click_show_img(self):
