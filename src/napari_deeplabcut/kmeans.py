@@ -55,7 +55,7 @@ def to_plot(X,cluster):
     df.loc[:,'label'] = cluster
     return df
 
-def read_data(url):
+def cluster_data(url):
     df = pd.read_hdf(url)
     if df.index.nlevels  > 1: #if multiIndex    
         print('mI')
