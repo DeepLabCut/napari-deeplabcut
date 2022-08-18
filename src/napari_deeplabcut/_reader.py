@@ -161,7 +161,7 @@ def read_config(configname: str) -> List[LayerData]:
 def read_hdf(filename: str) -> List[LayerData]:
     layers = []
     for filename in glob.iglob(filename):
-        temp = pd.read_hdf(filename)
+        temp = pd.read_hdf(filename)       
         header = misc.DLCHeader(temp.columns)
         temp = temp.droplevel("scorer", axis=1)
         if "individuals" not in temp.columns.names:

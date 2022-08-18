@@ -56,8 +56,15 @@ def to_plot(X,cluster):
     return df
 
 def read_data(url):
-    header = [0,1,2] #change if ma
     df = pd.read_hdf(url)
+    if df.index.nlevels  > 1: #if multiIndex    
+        print('mI')
+        row_name = []
+        
+        for i in df.index:
+            row_name.append(str('/'.join(i)))
+        df.index = row_name
+    
     df = df.dropna()
     
     filenames = df.index # names of images

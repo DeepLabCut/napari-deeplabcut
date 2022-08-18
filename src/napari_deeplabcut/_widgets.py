@@ -33,6 +33,7 @@ from qtpy.QtWidgets import (
     QPushButton,
     QProgressBar
 )
+print('Hi ')
 from napari_deeplabcut.kmeans import read_data
 from napari_deeplabcut import keypoints
 from napari_deeplabcut.misc import to_os_dir_sep
@@ -40,37 +41,19 @@ from napari_deeplabcut.misc import to_os_dir_sep
 class Worker(QObject):
 
     started = pyqtSignal()
-    percentageChanged = pyqtSignal(int)
+    #percentageChanged = pyqtSignal(int)
     finished = QtCore.Signal()
     value = pyqtSignal(object)
 
     def __init__(self, func):
         super().__init__()
-        self._percentage = 0
         self.func = func
-
-    def __add__(self, other):
-        if isinstance(other, int):
-            self._percentage += other
-            self.percentageChanged.emit(self._percentage)
-            return self
-        return super().__add__(other)
-
-    def __lt__(self, other):
-        if isinstance(other, int):
-            return self._percentage < other
-        return super().__lt__(other)
 
     def run(self):
 
         self._percentage = 0
         points_cluster , color, names = self.func()
-        
-        #thread.join()
-        #self.data = points_cluster
         self.value.emit((points_cluster,color, names))
-        #self.names.emit(names)
-        #  QTimer.singleShot(0, self.func) # ????
         self.finished.emit()
 
     def move_to_separate_thread(func):
@@ -196,7 +179,7 @@ class KeypointControls(QWidget):
         self.show()
         self.fig = Figure()
         self.ax = self.fig.add_subplot(111)
-        #self.ax.axis('off')
+        self.ax.axis('off')
         #self.im = self.ax.imshow([[]])
         self.canvas = FigureCanvas(self.fig)
         self.canvas.figure.set_tight_layout(True)
@@ -219,20 +202,16 @@ class KeypointControls(QWidget):
         self.setGeometry(self.left, self.top, self.width, self.height)
         
         button1 = QPushButton('cluster pose', self)
-        #button.setToolTip('This is an example button')
         button1.move(5,70)
         button1.clicked.connect(self.on_click)
         self.setGeometry(self.left, self.top, self.width, self.height)
         button2 = QPushButton('show img', self)
-        #button.setToolTip('This is an example button')
         button2.move(120,70)
         
         button3 = QPushButton('close img', self)
-        #button.setToolTip('This is an example button')
         button3.move(230,70)
         button3.clicked.connect(self.on_click_close_img)      
-        button2.clicked.connect(self.on_click_show_img)   
-        #self.setWindowTitle('Progress Bar')
+        button2.clicked.connect(self.on_click_show_img)  
         self.progress = QProgressBar(self)
         self.progress.setGeometry(10,120, 300, 25)
         self.progress.setMaximum(100)
@@ -245,30 +224,33 @@ class KeypointControls(QWidget):
         x = list(points_cluster[0])
         y = list(points_cluster[1])
         points_cluster1 = np.column_stack((y,x))
-        color2 = [(i + 1)/(max(color)+1) for i in color]
-        #print(color2)
+        color2 = []
+        if  max(color) != -1:
+            for i in color:
+                color2.append((i + 1)/(max(color)+1))
+        else: 
+            color2 = np.zeros(len(color))
         dict_prop_points = {'colorn':color2,'frame' : names}
-        clust_layer = self.viewer.add_points(points_cluster1, size=8 , features=dict_prop_points, face_color='colorn',face_colormap = 'plasma',name='cluster',) 
+        clust_layer = self.viewer.add_points(points_cluster1, size=8 ,name='cluster', features=dict_prop_points, face_color='colorn',face_colormap = 'plasma',) 
         self.viewer.window.add_dock_widget(self.canvas,name = 'frames')
         clust_layer.mode = 'select'
         df = pd.read_hdf(self.file_path)
+        
         df2 = df.reset_index()
-        df = df.dropna()
-        
-        
+        df = df.dropna()     
         self.collect_data = df
         self.viewer.layers[0].visible = False #collect
 
         @clust_layer.mouse_drag_callbacks.append
         def get_event(clust_layer,event):
-            print("click")
+            #print("click1")
             inds = list(clust_layer.selected_data)
             if len(inds) == 1:
                 ind = inds[0]
                 filename = clust_layer.properties['frame'][ind]
-                print(filename)
+                #print(filename)
                 self.file_relabel = filename
-                path = self.file_path.split('training-datasets')[0] + filename # the user is going to use the h5 from training no?
+                path = self.file_path.split('training-datasets')[0] + filename 
                 im = pilImage.open(path)
                 bdpts = df.loc[filename].values
         
@@ -300,8 +282,7 @@ class KeypointControls(QWidget):
         func = partial(read_data, self.file_path)
 
         self.worker, self.thread = Worker.move_to_separate_thread(func)
-        #self.thread.finished.connect(self._show_success_message)
-        self.worker.percentageChanged.connect(self.progress.setValue) # ?????
+        #self.worker.percentageChanged.connect(self.progress.setValue) # ?????
         self.worker.value.connect(self._plot)
         self.thread.start() #add progress bar!
 
