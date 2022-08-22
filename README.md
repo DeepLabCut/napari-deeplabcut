@@ -61,6 +61,19 @@ keypoint annotations are otherwise automatically saved in the corresponding fold
 - Note, before saving a layer, make sure the points layer is selected. If the user clicked on the image(s) layer first, does `Save As`, then closes the window, any labeling work during that session will be lost!
 
 
+### Video frame extraction and prediction refinement
+
+Since v0.0.4, videos can be viewed in the GUI.
+
+Since v0.0.5, trailing points can be visualized; e.g., helping in the identification
+of swaps or outlier, jittery predictions.
+
+Loading a video (and its corresponding output h5 file) will enable the video actions
+at the top of the dock widget: they offer the option to manually extract video
+frames from the GUI, or to define cropping coordinates.
+Note that keypoints can be displaced and saved, as when annotating individual frames.
+
+
 ## Workflow
 
 Suggested workflows, depending on the image folder contents:
@@ -103,6 +116,13 @@ Labeling multiple image folders has to be done in sequence; i.e., only one image
 After labeling the images of a particular folder is done and the associated *Points layer* has been saved, *all* layers should be removed from the layers list (lower left pane on the GUI) by selecting them and clicking on the trashcan icon.
 Now, another image folder can be labeled, following the process described in *1*, *2*, or *3*, depending on the particular image folder.
 
+
+### Defining cropping coordinates
+
+Prior to defining cropping coordinates, two elements should be loaded in the GUI: 
+a video and the DLC project's `config.yaml` file (into which the crop dimensions will be stored).
+Then it suffices to add a `Shapes layer`, draw a `rectangle` in it with the desired area, 
+and hit the button `Store crop coordinates`; coordinates are automatically written to the configuration file.
 
 
 ## Contributing
