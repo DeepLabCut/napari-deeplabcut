@@ -1,5 +1,6 @@
 import os
 from collections import defaultdict
+from functools import partial
 from math import ceil, log10
 from types import MethodType
 from typing import Optional, Sequence, Union
@@ -95,11 +96,29 @@ def _save_layers_dialog(self, selected=False):
         )
         if filename:
             self.viewer.layers.save(filename, selected=selected)
+        else:
+            return
+    self._is_saved = True
+
+
+def on_close(self, event, widget):
+    if widget._stores and not widget._is_saved:
+        QMessageBox.warning(
+            widget,
+            "",
+            "Please save your data before closing",
+            QMessageBox.Ok,
+        )
+        event.ignore()
+    else:
+        event.accept()
 
 
 class KeypointControls(QWidget):
     def __init__(self, napari_viewer):
         super().__init__()
+        self._is_saved = False
+
         self.viewer = napari_viewer
         self.viewer.layers.events.inserted.connect(self.on_insert)
         self.viewer.layers.events.removed.connect(self.on_remove)
@@ -107,6 +126,10 @@ class KeypointControls(QWidget):
         self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
             _get_and_try_preferred_reader,
             self.viewer.window.qt_viewer,
+        )
+        # Intercept close event if data were not saved
+        self.viewer.window._qt_window.closeEvent = partial(
+            on_close, self.viewer.window._qt_window, widget=self,
         )
 
         self._label_mode = keypoints.LabelMode.default()
@@ -145,7 +168,7 @@ class KeypointControls(QWidget):
                 action.triggered.disconnect()
                 action.triggered.connect(
                     lambda: _save_layers_dialog(
-                        self.viewer.window.qt_viewer,
+                        self,
                         selected=True,
                     )
                 )
