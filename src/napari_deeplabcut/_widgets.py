@@ -11,7 +11,9 @@ from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from qtpy.QtCore import Qt, QTimer
+from napari._qt.widgets.qt_welcome import QtWelcomeLabel
+from qtpy.QtCore import Qt, QTimer, Signal
+from qtpy.QtGui import QPainter
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -23,6 +25,8 @@ from qtpy.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QStyle,
+    QStyleOption,
     QVBoxLayout,
     QWidget,
 )
@@ -127,17 +131,26 @@ class KeypointControls(QWidget):
             _get_and_try_preferred_reader,
             self.viewer.window.qt_viewer,
         )
+
+        # Hack napari's Welcome overlay to show more relevant instructions
+        overlay = self.viewer.window._qt_viewer._canvas_overlay
+        welcome_widget = overlay.layout().itemAt(1).widget()
+        welcome_widget.deleteLater()
+        w = QtWelcomeWidget(None)
+        overlay._overlay = w
+        overlay.addWidget(w)
+        overlay._overlay.sig_dropped.connect(overlay.sig_dropped)
+
+        self._label_mode = keypoints.LabelMode.default()
+
+        # Hold references to the KeypointStores
+        self._stores = {}
         # Intercept close event if data were not saved
         self.viewer.window._qt_window.closeEvent = partial(
             on_close,
             self.viewer.window._qt_window,
             widget=self,
         )
-
-        self._label_mode = keypoints.LabelMode.default()
-
-        # Hold references to the KeypointStores
-        self._stores = {}
 
         # Storage for extra image metadata that are relevant to other layers.
         # These are updated anytime images are added to the Viewer
@@ -498,3 +511,113 @@ def create_dropdown_menu(store, items, attr):
 
     menu.currentIndexChanged.connect(item_changed)
     return menu
+
+
+# WelcomeWidget modified from:
+# https://github.com/napari/napari/blob/a72d512972a274380645dae16b9aa93de38c3ba2/napari/_qt/widgets/qt_welcome.py#L28
+class QtWelcomeWidget(QWidget):
+    """Welcome widget to display initial information and shortcuts to user."""
+
+    sig_dropped = Signal("QEvent")
+
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        # Create colored icon using theme
+        self._image = QLabel()
+        self._image.setObjectName("logo_silhouette")
+        self._image.setMinimumSize(300, 300)
+        self._label = QtWelcomeLabel(
+            """
+            Drop a folder from within a DeepLabCut's labeled-data directory,
+            and,  if labeling from scratch,
+            drop the corresponding config.yaml.
+            """
+        )
+
+        # Widget setup
+        self.setAutoFillBackground(True)
+        self.setAcceptDrops(True)
+        self._image.setAlignment(Qt.AlignCenter)
+        self._label.setAlignment(Qt.AlignCenter)
+
+        # Layout
+        text_layout = QVBoxLayout()
+        text_layout.addWidget(self._label)
+
+        layout = QVBoxLayout()
+        layout.addStretch()
+        layout.setSpacing(30)
+        layout.addWidget(self._image)
+        layout.addLayout(text_layout)
+        layout.addStretch()
+
+        self.setLayout(layout)
+
+    def paintEvent(self, event):
+        """Override Qt method.
+
+        Parameters
+        ----------
+        event : qtpy.QtCore.QEvent
+            Event from the Qt context.
+        """
+        option = QStyleOption()
+        option.initFrom(self)
+        p = QPainter(self)
+        self.style().drawPrimitive(QStyle.PE_Widget, option, p, self)
+
+    def _update_property(self, prop, value):
+        """Update properties of widget to update style.
+
+        Parameters
+        ----------
+        prop : str
+            Property name to update.
+        value : bool
+            Property value to update.
+        """
+        self.setProperty(prop, value)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def dragEnterEvent(self, event):
+        """Override Qt method.
+
+        Provide style updates on event.
+
+        Parameters
+        ----------
+        event : qtpy.QtCore.QEvent
+            Event from the Qt context.
+        """
+        self._update_property("drag", True)
+        if event.mimeData().hasUrls():
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        """Override Qt method.
+
+        Provide style updates on event.
+
+        Parameters
+        ----------
+        event : qtpy.QtCore.QEvent
+            Event from the Qt context.
+        """
+        self._update_property("drag", False)
+
+    def dropEvent(self, event):
+        """Override Qt method.
+
+        Provide style updates on event and emit the drop event.
+
+        Parameters
+        ----------
+        event : qtpy.QtCore.QEvent
+            Event from the Qt context.
+        """
+        self._update_property("drag", False)
+        self.sig_dropped.emit(event)
