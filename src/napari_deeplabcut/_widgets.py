@@ -11,6 +11,7 @@ from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
+from qtpy.QtCore import Qt, QTimer
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -25,12 +26,11 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from qtpy.QtCore import Qt
 
 from napari_deeplabcut import keypoints
 from napari_deeplabcut._reader import _load_config
 from napari_deeplabcut._writer import _write_config, _write_image
-from napari_deeplabcut.misc import to_os_dir_sep, encode_categories
+from napari_deeplabcut.misc import encode_categories, to_os_dir_sep
 
 
 def _get_and_try_preferred_reader(
@@ -129,7 +129,9 @@ class KeypointControls(QWidget):
         )
         # Intercept close event if data were not saved
         self.viewer.window._qt_window.closeEvent = partial(
-            on_close, self.viewer.window._qt_window, widget=self,
+            on_close,
+            self.viewer.window._qt_window,
+            widget=self,
         )
 
         self._label_mode = keypoints.LabelMode.default()
@@ -174,6 +176,11 @@ class KeypointControls(QWidget):
                 )
                 break
 
+    def _move_image_layer_to_bottom(self, index):
+        if (ind := index) != 0:
+            self.viewer.layers.move_selected(ind, 0)
+            self.viewer.layers.select_next()  # Auto-select the Points layer
+
     def _show_trails(self, state):
         if state == Qt.Checked:
             if self._trails is None:
@@ -185,8 +192,8 @@ class KeypointControls(QWidget):
                     tail_length=50,
                     head_length=50,
                     tail_width=6,
-                    name='trails',
-                    colormap='viridis',
+                    name="trails",
+                    colormap="viridis",
                 )
             self._trails.visible = True
         else:
@@ -323,15 +330,10 @@ class KeypointControls(QWidget):
                     "name": layer.name,
                 }
             )
-            # FIXME Ensure the images are always underneath the other layers
-            # self.viewer.layers.selection = []
-            # if (ind := event.index) != 0:
-            #     order = list(range(len(self.viewer.layers)))
-            #     order.remove(ind)
-            #     new_order = [ind] + order
-            #     self.viewer.layers.move_multiple(new_order)
-            # if (ind := event.index) != 0:
-            #     self.viewer.layers.move_selected(ind, 0)
+            # Delay layer sorting
+            QTimer.singleShot(
+                10, partial(self._move_image_layer_to_bottom, event.index)
+            )
         elif isinstance(layer, Points):
             store = keypoints.KeypointStore(self.viewer, layer)
             self._stores[layer] = store
