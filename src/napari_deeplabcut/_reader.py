@@ -1,4 +1,3 @@
-from asyncore import read
 import glob
 import os
 from typing import Dict, List, Optional, Sequence
@@ -161,7 +160,7 @@ def read_config(configname: str) -> List[LayerData]:
 def read_hdf(filename: str) -> List[LayerData]:
     layers = []
     for filename in glob.iglob(filename):
-        temp = pd.read_hdf(filename)       
+        temp = pd.read_hdf(filename)
         header = misc.DLCHeader(temp.columns)
         temp = temp.droplevel("scorer", axis=1)
         if "individuals" not in temp.columns.names:
@@ -173,11 +172,12 @@ def read_hdf(filename: str) -> List[LayerData]:
         if isinstance(temp.index, pd.MultiIndex):
             temp.index = [os.path.join(*row) for row in temp.index]
         df = (
-            temp.stack(["individuals", "bodyparts"])
+            temp.stack(["individuals", "bodyparts"], dropna=False)
             .reindex(header.individuals, level="individuals")
             .reindex(header.bodyparts, level="bodyparts")
             .reset_index()
         )
+        df.fillna(0, inplace=True)
         nrows = df.shape[0]
         data = np.empty((nrows, 3))
         image_paths = df["level_0"]

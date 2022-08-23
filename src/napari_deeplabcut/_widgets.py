@@ -248,9 +248,10 @@ class KeypointControls(QWidget):
             if len(inds) == 1:
                 ind = inds[0]
                 filename = clust_layer.properties['frame'][ind]
-                #print(filename)
+                print(filename)
                 self.file_relabel = filename
                 path = self.file_path.split('training-datasets')[0] + filename 
+                print(path)
                 im = pilImage.open(path)
                 bdpts = df.loc[filename].values
         
