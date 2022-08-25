@@ -1,5 +1,6 @@
 import os
 from collections import defaultdict
+from datetime import datetime
 from functools import partial
 from math import ceil, log10
 from types import MethodType
@@ -103,6 +104,10 @@ def _save_layers_dialog(self, selected=False):
         else:
             return
     self._is_saved = True
+    self.last_saved_label.setText(
+        f'Last saved at {str(datetime.now().time()).split(".")[0]}'
+    )
+    self.last_saved_label.show()
 
 
 def on_close(self, event, widget):
@@ -131,6 +136,11 @@ class KeypointControls(QWidget):
             _get_and_try_preferred_reader,
             self.viewer.window.qt_viewer,
         )
+
+        status_bar = self.viewer.window._qt_window.statusBar()
+        self.last_saved_label = QLabel('')
+        self.last_saved_label.hide()
+        status_bar.insertPermanentWidget(0, self.last_saved_label)
 
         # Hack napari's Welcome overlay to show more relevant instructions
         overlay = self.viewer.window._qt_viewer._canvas_overlay
@@ -391,6 +401,7 @@ class KeypointControls(QWidget):
                 menu.setParent(None)
                 menu.destroy()
             self._trail_cb.setEnabled(False)
+            self.last_saved_label.hide()
         elif isinstance(layer, Image):
             self._images_meta = dict()
             paths = layer.metadata.get("paths")
