@@ -542,7 +542,7 @@ class QtWelcomeWidget(QWidget):
             """
             Drop a folder from within a DeepLabCut's labeled-data directory,
             and,  if labeling from scratch,
-            drop the corresponding config.yaml.
+            the corresponding project's config.yaml file.
             """
         )
 
