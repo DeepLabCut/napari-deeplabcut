@@ -176,7 +176,6 @@ class KeypointControls(QWidget):
         self.width = 320
         self.height = 200
         self.initUI()
-        self.show()
         self.fig = Figure()
         self.ax = self.fig.add_subplot(111)
         self.ax.axis('off')
@@ -189,12 +188,12 @@ class KeypointControls(QWidget):
         self.file_relabel = str()
         self.step = []
         self.collect_data = [[]] #empty df????
-        #self.fig.subplots_adjust(0.2, 0.2, 0.8, 0.8)
+        self.fig.subplots_adjust(0.15, 0.15, 0.75, 0.75) # left,bottom,right,top 
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(self.canvas)
         self.setLayout(layout)
         
-        #self.show()
+        self.show()
 
         
     def initUI(self):
@@ -212,31 +211,30 @@ class KeypointControls(QWidget):
         button3.move(230,70)
         button3.clicked.connect(self.on_click_close_img)      
         button2.clicked.connect(self.on_click_show_img)  
-        self.progress = QProgressBar(self)
-        self.progress.setGeometry(10,120, 300, 25)
-        self.progress.setMaximum(100)
-        self.show()
+        #self.progress = QProgressBar(self)
+        #self.progress.setGeometry(10,120, 300, 25)
+        #self.progress.setMaximum(100)
+        #button1.show()
 
         return button2, button3
 
     def _plot(self,input):
         points_cluster ,color, names = input
-        x = list(points_cluster[0])
-        y = list(points_cluster[1])
-        points_cluster1 = np.column_stack((y,x))
-        color2 = []
+        points_cluster_nap = np.column_stack((list(points_cluster[1]),list(points_cluster[0])))
+        color_nap = []
         if  max(color) != -1:
             for i in color:
-                color2.append((i + 1)/(max(color)+1))
+                color_nap.append((i + 1)/(max(color)+1))
         else: 
-            color2 = np.zeros(len(color))
-        dict_prop_points = {'colorn':color2,'frame' : names}
-        clust_layer = self.viewer.add_points(points_cluster1, size=8 ,name='cluster', features=dict_prop_points, face_color='colorn',face_colormap = 'plasma',) 
+            color_nap = np.zeros(len(color))
+
+        dict_prop_points = {'colorn':color_nap,'frame' : names}
+        clust_layer = self.viewer.add_points(points_cluster_nap, size=8 ,name='cluster', features=dict_prop_points, face_color='colorn',face_colormap = 'plasma',) 
         self.viewer.window.add_dock_widget(self.canvas,name = 'frames')
         clust_layer.mode = 'select'
         df = pd.read_hdf(self.file_path)
         
-        df2 = df.reset_index()
+        #df2 = df.reset_index()
         df = df.dropna()     
         self.collect_data = df
         self.viewer.layers[0].visible = False #collect
@@ -245,20 +243,20 @@ class KeypointControls(QWidget):
         def get_event(clust_layer,event):
             #print("click1")
             inds = list(clust_layer.selected_data)
+            print(inds)
             if len(inds) == 1:
                 ind = inds[0]
                 filename = clust_layer.properties['frame'][ind]
-                print(filename)
                 self.file_relabel = filename
-                path = self.file_path.split('training-datasets')[0] + filename 
-                print(path)
+
+                path = self.file_path.split('training-datasets')[0] + filename #fixme 
+                
                 im = pilImage.open(path)
                 bdpts = df.loc[filename].values
         
+                #self.step = df2.index[df2['index']==str(filename)].to_list()
                 
-                self.step = df2.index[df2['index']==str(filename)].to_list()
-                print(self.step)
-
+                self.step = list(self.viewer.layers[0].metadata['paths']).index(filename)
                 self.img_refine = np.array(im)
                 xbdpts = bdpts[::2]
                 ybdpts = bdpts[1::2]
@@ -277,7 +275,7 @@ class KeypointControls(QWidget):
         
         filename_path = list(self.viewer.layers[0]._source)[0][1]
         self.file_path = filename_path.replace("\\", "/")  #work in other os?
-        print(list(self.viewer.layers[0]._source)[0][1])
+        #print(list(self.viewer.layers[0]._source)[0][1])
         
         
         func = partial(cluster_data, self.file_path)
@@ -285,14 +283,14 @@ class KeypointControls(QWidget):
         self.worker, self.thread = Worker.move_to_separate_thread(func)
         #self.worker.percentageChanged.connect(self.progress.setValue) # ?????
         self.worker.value.connect(self._plot)
-        self.thread.start() #add progress bar!
+        self.thread.start() #add progress bar?
 
 
     @pyqtSlot()
     def on_click_show_img(self):
         self.viewer.layers[0].visible = True #collect
         self.viewer.layers[1].visible = False #cluster
-        self.viewer.dims.set_current_step(0,self.step[0])
+        self.viewer.dims.set_current_step(0,self.step) 
         self.viewer.add_image(self.img_refine, name = 'image refine label')
         self.viewer.layers.move_selected(0,2)
 
@@ -300,10 +298,8 @@ class KeypointControls(QWidget):
     def on_click_close_img(self):
         self.viewer.layers.remove('image refine label')
         self.viewer.layers.move_selected(0,1)
-        #self.viewer.layers.remove('refine label')
         self.viewer.layers[0].visible = False
         self.viewer.layers[1].visible = True
-           
 
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)
@@ -372,7 +368,7 @@ class KeypointControls(QWidget):
 
     def on_insert(self, event):
         layer = event.source[-1]
-        print(layer)
+        #print(layer)
         if str(layer) != 'cluster' and str(layer) != 'image refine label' :
             if isinstance(layer, Image):
                 paths = layer.metadata.get("paths")
@@ -398,7 +394,7 @@ class KeypointControls(QWidget):
             elif isinstance(layer, Points):
                 store = keypoints.KeypointStore(self.viewer, layer)
                 self._stores[layer] = store
-                print(store)
+                #print(store)
                 # TODO Set default dir of the save file dialog
                 if root := layer.metadata.get("root"):
                     update_save_history(root)

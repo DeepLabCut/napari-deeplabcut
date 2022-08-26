@@ -77,9 +77,9 @@ def cluster_data(url):
         bodyparts[i] = a[i][1]
         coord[i] = a[i][2]
     
-    bodyparts = np.unique(bodyparts) # 22 unique labels
-    #print("Unique body parts:",bodyparts)
+    bodyparts = np.unique(bodyparts) 
     
+    # 
     frame_aux = random.choice(df.index)
     sample =df.loc[frame_aux, (scorer, bodyparts, 'y')]
     samp_size = max(sample) - min(sample)
