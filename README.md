@@ -95,6 +95,8 @@ Suggested workflows, depending on the image folder contents:
     and start drawing rectangles over the images. Masks and rectangle vertices are saved as described in [Save Layers](#save-layers).
     Note that masks can be reloaded and edited at a later stage by dropping the `vertices.csv` file onto the canvas. 
 
+5. **Detect Outliers to Refine Labels**
+    Open napari as described in [Usage](#usage) and open the `CollectedData_<ScorerName>.h5` file. Click on the button cluster and wait a few seconds. It will show a new layer with the cluster. You can click on a point and see the image on the right with the keypoints. If you decided to refine that frame, click show img and refine them. You can go back to the cluster layer by clicking on close img and refine another image. When you're done, you need to do ctl s to save it. And now you can retrain the network!
 
 ### Labeling multiple image folders
 
