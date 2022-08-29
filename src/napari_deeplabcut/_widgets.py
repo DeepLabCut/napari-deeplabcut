@@ -747,6 +747,8 @@ class ColorSchemeDisplay(QScrollArea):
         def part_name(self, part_name: str):
             self._part_name = part_name
             self.part_label.setText(part_name)
+            self.part_label.setToolTip(part_name)
+            self.color_label.setToolTip(part_name)
 
     def __init__(self, parent):
 
