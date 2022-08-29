@@ -6,7 +6,6 @@ from math import ceil, log10
 from types import MethodType
 from typing import Optional, Sequence, Union
 
-import napari.layers
 import numpy as np
 from napari.layers import Image, Points, Shapes, Tracks
 from napari.layers.points._points_key_bindings import register_points_action
@@ -340,7 +339,7 @@ class KeypointControls(QWidget):
     def _update_color_scheme(self, display):
 
         for layer in self.viewer.layers:
-            if isinstance(layer, napari.layers.Points) and layer.metadata:
+            if isinstance(layer, Points) and layer.metadata:
 
                 def to_hex(nparray):
                     a = np.array(nparray*255, dtype = int)
