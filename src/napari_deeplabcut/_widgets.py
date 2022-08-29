@@ -349,10 +349,9 @@ class KeypointControls(QWidget):
 
                 [display.add_entry(name, to_hex(color))
                  for name, color
-                 in zip(layer.metadata["face_color_cycles"]["label"].keys(),
-                        layer.metadata["face_color_cycles"]["label"].values()
-                        )
+                 in layer.metadata["face_color_cycles"]["label"].items()
                  ]
+                 break
 
 
     def _remap_frame_indices(self, layer):
