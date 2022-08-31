@@ -187,8 +187,8 @@ class KeypointControls(QWidget):
         self.bodyparts_name = [[]]
         self.file_relabel = str()
         self.step = []
-        self.collect_data = [[]] #empty df????
-        self.fig.subplots_adjust(0.15, 0.15, 0.75, 0.75) # left,bottom,right,top 
+        self.collect_data = [[]] 
+        self.fig.subplots_adjust(0.15, 0.15, 0.75, 0.75) # left,bottom,right,top #???
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(self.canvas)
         self.setLayout(layout)
@@ -243,7 +243,7 @@ class KeypointControls(QWidget):
         def get_event(clust_layer,event):
             #print("click1")
             inds = list(clust_layer.selected_data)
-            print(inds)
+            
             if len(inds) == 1:
                 ind = inds[0]
                 filename = clust_layer.properties['frame'][ind]
