@@ -113,7 +113,6 @@ def _save_layers_dialog(self, selected=False):
 
 
 def on_close(self, event, widget):
-
     if widget._stores and not widget._is_saved:
         QMessageBox.warning(
             widget,
@@ -196,6 +195,7 @@ class KeypointControls(QWidget):
         self._radio_group = self._form_mode_radio_buttons()
 
         self._color_scheme_display = self._form_color_scheme_display(self.viewer)
+
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
         self._view_scheme_cb.toggle()
 
@@ -217,10 +217,8 @@ class KeypointControls(QWidget):
             self.viewer.layers.select_next()  # Auto-select the Points layer
 
     def _show_color_scheme(self):
-
         show = self._view_scheme_cb.isChecked()
         self._color_scheme_display.setVisible(show)
-
 
     def _show_trails(self, state):
         if state == Qt.Checked:
@@ -272,7 +270,6 @@ class KeypointControls(QWidget):
     def _store_crop_coordinates(self, *args):
         if not (project_path := self._images_meta.get("project")):
             return
-
         for layer in self.viewer.layers:
             if isinstance(layer, Shapes):
                 try:
@@ -321,9 +318,7 @@ class KeypointControls(QWidget):
         return group
 
     def _form_color_scheme_display(self, viewer):
-
         display = ColorSchemeDisplay(parent=self)
-        # widget.remove_docked_widget(widget._color_scheme_display) where to ?
         self._update_color_scheme(display)
 
         self.viewer.layers.events.inserted.connect(
@@ -333,25 +328,21 @@ class KeypointControls(QWidget):
         )
 
         return viewer.window.add_dock_widget(display,
-                                          name="Color scheme reference",
-                                          area="left")
+                                            name="Color scheme reference",
+                                            area="left")
 
     def _update_color_scheme(self, display):
-
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata:
 
                 def to_hex(nparray):
-                    a = np.array(nparray*255, dtype = int)
+                    a = np.array(nparray*255, dtype=int)
                     rgb2hex = lambda r, g, b, _: '#%02x%02x%02x' % (r, g, b)
-                    res = rgb2hex(*a[:])
+                    res = rgb2hex(*a)
                     return res
 
-                [display.add_entry(name, to_hex(color))
-                 for name, color
-                 in layer.metadata["face_color_cycles"]["label"].items()
-                 ]
-                 break
+                [display.add_entry(name, to_hex(color)) for name, color in layer.metadata["face_color_cycles"]["label"].items()]
+                break
 
 
     def _remap_frame_indices(self, layer):
@@ -446,6 +437,8 @@ class KeypointControls(QWidget):
     def on_remove(self, event):
         layer = event.value
         if isinstance(layer, Points):
+            if self._color_scheme_display is not None:
+                self.viewer.window.remove_dock_widget(self._color_scheme_display)
             self._stores.pop(layer, None)
             while self._menus:
                 menu = self._menus.pop()
@@ -686,71 +679,65 @@ class QtWelcomeWidget(QWidget):
         self.sig_dropped.emit(event)
 
 
+class LabelPair(QWidget):
+    def __init__(self, color: str, name: str, parent: QWidget):
+        super().__init__(parent)
+
+        self._color = color
+        self._part_name = name
+
+        self.color_label = QLabel("", parent=self)
+        self.part_label = QLabel(name, parent=self)
+
+        self.color_label.setToolTip(name)
+        self.part_label.setToolTip(name)
+
+        self._format_label(self.color_label, 10, 10)
+        self._format_label(self.part_label)
+
+        self.color_label.setStyleSheet(
+            f"background-color: {color};")
+
+        self._build()
+
+    @staticmethod
+    def _format_label(label : QLabel, height: int = None, width: int = None):
+        label.setSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed)
+        if height is not None:
+            label.setMaximumHeight(height)
+        if width is not None:
+            label.setMaximumWidth(width)
+
+    def _build(self):
+        layout = QHBoxLayout()
+        layout.addWidget(self.color_label)
+        layout.addWidget(self.part_label)
+        self.setLayout(layout)
+
+    @property
+    def color(self):
+        return self._color
+
+    @color.setter
+    def color(self, color: str):
+        self._color = color
+        self.color_label.setStyleSheet(
+            f"background-color: {color};")
+
+    @property
+    def part_name(self):
+        return self._part_name
+
+    @part_name.setter
+    def part_name(self, part_name: str):
+        self._part_name = part_name
+        self.part_label.setText(part_name)
+        self.part_label.setToolTip(part_name)
+        self.color_label.setToolTip(part_name)
+
+
 class ColorSchemeDisplay(QScrollArea):
-
-    class LabelPair(QWidget):
-        def __init__(self, color: str, name: str, parent: QWidget):
-            super().__init__(parent)
-
-            self._color = color
-            self._part_name = name
-
-            self.color_label = QLabel("", parent=self)
-            self.part_label = QLabel(name, parent=self)
-
-            self.color_label.setToolTip(name)
-            self.part_label.setToolTip(name)
-
-            self._format_label(self.color_label, 10, 10)
-            self._format_label(self.part_label)
-
-            # self._radius = 20
-            self._min_hw = 40
-
-            self.color_label.setStyleSheet(
-                f"background-color: {color};")
-
-            self._build()
-
-        @staticmethod
-        def _format_label(label : QLabel, height: int = None, width: int = None):
-            label.setSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed)
-            if height is not None:
-                label.setMaximumHeight(height)
-            if width is not None:
-                label.setMaximumWidth(width)
-
-        def _build(self):
-
-            layout = QHBoxLayout()
-            layout.addWidget(self.color_label)
-            layout.addWidget(self.part_label)
-            self.setLayout(layout)
-
-        @property
-        def color(self):
-            return self._color
-
-        @color.setter
-        def color(self, color: str):
-
-            self._color = color
-            self.color_label.setStyleSheet(
-                f"background-color: {color};")
-
-        @property
-        def part_name(self):
-            return self._part_name
-
-        @part_name.setter
-        def part_name(self, part_name: str):
-            self._part_name = part_name
-            self.part_label.setText(part_name)
-            self.part_label.setToolTip(part_name)
-            self.color_label.setToolTip(part_name)
-
     def __init__(self, parent):
-
         super().__init__(parent)
 
         self.scheme_dict = {}  # {name: color} mapping
@@ -760,18 +747,12 @@ class ColorSchemeDisplay(QScrollArea):
 
         self._build()
 
-        ###########
-        # FIXME test remove
-
-        # self.reset_entries()
-
     def _build(self):
         self._container.setSizePolicy(
             QSizePolicy.Fixed, QSizePolicy.Maximum
         )  # feel free to change those
         self._container.setLayout(self._layout)
         self._container.adjustSize()
-
 
         self.setWidget(self._container)
 
@@ -788,10 +769,9 @@ class ColorSchemeDisplay(QScrollArea):
         )
 
     def add_entry(self, name, color):
-
         self.scheme_dict.update({name:color})
 
-        self._layout.addWidget(self.LabelPair(color, name, self))
+        self._layout.addWidget(LabelPair(color, name, self))
         self._container.setLayout(self._layout)
         self._container.update()
 
