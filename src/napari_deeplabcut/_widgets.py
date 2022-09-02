@@ -710,8 +710,8 @@ class LabelPair(QWidget):
 
     def _build(self):
         layout = QHBoxLayout()
-        layout.addWidget(self.color_label)
-        layout.addWidget(self.part_label)
+        layout.addWidget(self.color_label, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.part_label, alignment=Qt.AlignmentFlag.AlignLeft)
         self.setLayout(layout)
 
     @property
@@ -771,7 +771,7 @@ class ColorSchemeDisplay(QScrollArea):
     def add_entry(self, name, color):
         self.scheme_dict.update({name:color})
 
-        self._layout.addWidget(LabelPair(color, name, self))
+        self._layout.addWidget(LabelPair(color, name, self), alignment=Qt.AlignmentFlag.AlignLeft)
         self._container.setLayout(self._layout)
         self._container.update()
 
