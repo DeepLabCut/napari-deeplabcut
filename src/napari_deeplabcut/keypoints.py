@@ -3,10 +3,11 @@ from enum import auto
 from typing import List, Sequence
 
 import numpy as np
-from napari.layers import Points
 from napari._qt.layer_controls.qt_points_controls import QtPointsControls
+from napari.layers import Points
 
 from napari_deeplabcut.misc import CycleEnum
+
 
 # Monkeypatch the point size slider
 def _change_size(self, value):
@@ -16,6 +17,7 @@ def _change_size(self, value):
         self.layer.size = (self.layer.size > 0) * value
         self.layer.refresh()
         self.layer.events.size()
+
 
 QtPointsControls.changeSize = _change_size
 
@@ -43,11 +45,11 @@ class LabelMode(CycleEnum):
 # Description tooltips for the labeling modes radio buttons.
 TOOLTIPS = {
     "SEQUENTIAL": "Points are placed in sequence, then frame after frame;\n"
-                  "clicking to add an already annotated point has no effect.",
+    "clicking to add an already annotated point has no effect.",
     "QUICK": "Similar to SEQUENTIAL, but trying to add an already\n"
-             "annotated point actually moves it to the cursor location.",
+    "annotated point actually moves it to the cursor location.",
     "LOOP": "The first point is placed frame by frame, then it wraps\n"
-            "to the next label at the end and restart from frame 1, etc.",
+    "to the next label at the end and restart from frame 1, etc.",
 }
 
 
@@ -81,8 +83,7 @@ class KeypointStore:
 
     @property
     def current_mask(self) -> Sequence[bool]:
-        # return self.layer.data[:, 0] == self.current_step
-        return np.asarray(self.layer.data[:, 0] == self.layer._slice_indices[0])
+        return np.asarray(self.layer.data[:, 0] == self.current_step)
 
     @property
     def current_keypoint(self) -> Keypoint:
