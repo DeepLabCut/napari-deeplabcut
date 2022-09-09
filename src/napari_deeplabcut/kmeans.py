@@ -27,9 +27,17 @@ def cluster_data(points_layer):
     df = _conv_layer_to_df(
         points_layer.data, points_layer.metadata, points_layer.properties
     )
+    try:
+        df = df.drop('single', axis=1, level='individuals')
+    except KeyError:
+        pass
     df.dropna(inplace=True)
-    df.index = ['/'.join(row) for row in list(df.index)]
     header = DLCHeader(df.columns)
+    try:
+        df = df.stack('individuals').droplevel('individuals')
+    except KeyError:
+        pass
+    df.index = ['/'.join(row) for row in df.index]
     xy = df.to_numpy().reshape((-1, len(header.bodyparts), 2))
     # TODO Normalize dists by longest length?
     dists = np.vstack([pdist(data, "euclidean") for data in xy])
