@@ -11,32 +11,34 @@ from napari_deeplabcut import misc
 from napari_deeplabcut._reader import _load_config
 
 
-def write_hdf(filename, data, metadata):
-    file, _ = os.path.splitext(filename)  # FIXME Unused currently
+def _conv_layer_to_df(data, metadata, properties):
     temp = pd.DataFrame(data[:, -1:0:-1], columns=["x", "y"])
-    properties = metadata["properties"]
-    meta = metadata["metadata"]
     temp["bodyparts"] = properties["label"]
     temp["individuals"] = properties["id"]
     temp["inds"] = data[:, 0].astype(int)
     temp["likelihood"] = properties["likelihood"]
-    temp["scorer"] = meta["header"].scorer
+    temp["scorer"] = metadata["header"].scorer
     df = temp.set_index(["scorer", "individuals", "bodyparts", "inds"]).stack()
     df.index.set_names("coords", level=-1, inplace=True)
     df = df.unstack(["scorer", "individuals", "bodyparts", "coords"])
     df.index.name = None
     if not properties["id"][0]:
         df = df.droplevel("individuals", axis=1)
-    df = df.reindex(meta["header"].columns, axis=1)
+    df = df.reindex(metadata["header"].columns, axis=1)
     # Fill unannotated rows with NaNs
     # df = df.reindex(range(len(meta['paths'])))
     # df.index = meta['paths']
-    if meta["paths"]:
-        df.index = [meta["paths"][i] for i in df.index]
+    if metadata["paths"]:
+        df.index = [metadata["paths"][i] for i in df.index]
     misc.guarantee_multiindex_rows(df)
+    return df
 
+
+def write_hdf(filename, data, metadata):
+    file, _ = os.path.splitext(filename)  # FIXME Unused currently
+    df = _conv_layer_to_df(data, metadata["metadata"], metadata["properties"])
     name = metadata["name"]
-    root = meta["root"]
+    root = metadata["metadata"]["root"]
     if "machine" in name:  # We are attempting to save refined model predictions
         df.drop("likelihood", axis=1, level="coords", inplace=True, errors="ignore")
         header = misc.DLCHeader(df.columns)

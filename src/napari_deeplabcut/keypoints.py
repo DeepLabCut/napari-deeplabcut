@@ -59,7 +59,6 @@ class KeypointStore:
         self.viewer = viewer
         self.layer = layer
         all_pairs = self.layer.metadata["header"].form_individual_bodypart_pairs()
-        print(all_pairs)
         self._keypoints = [
             Keypoint(label, id_) for id_, label in all_pairs
         ]  # Ordered references to all possible keypoints

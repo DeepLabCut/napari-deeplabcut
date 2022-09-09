@@ -1,25 +1,19 @@
-from ast import Not
+import os
 from collections import defaultdict
-from re import S
 from functools import partial
-from xml.etree.ElementInclude import XINCLUDE
-import pandas as pd
-from types import MethodType
-from PIL import Image as pilImage
-from typing import Optional, Sequence, Union
-from PyQt5.QtCore import pyqtSlot, QObject, QThread, pyqtSignal, QTimer
-from matplotlib.backends.backend_qt5agg import FigureCanvas
-from matplotlib.figure import Figure
 import numpy as np
-import napari
-from typing import List, Tuple
-from PyQt5 import QtCore, QtWidgets
-from napari.types import ImageData
+import pandas as pd
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+from types import MethodType
+from typing import Optional, Sequence, Union
 from napari.layers import Image, Points
 from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
 from napari.utils.events import Event
 from napari.utils.history import update_save_history, get_save_history
+from PIL import Image as Image_
+from qtpy import QtCore
 from qtpy.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -31,43 +25,37 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QPushButton,
-    QProgressBar
 )
 
 from napari_deeplabcut.kmeans import cluster_data
 from napari_deeplabcut import keypoints
-from napari_deeplabcut.misc import to_os_dir_sep
+from napari_deeplabcut.misc import to_os_dir_sep, find_project_name
 
-class Worker(QObject):
 
-    started = pyqtSignal()
-    #percentageChanged = pyqtSignal(int)
+class Worker(QtCore.QObject):
+    started = QtCore.Signal()
     finished = QtCore.Signal()
-    value = pyqtSignal(object)
+    value = QtCore.Signal(object)
 
     def __init__(self, func):
         super().__init__()
         self.func = func
 
     def run(self):
-
-        self._percentage = 0
-        points_cluster , color, names = self.func()
-        self.value.emit((points_cluster,color, names))
+        out = self.func()
+        self.value.emit(out)
         self.finished.emit()
 
-    def move_to_separate_thread(func):
-        thread = QtCore.QThread()
-        worker = Worker(func)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        #self.worker.percentageChanged.connect(self.progress.setValue) # ??? #creo que esto no porque necesita ir abajo
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        worker.finished.connect(thread.deleteLater)
 
-        return worker, thread
-
+def move_to_separate_thread(func):
+    thread = QtCore.QThread()
+    worker = Worker(func)
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    worker.finished.connect(thread.quit)
+    worker.finished.connect(worker.deleteLater)
+    worker.finished.connect(thread.deleteLater)
+    return worker, thread
 
 
 def _get_and_try_preferred_reader(
@@ -140,9 +128,9 @@ class KeypointControls(QWidget):
         self.viewer = napari_viewer
         self.viewer.layers.events.inserted.connect(self.on_insert)
         self.viewer.layers.events.removed.connect(self.on_remove)
-        self.file_path = str()
         self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
-            _get_and_try_preferred_reader, self.viewer.window.qt_viewer,)
+            _get_and_try_preferred_reader, self.viewer.window.qt_viewer,
+        )
 
         self._label_mode = keypoints.LabelMode.default()
 
@@ -170,134 +158,106 @@ class KeypointControls(QWidget):
                     )
                 )
                 break
-        
-        self.left = 10
-        self.top = 10
-        self.width = 320
-        self.height = 200
-        self.initUI()
-        self.fig = Figure()
+
+        self.add_clustering_buttons()
+
+        # Initialize an empty canvas onto which to draw the images
+        self.fig = Figure(tight_layout=True, dpi=100)
+        self.fig.patch.set_facecolor("None")
         self.ax = self.fig.add_subplot(111)
-        self.ax.axis('off')
-        #self.im = self.ax.imshow([[]])
+        self.ax.invert_yaxis()
+        self.ax.set_axis_off()
+        self._im = None
+        self._scatter = self.ax.scatter([], [])
         self.canvas = FigureCanvas(self.fig)
-        self.canvas.figure.set_tight_layout(True)
-        self.img_refine = [[]]
-        self.bdpts_refine = [[]]
-        self.bodyparts_name = [[]]
-        self.file_relabel = str()
-        self.step = []
-        self.collect_data = [[]] 
-        self.fig.subplots_adjust(0.15, 0.15, 0.75, 0.75) # left,bottom,right,top #???
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.addWidget(self.canvas)
-        self.setLayout(layout)
         
         self.show()
 
-        
-    def initUI(self):
-        
-        self.setGeometry(self.left, self.top, self.width, self.height)
-        
-        button1 = QPushButton('cluster pose', self)
-        button1.move(5,70)
-        button1.clicked.connect(self.on_click)
-        self.setGeometry(self.left, self.top, self.width, self.height)
-        button2 = QPushButton('show img', self)
-        button2.move(120,70)
-        
-        button3 = QPushButton('close img', self)
-        button3.move(230,70)
-        button3.clicked.connect(self.on_click_close_img)      
-        button2.clicked.connect(self.on_click_show_img)  
-        #self.progress = QProgressBar(self)
-        #self.progress.setGeometry(10,120, 300, 25)
-        #self.progress.setMaximum(100)
-        #button1.show()
+    def add_clustering_buttons(self):
+        layout = QHBoxLayout()
+        btn_cluster = QPushButton('cluster pose', self)
+        btn_cluster.clicked.connect(self.on_click)
+        btn_show = QPushButton('show img', self)
+        btn_show.clicked.connect(self.on_click_show_img)
+        btn_close = QPushButton('close img', self)
+        btn_close.clicked.connect(self.on_click_close_img)
+        layout.addWidget(btn_cluster)
+        layout.addWidget(btn_show)
+        layout.addWidget(btn_close)
+        self._layout.addLayout(layout)
 
-        return button2, button3
+    def _show_clusters(self, input_):
+        points, names = input_
+        points[:, [0, 1]] = points[:, [1, 0]]
+        colors = points[:, 2] + 1
 
-    def _plot(self,input):
-        points_cluster ,color, names = input
-        points_cluster_nap = np.column_stack((list(points_cluster[1]),list(points_cluster[0])))
-        color_nap = []
-        if  max(color) != -1:
-            for i in color:
-                color_nap.append((i + 1)/(max(color)+1))
-        else: 
-            color_nap = np.zeros(len(color))
-
-        dict_prop_points = {'colorn':color_nap,'frame' : names}
-        clust_layer = self.viewer.add_points(points_cluster_nap, size=8 ,name='cluster', features=dict_prop_points, face_color='colorn',face_colormap = 'plasma',) 
-        self.viewer.window.add_dock_widget(self.canvas,name = 'frames')
+        dict_prop_points = {'colorn': colors, 'frame': names}
+        clust_layer = self.viewer.add_points(
+            points[:, :2],
+            size=8,
+            name='cluster',
+            features=dict_prop_points,
+            face_color='colorn',
+            face_colormap='plasma',
+        )
         clust_layer.mode = 'select'
-        df = pd.read_hdf(self.file_path)
-        
-        #df2 = df.reset_index()
-        df = df.dropna()     
-        self.collect_data = df
-        self.viewer.layers[0].visible = False #collect
+
+        self.viewer.window.add_dock_widget(self.canvas, name='frames')
+        self.viewer.layers[0].visible = False
+
+        self._df = pd.read_hdf(self.viewer.layers[0].source.path)
+        self._df.index = ['/'.join(row) for row in list(self._df.index)]
+
+        root = self.viewer.layers[0].metadata['root']
+        filenames = list(self.viewer.layers[0].metadata['paths'])
+        project_name = find_project_name(root)
+        project_path = os.path.join(root.split(project_name)[0], project_name)
 
         @clust_layer.mouse_drag_callbacks.append
-        def get_event(clust_layer,event):
-            #print("click1")
+        def get_event(clust_layer, event):
             inds = list(clust_layer.selected_data)
-            
-            if len(inds) == 1:
-                ind = inds[0]
-                filename = clust_layer.properties['frame'][ind]
-                self.file_relabel = filename
+            if not inds:
+                return
 
-                path = self.file_path.split('training-datasets')[0] + filename #fixme 
-                
-                im = pilImage.open(path)
-                bdpts = df.loc[filename].values
-        
-                #self.step = df2.index[df2['index']==str(filename)].to_list()
-                
-                self.step = list(self.viewer.layers[0].metadata['paths']).index(filename)
-                self.img_refine = np.array(im)
-                xbdpts = bdpts[::2]
-                ybdpts = bdpts[1::2]
-                self.ax.clear()
-                self.ax.set_xlim(0, np.array(im).shape[1])
-                self.ax.set_ylim(0, np.array(im).shape[0])      
-                #self.im.set_data #FIX!
-                self.ax.imshow(im)
-                self.ax.scatter(xbdpts,ybdpts)
-                self.ax.invert_yaxis()
+            if len(inds) > 1:
+                self.viewer.status = 'Please select only one data point.'
+                return
+
+            ind = inds[0]
+            filename = clust_layer.properties['frame'][ind]
+            bpts = self._df.loc[filename].to_numpy().reshape((-1, 2))
+            self.step = filenames.index(filename)
+
+            with Image_.open(os.path.join(project_path, filename)) as img:
+                im = np.asarray(img)
+                if self._im is None:
+                    self._im = self.ax.imshow(im)
+                else:
+                    self._im.set_data(im)
+                self._scatter.set_offsets(bpts)
                 self.canvas.draw()
-      
 
-    @pyqtSlot()
     def on_click(self):
-        
-        filename_path = list(self.viewer.layers[0]._source)[0][1]
-        self.file_path = filename_path.replace("\\", "/")  #work in other os?
-        #print(list(self.viewer.layers[0]._source)[0][1])
-        
-        
-        func = partial(cluster_data, self.file_path)
+        layer = self.viewer.layers.selection.active
+        if not isinstance(layer, Points):
+            print("Only Points layers can be clustered.")
+            return
 
-        self.worker, self.thread = Worker.move_to_separate_thread(func)
-        #self.worker.percentageChanged.connect(self.progress.setValue) # ?????
-        self.worker.value.connect(self._plot)
-        self.thread.start() #add progress bar?
+        func = partial(cluster_data, layer)
+        self.worker, self.thread = move_to_separate_thread(func)
+        self.worker.value.connect(self._show_clusters)
+        self.thread.start()
 
-
-    @pyqtSlot()
     def on_click_show_img(self):
-        self.viewer.layers[0].visible = True #collect
-        self.viewer.layers[1].visible = False #cluster
-        self.viewer.dims.set_current_step(0,self.step) 
-        self.viewer.add_image(self.img_refine, name = 'image refine label')
-        self.viewer.layers.move_selected(0,2)
+        self.viewer.layers[0].visible = True
+        self.viewer.layers[1].visible = False
+        self.viewer.dims.set_current_step(0, self.step)
+        self.viewer.add_image(self._im.get_array(), name='image refine label')
+        self.viewer.layers.move_selected(0, 2)
 
-    @pyqtSlot()
     def on_click_close_img(self):
         self.viewer.layers.remove('image refine label')
-        self.viewer.layers.move_selected(0,1)
+        self.viewer.layers.move_selected(0, 1)
         self.viewer.layers[0].visible = False
         self.viewer.layers[1].visible = True
 
@@ -357,7 +317,6 @@ class KeypointControls(QWidget):
             # Check now whether there are new frames
             temp = {k: new_paths.index(v) for k, v in paths_map.items()}
             data = layer.data
-            #print(data)
             if isinstance(data, list):
                 for verts in data:
                     verts[:, 0] = np.vectorize(temp.get)(verts[:, 0])
@@ -368,57 +327,58 @@ class KeypointControls(QWidget):
 
     def on_insert(self, event):
         layer = event.source[-1]
-        #print(layer)
-        if str(layer) != 'cluster' and str(layer) != 'image refine label' :
-            if isinstance(layer, Image):
-                paths = layer.metadata.get("paths")
-                if paths is None:
-                    return
-                # Store the metadata and pass them on to the other layers
-                self._images_meta.update(
-                    {
-                        "paths": paths,
-                        "shape": layer.level_shapes[0],
-                        "root": layer.metadata["root"],
-                    }
-                )
-                # FIXME Ensure the images are always underneath the other layers
-                # self.viewer.layers.selection = []
-                # if (ind := event.index) != 0:
-                #     order = list(range(len(self.viewer.layers)))
-                #     order.remove(ind)
-                #     new_order = [ind] + order
-                #     self.viewer.layers.move_multiple(new_order)
-                # if (ind := event.index) != 0:
-                #     self.viewer.layers.move_selected(ind, 0)
-            elif isinstance(layer, Points):
-                store = keypoints.KeypointStore(self.viewer, layer)
-                self._stores[layer] = store
-                #print(store)
-                # TODO Set default dir of the save file dialog
-                if root := layer.metadata.get("root"):
-                    update_save_history(root)
-                layer.metadata["controls"] = self
-                layer.text.visible = False
-                layer.bind_key("M", self.cycle_through_label_modes)
-                layer.add = MethodType(keypoints._add, store)
-                layer.events.add(query_next_frame=Event)
-                layer.events.query_next_frame.connect(store._advance_step)
-                layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
-                layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
-                self.viewer.dims.events.current_step.connect(
-                    store.smart_reset,
-                    position="last",
-                )
-                store.smart_reset(event=None)
-                layer.bind_key("Down", store.next_keypoint, overwrite=True)
-                layer.bind_key("Up", store.prev_keypoint, overwrite=True)
-                layer.face_color_mode = "cycle"
-                if not self._menus:
-                    self._form_dropdown_menus(store)
-            for layer_ in self.viewer.layers:
-                if not isinstance(layer_, Image):
-                    self._remap_frame_indices(layer_)
+        # FIXME Is the following necessary?
+        if any(s in str(layer) for s in ('cluster', 'refine')):
+            return
+
+        if isinstance(layer, Image):
+            paths = layer.metadata.get("paths")
+            if paths is None:
+                return
+            # Store the metadata and pass them on to the other layers
+            self._images_meta.update(
+                {
+                    "paths": paths,
+                    "shape": layer.level_shapes[0],
+                    "root": layer.metadata["root"],
+                }
+            )
+            # FIXME Ensure the images are always underneath the other layers
+            # self.viewer.layers.selection = []
+            # if (ind := event.index) != 0:
+            #     order = list(range(len(self.viewer.layers)))
+            #     order.remove(ind)
+            #     new_order = [ind] + order
+            #     self.viewer.layers.move_multiple(new_order)
+            # if (ind := event.index) != 0:
+            #     self.viewer.layers.move_selected(ind, 0)
+        elif isinstance(layer, Points):
+            store = keypoints.KeypointStore(self.viewer, layer)
+            self._stores[layer] = store
+            # TODO Set default dir of the save file dialog
+            if root := layer.metadata.get("root"):
+                update_save_history(root)
+            layer.metadata["controls"] = self
+            layer.text.visible = False
+            layer.bind_key("M", self.cycle_through_label_modes)
+            layer.add = MethodType(keypoints._add, store)
+            layer.events.add(query_next_frame=Event)
+            layer.events.query_next_frame.connect(store._advance_step)
+            layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
+            layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
+            self.viewer.dims.events.current_step.connect(
+                store.smart_reset,
+                position="last",
+            )
+            store.smart_reset(event=None)
+            layer.bind_key("Down", store.next_keypoint, overwrite=True)
+            layer.bind_key("Up", store.prev_keypoint, overwrite=True)
+            layer.face_color_mode = "cycle"
+            if not self._menus:
+                self._form_dropdown_menus(store)
+        for layer_ in self.viewer.layers:
+            if not isinstance(layer_, Image):
+                self._remap_frame_indices(layer_)
 
     def on_remove(self, event):
         layer = event.value
