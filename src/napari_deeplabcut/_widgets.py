@@ -7,12 +7,12 @@ from types import MethodType
 from typing import Optional, Sequence, Union
 
 import numpy as np
+from napari._qt.widgets.qt_welcome import QtWelcomeLabel
 from napari.layers import Image, Points, Shapes, Tracks
 from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from napari._qt.widgets.qt_welcome import QtWelcomeLabel
 from qtpy.QtCore import Qt, QTimer, Signal
 from qtpy.QtGui import QPainter
 from qtpy.QtWidgets import (
@@ -140,7 +140,7 @@ class KeypointControls(QWidget):
         )
 
         status_bar = self.viewer.window._qt_window.statusBar()
-        self.last_saved_label = QLabel('')
+        self.last_saved_label = QLabel("")
         self.last_saved_label.hide()
         status_bar.insertPermanentWidget(0, self.last_saved_label)
 
@@ -322,28 +322,30 @@ class KeypointControls(QWidget):
         self._update_color_scheme(display)
 
         self.viewer.layers.events.inserted.connect(
-            partial(
-                self._update_color_scheme, display
-            )
+            partial(self._update_color_scheme, display)
         )
 
-        return viewer.window.add_dock_widget(display,
-                                            name="Color scheme reference",
-                                            area="left")
+        return viewer.window.add_dock_widget(
+            display, name="Color scheme reference", area="left"
+        )
 
     def _update_color_scheme(self, display):
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata:
 
                 def to_hex(nparray):
-                    a = np.array(nparray*255, dtype=int)
-                    rgb2hex = lambda r, g, b, _: '#%02x%02x%02x' % (r, g, b)
+                    a = np.array(nparray * 255, dtype=int)
+                    rgb2hex = lambda r, g, b, _: f"#{r:02x}{g:02x}{b:02x}"
                     res = rgb2hex(*a)
                     return res
 
-                [display.add_entry(name, to_hex(color)) for name, color in layer.metadata["face_color_cycles"]["label"].items()]
+                [
+                    display.add_entry(name, to_hex(color))
+                    for name, color in layer.metadata["face_color_cycles"][
+                        "label"
+                    ].items()
+                ]
                 break
-
 
     def _remap_frame_indices(self, layer):
         if not self._images_meta.get("paths"):
@@ -553,8 +555,8 @@ class KeypointsDropdownMenu(QWidget):
         menu = self.menus["label"]
         menu.blockSignals(True)
         menu.clear()
-        menu.addItems(self.id2label[text])
         menu.blockSignals(False)
+        menu.addItems(self.id2label[text])
 
 
 def create_dropdown_menu(store, items, attr):
@@ -695,14 +697,13 @@ class LabelPair(QWidget):
         self._format_label(self.color_label, 10, 10)
         self._format_label(self.part_label)
 
-        self.color_label.setStyleSheet(
-            f"background-color: {color};")
+        self.color_label.setStyleSheet(f"background-color: {color};")
 
         self._build()
 
     @staticmethod
-    def _format_label(label : QLabel, height: int = None, width: int = None):
-        label.setSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed)
+    def _format_label(label: QLabel, height: int = None, width: int = None):
+        label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         if height is not None:
             label.setMaximumHeight(height)
         if width is not None:
@@ -721,8 +722,7 @@ class LabelPair(QWidget):
     @color.setter
     def color(self, color: str):
         self._color = color
-        self.color_label.setStyleSheet(
-            f"background-color: {color};")
+        self.color_label.setStyleSheet(f"background-color: {color};")
 
     @property
     def part_name(self):
@@ -743,7 +743,9 @@ class ColorSchemeDisplay(QScrollArea):
         self.scheme_dict = {}  # {name: color} mapping
         self._layout = QVBoxLayout()
         self._layout.setSpacing(0)
-        self._container = QWidget(parent=self)  # workaround to use setWidget, let me know if there's a better option
+        self._container = QWidget(
+            parent=self
+        )  # workaround to use setWidget, let me know if there's a better option
 
         self._build()
 
@@ -764,16 +766,13 @@ class ColorSchemeDisplay(QScrollArea):
         self.setBaseSize(100, 200)
 
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        self.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
     def add_entry(self, name, color):
-        self.scheme_dict.update({name:color})
+        self.scheme_dict.update({name: color})
 
-        self._layout.addWidget(LabelPair(color, name, self), alignment=Qt.AlignmentFlag.AlignLeft)
+        self._layout.addWidget(
+            LabelPair(color, name, self), alignment=Qt.AlignmentFlag.AlignLeft
+        )
         self._container.setLayout(self._layout)
         self._container.update()
-
-
-
