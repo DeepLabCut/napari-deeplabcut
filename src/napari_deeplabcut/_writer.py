@@ -4,7 +4,7 @@ from itertools import groupby
 import pandas as pd
 import yaml
 from napari.layers import Shapes
-from napari.plugins._builtins import napari_write_shapes
+from napari_builtins.io import napari_write_shapes
 from skimage.io import imsave
 from skimage.util import img_as_ubyte
 
