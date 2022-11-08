@@ -15,13 +15,15 @@ A napari plugin for keypoint annotation with DeepLabCut
 
 ## Installation
 
-You can install `napari-deeplabcut` via [pip]:
+Start by installing PySide6 with `pip install "pyside6<6.3.2"`; this is the library we now use to build GUIs.
+
+You can then install `napari-deeplabcut` via [pip]:
 
     pip install napari-deeplabcut
 
 
 
-To install latest development version :
+Alternatively, to install the latest development version, run:
 
     pip install git+https://github.com/DeepLabCut/napari-deeplabcut.git
 
@@ -107,7 +109,7 @@ Suggested workflows, depending on the image folder contents:
 
     Drop an image folder as in *1*, manually add a *shapes layer*. Then select the *rectangle* in the layer controls (top left pane),
     and start drawing rectangles over the images. Masks and rectangle vertices are saved as described in [Save Layers](#save-layers).
-    Note that masks can be reloaded and edited at a later stage by dropping the `vertices.csv` file onto the canvas. 
+    Note that masks can be reloaded and edited at a later stage by dropping the `vertices.csv` file onto the canvas.
 
 
 ### Labeling multiple image folders
@@ -119,9 +121,9 @@ Now, another image folder can be labeled, following the process described in *1*
 
 ### Defining cropping coordinates
 
-Prior to defining cropping coordinates, two elements should be loaded in the GUI: 
+Prior to defining cropping coordinates, two elements should be loaded in the GUI:
 a video and the DLC project's `config.yaml` file (into which the crop dimensions will be stored).
-Then it suffices to add a `Shapes layer`, draw a `rectangle` in it with the desired area, 
+Then it suffices to add a `Shapes layer`, draw a `rectangle` in it with the desired area,
 and hit the button `Store crop coordinates`; coordinates are automatically written to the configuration file.
 
 
