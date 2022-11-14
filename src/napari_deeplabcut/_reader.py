@@ -268,7 +268,7 @@ def read_video(filename: str, opencv: bool = True):
             return stream.read_frame()
 
         lazy_imread = delayed(_read_frame)
-    else:
+    else:  # pragma: no cover
         from pims import PyAVReaderIndexed
 
         try:

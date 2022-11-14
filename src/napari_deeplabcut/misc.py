@@ -156,9 +156,6 @@ class CycleEnumMeta(EnumMeta):
             item = item.upper()
         return super().__getitem__(item)
 
-    def keys(self):
-        return list(map(str, self))
-
 
 class CycleEnum(Enum, metaclass=CycleEnumMeta):
     def _generate_next_value_(name, start, count, last_values):
