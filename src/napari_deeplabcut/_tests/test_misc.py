@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import pytest
-from napari_deeplabcut import misc
+from napari_deeplabcut import misc, _reader
 
 
 def test_unsorted_unique_numeric():
@@ -21,6 +21,7 @@ def test_encode_categories():
     inds, map_ = misc.encode_categories(categories, return_map=True)
     assert list(inds) == [0, 1, 2, 3, 0, 1, 2, 3]
     assert map_ == dict(zip(list("abcd"), range(4)))
+    inds = misc.encode_categories(categories, return_map=False)
 
 
 @pytest.mark.parametrize(
@@ -30,6 +31,11 @@ def test_encode_categories():
 def test_to_os_dir_sep(path):
     sep_wrong = "\\" if os.path.sep == "/" else "/"
     assert sep_wrong not in misc.to_os_dir_sep(path)
+
+
+def test_to_os_dir_sep_invalid():
+    with pytest.raises(ValueError):
+        misc.to_os_dir_sep("/home\\home")
 
 
 def test_guarantee_multiindex_rows():
@@ -71,11 +77,23 @@ def test_dlc_header():
     assert header.scorer == "you"
     assert header.individuals == animals
     assert header.bodyparts == keypoints
+    assert header.coords == ["x", "y", "likelihood"]
+
+
+def test_dlc_header_from_config_multi(config_path):
+    config = _reader._load_config(config_path)
+    config["multianimalproject"] = True
+    config["individuals"] = ["animal"]
+    config["multianimalbodyparts"] = list("abc")
+    config["uniquebodyparts"] = list("de")
+    header = misc.DLCHeader.from_config(config)
+    assert header.individuals != [""]
 
 
 def test_cycle_enum():
-    enum = misc.CycleEnum("Test", list("ab"))
+    enum = misc.CycleEnum("Test", list("AB"))
     assert next(enum).value == "a"
     assert next(enum).value == "b"
     assert next(enum).value == "a"
     assert next(enum).value == "b"
+    assert enum["a"] == enum.A
