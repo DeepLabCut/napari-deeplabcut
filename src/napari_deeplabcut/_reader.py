@@ -14,8 +14,8 @@ from napari.types import LayerData
 
 from napari_deeplabcut import misc
 
-SUPPORTED_IMAGES = "jpg", "jpeg", "png"
-SUPPORTED_VIDEOS = "mp4", "mov", "avi"
+SUPPORTED_IMAGES = ".jpg", ".jpeg", ".png"
+SUPPORTED_VIDEOS = ".mp4", ".mov", ".avi"
 
 
 def get_hdf_reader(path):

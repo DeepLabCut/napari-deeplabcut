@@ -6,7 +6,7 @@ from skimage.io import imsave
 
 @pytest.mark.parametrize("ext", _reader.SUPPORTED_IMAGES)
 def test_get_image_reader(ext):
-    path = f"fake_path/img.{ext}"
+    path = f"fake_path/img{ext}"
     assert _reader.get_image_reader(path) is not None
     assert _reader.get_image_reader([path]) is not None
 
