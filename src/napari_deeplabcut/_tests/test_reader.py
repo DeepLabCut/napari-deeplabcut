@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 from napari_deeplabcut import _reader
 from skimage.io import imsave
@@ -58,6 +59,39 @@ def test_read_config(config_path):
     dict_ = _reader.read_config(config_path)[0][1]
     assert dict_["name"].startswith("CollectedData_")
     assert config_path.startswith(dict_["metadata"]["project"])
+
+
+def test_read_hdf_old_index(tmp_path_factory, fake_keypoints):
+    path = str(tmp_path_factory.mktemp("folder") / "data.h5")
+    old_index = [
+        f"labeled-data/video/img{i}.png"
+        for i in range(fake_keypoints.shape[0])
+    ]
+    fake_keypoints.index = old_index
+    fake_keypoints.to_hdf(path, key="data")
+    layers = _reader.read_hdf(path)
+    assert len(layers) == 1
+    image_paths = layers[0][1]["metadata"]["paths"]
+    assert len(image_paths) == len(fake_keypoints)
+    assert isinstance(image_paths[0], str)
+    assert "labeled-data" in image_paths[0]
+
+
+def test_read_hdf_new_index(tmp_path_factory, fake_keypoints):
+    path = str(tmp_path_factory.mktemp("folder") / "data.h5")
+    new_index = pd.MultiIndex.from_product([
+        ["labeled-data"],
+        ["video"],
+        [f"img{i}.png" for i in range(fake_keypoints.shape[0])]
+    ])
+    fake_keypoints.index = new_index
+    fake_keypoints.to_hdf(path, key="data")
+    layers = _reader.read_hdf(path)
+    assert len(layers) == 1
+    image_paths = layers[0][1]["metadata"]["paths"]
+    assert len(image_paths) == len(fake_keypoints)
+    assert isinstance(image_paths[0], str)
+    assert "labeled-data" in image_paths[0]
 
 
 def test_video(video_path):
