@@ -89,7 +89,7 @@ def read_images(path):
     # Retrieve filepaths exactly as parsed by pims
     filepaths = []
     for filepath in glob.iglob(path):
-        _, *relpath = filepath.rsplit(os.sep, 3)
+        relpath = Path(filepath).parts[-3:]
         filepaths.append(os.path.join(*relpath))
     params = {
         "name": "images",
