@@ -134,7 +134,7 @@ def _populate_metadata(
             "valid": likelihood > pcutoff,
         },
         "face_color_cycle": label_colors,
-        "face_color": "label",
+        "face_color": "id" if ids[0] else "label",
         "face_colormap": colormap,
         "edge_color": "valid",
         "edge_color_cycle": ["black", "red"],
