@@ -114,13 +114,16 @@ def _save_layers_dialog(self, selected=False):
 
 def on_close(self, event, widget):
     if widget._stores and not widget._is_saved:
-        QMessageBox.warning(
+        choice = QMessageBox.warning(
             widget,
-            "",
-            "Please save your data before closing",
-            QMessageBox.Ok,
+            "Warning",
+            "Data were not saved. Are you certain you want to leave?",
+            QMessageBox.Yes | QMessageBox.No,
         )
-        event.ignore()
+        if choice == QMessageBox.Yes:
+            event.accept()
+        else:
+            event.ignore()
     else:
         event.accept()
 
@@ -142,7 +145,7 @@ class KeypointControls(QWidget):
         status_bar = self.viewer.window._qt_window.statusBar()
         self.last_saved_label = QLabel("")
         self.last_saved_label.hide()
-        status_bar.insertPermanentWidget(0, self.last_saved_label)
+        status_bar.addPermanentWidget(self.last_saved_label)
 
         # Hack napari's Welcome overlay to show more relevant instructions
         overlay = self.viewer.window._qt_viewer._canvas_overlay

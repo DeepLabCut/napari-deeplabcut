@@ -53,11 +53,12 @@ def test_store_crop_coordinates(viewer, images, config_path):
 def test_toggle_face_color(viewer, points):
     viewer.layers.selection.add(points)
     view = viewer.window._qt_viewer
-    assert points._face.color_properties.name == "label"
-    view.canvas.events.key_press(key=keys.Key('F'))
+    # By default, points are colored by individual with multi-animal data
     assert points._face.color_properties.name == "id"
     view.canvas.events.key_press(key=keys.Key('F'))
     assert points._face.color_properties.name == "label"
+    view.canvas.events.key_press(key=keys.Key('F'))
+    assert points._face.color_properties.name == "id"
 
 
 def test_toggle_edge_color(viewer, points):
