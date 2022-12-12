@@ -114,13 +114,16 @@ def _save_layers_dialog(self, selected=False):
 
 def on_close(self, event, widget):
     if widget._stores and not widget._is_saved:
-        QMessageBox.warning(
+        choice = QMessageBox.warning(
             widget,
-            "",
-            "Please save your data before closing",
-            QMessageBox.Ok,
+            "Warning",
+            "Data were not saved. Are you certain you want to leave?",
+            QMessageBox.Yes | QMessageBox.No,
         )
-        event.ignore()
+        if choice == QMessageBox.Yes:
+            event.accept()
+        else:
+            event.ignore()
     else:
         event.accept()
 
