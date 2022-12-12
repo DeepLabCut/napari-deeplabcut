@@ -183,6 +183,9 @@ def read_hdf(filename: str) -> List[LayerData]:
             old_idx = temp.columns.to_frame()
             old_idx.insert(0, "individuals", "")
             temp.columns = pd.MultiIndex.from_frame(old_idx)
+            colormap = "viridis"
+        else:
+            colormap = "Set3"
         if isinstance(temp.index, pd.MultiIndex):
             temp.index = [os.path.join(*row) for row in temp.index]
         df = (
@@ -210,6 +213,7 @@ def read_hdf(filename: str) -> List[LayerData]:
             ids=df["individuals"],
             likelihood=df.get("likelihood"),
             paths=list(paths2inds),
+            colormap=colormap,
         )
         metadata["name"] = os.path.split(filename)[1].split(".")[0]
         metadata["metadata"]["root"] = os.path.split(filename)[0]
