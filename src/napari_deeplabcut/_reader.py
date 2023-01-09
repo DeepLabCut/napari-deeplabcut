@@ -251,6 +251,7 @@ class Video:
 
     def set_to_frame(self, ind):
         ind = min(ind, len(self) - 1)
+        ind += 1  # Unclear why this is needed at all
         self.stream.set(cv2.CAP_PROP_POS_FRAMES, ind)
 
     def read_frame(self):
