@@ -3,6 +3,8 @@ from collections import defaultdict
 from datetime import datetime
 from functools import partial
 from math import ceil, log10
+import pandas as pd
+from pathlib import Path
 from types import MethodType
 from typing import Optional, Sequence, Union
 
@@ -36,8 +38,12 @@ from qtpy.QtWidgets import (
 
 from napari_deeplabcut import keypoints
 from napari_deeplabcut._reader import _load_config
-from napari_deeplabcut._writer import _write_config, _write_image
-from napari_deeplabcut.misc import encode_categories, to_os_dir_sep
+from napari_deeplabcut._writer import _write_config, _write_image, _form_df
+from napari_deeplabcut.misc import (
+    encode_categories,
+    to_os_dir_sep,
+    guarantee_multiindex_rows,
+)
 
 
 def _get_and_try_preferred_reader(
@@ -257,18 +263,40 @@ class KeypointControls(QWidget):
         return extract_button, crop_button
 
     def _extract_single_frame(self, *args):
-        layer = None
-        for layer_ in self.viewer.layers:
-            if isinstance(layer_, Image):
-                layer = layer_
-                break
-        if layer is not None:
+        image_layer = None
+        points_layer = None
+        for layer in self.viewer.layers:
+            if isinstance(layer, Image):
+                image_layer = layer
+            elif isinstance(layer, Points):
+                points_layer = layer
+        if image_layer is not None:
             ind = self.viewer.dims.current_step[0]
-            frame = layer.data[ind]
-            n_frames = layer.data.shape[0]
+            frame = image_layer.data[ind]
+            n_frames = image_layer.data.shape[0]
             name = f"img{str(ind).zfill(int(ceil(log10(n_frames))))}.png"
-            output_path = os.path.join(layer.metadata["root"], name)
+            output_path = os.path.join(image_layer.metadata["root"], name)
             _write_image(frame, str(output_path))
+
+            # If annotations were loaded, they should be written to a machinefile.h5 file
+            if points_layer is not None:
+                df = _form_df(
+                    points_layer.data,
+                    {
+                        "metadata": points_layer.metadata,
+                        "properties": points_layer.properties,
+                    },
+                )
+                df = df.iloc[ind:ind + 1]
+                df.index = pd.MultiIndex.from_tuples([Path(output_path).parts[-3:]])
+                filepath = os.path.join(image_layer.metadata["root"], "machinelabels-iter0.h5")
+                if Path(filepath).is_file():
+                    df_prev = pd.read_hdf(filepath)
+                    guarantee_multiindex_rows(df_prev)
+                    df = pd.concat([df_prev, df])
+                    df = df[~df.index.duplicated(keep="first")]
+                df.to_hdf(filepath, key="machinelabels")
+
 
     def _store_crop_coordinates(self, *args):
         if not (project_path := self._images_meta.get("project")):

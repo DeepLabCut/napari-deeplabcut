@@ -17,14 +17,13 @@ def _write_config(config_path: str, params: dict):
         yaml.safe_dump(params, file)
 
 
-def write_hdf(filename, data, metadata):
-    file, _ = os.path.splitext(filename)  # FIXME Unused currently
-    temp = pd.DataFrame(data[:, -1:0:-1], columns=["x", "y"])
+def _form_df(points_data, metadata):
+    temp = pd.DataFrame(points_data[:, -1:0:-1], columns=["x", "y"])
     properties = metadata["properties"]
     meta = metadata["metadata"]
     temp["bodyparts"] = properties["label"]
     temp["individuals"] = properties["id"]
-    temp["inds"] = data[:, 0].astype(int)
+    temp["inds"] = points_data[:, 0].astype(int)
     temp["likelihood"] = properties["likelihood"]
     temp["scorer"] = meta["header"].scorer
     df = temp.set_index(["scorer", "individuals", "bodyparts", "inds"]).stack()
@@ -40,7 +39,13 @@ def write_hdf(filename, data, metadata):
     if meta["paths"]:
         df.index = [meta["paths"][i] for i in df.index]
     misc.guarantee_multiindex_rows(df)
+    return df
 
+
+def write_hdf(filename, data, metadata):
+    file, _ = os.path.splitext(filename)  # FIXME Unused currently
+    df = _form_df(data, metadata)
+    meta = metadata["metadata"]
     name = metadata["name"]
     root = meta["root"]
     if "machine" in name:  # We are attempting to save refined model predictions
