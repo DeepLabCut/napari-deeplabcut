@@ -203,8 +203,8 @@ class KeypointControls(QWidget):
 
         self._radio_group = self._form_mode_radio_buttons()
 
+        self._display = ColorSchemeDisplay(parent=self)
         self._color_scheme_display = self._form_color_scheme_display(self.viewer)
-
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
         self._view_scheme_cb.toggle()
 
@@ -349,29 +349,23 @@ class KeypointControls(QWidget):
         return group
 
     def _form_color_scheme_display(self, viewer):
-        display = ColorSchemeDisplay(parent=self)
-        self._update_color_scheme(display)
-
-        self.viewer.layers.events.inserted.connect(
-            partial(self._update_color_scheme, display)
-        )
-
+        self.viewer.layers.events.inserted.connect(self._update_color_scheme)
         return viewer.window.add_dock_widget(
-            display, name="Color scheme reference", area="left"
+            self._display, name="Color scheme reference", area="left"
         )
 
-    def _update_color_scheme(self, display):
+    def _update_color_scheme(self):
+        def to_hex(nparray):
+            a = np.array(nparray * 255, dtype=int)
+            rgb2hex = lambda r, g, b, _: f"#{r:02x}{g:02x}{b:02x}"
+            res = rgb2hex(*a)
+            return res
+
+        self._display.reset()
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata:
-
-                def to_hex(nparray):
-                    a = np.array(nparray * 255, dtype=int)
-                    rgb2hex = lambda r, g, b, _: f"#{r:02x}{g:02x}{b:02x}"
-                    res = rgb2hex(*a)
-                    return res
-
                 [
-                    display.add_entry(name, to_hex(color))
+                    self._display.add_entry(name, to_hex(color))
                     for name, color in layer.metadata["face_color_cycles"][
                         "label"
                     ].items()
@@ -434,6 +428,22 @@ class KeypointControls(QWidget):
                 10, partial(self._move_image_layer_to_bottom, event.index)
             )
         elif isinstance(layer, Points):
+            # If the Points layer comes from a config file and some Points layers
+            # were already added, then we only update existing store's metadata.
+            if layer.metadata.get("project", "") and self._stores:
+                for _layer, store in self._stores.items():
+                    _layer.metadata["header"] = layer.metadata["header"]
+                    _layer.metadata["face_color_cycles"] = layer.metadata["face_color_cycles"]
+                    _layer.face_color_cycle = layer.face_color_cycle
+                    store.layer = _layer
+
+                for menu in self._menus:
+                    menu._map_individuals_to_bodyparts()
+                    menu._update_items()
+
+                self._update_color_scheme()
+                return
+
             store = keypoints.KeypointStore(self.viewer, layer)
             self._stores[layer] = store
             # TODO Set default dir of the save file dialog
@@ -469,7 +479,8 @@ class KeypointControls(QWidget):
 
     def on_remove(self, event):
         layer = event.value
-        if isinstance(layer, Points):
+        n_points_layer = sum(isinstance(l, Points) for l in self.viewer.layers)
+        if isinstance(layer, Points) and n_points_layer == 0:
             if self._color_scheme_display is not None:
                 self.viewer.window.remove_dock_widget(self._color_scheme_display)
             self._stores.pop(layer, None)
@@ -528,7 +539,7 @@ def toggle_edge_color(layer):
 class DropdownMenu(QComboBox):
     def __init__(self, labels: Sequence[str], parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.addItems(labels)
+        self.update_items(labels)
 
     def update_to(self, text: str):
         index = self.findText(text)
@@ -537,6 +548,10 @@ class DropdownMenu(QComboBox):
 
     def reset(self):
         self.setCurrentIndex(0)
+
+    def update_items(self, items):
+        self.clear()
+        self.addItems(items)
 
 
 class KeypointsDropdownMenu(QWidget):
@@ -549,22 +564,11 @@ class KeypointsDropdownMenu(QWidget):
         self.store = store
         self.store.layer.events.current_properties.connect(self.update_menus)
 
-        # Map individuals to their respective bodyparts
         self.id2label = defaultdict(list)
-        for keypoint in store._keypoints:
-            label = keypoint.label
-            id_ = keypoint.id
-            if label not in self.id2label[id_]:
-                self.id2label[id_].append(label)
-
         self.menus = dict()
-        if store.ids[0]:
-            menu = create_dropdown_menu(store, list(self.id2label), "id")
-            menu.currentTextChanged.connect(self.refresh_label_menu)
-            self.menus["id"] = menu
-        self.menus["label"] = create_dropdown_menu(
-            store, self.id2label[store.ids[0]], "label"
-        )
+        self._map_individuals_to_bodyparts()
+        self._populate_menus()
+
         layout1 = QVBoxLayout()
         layout1.addStretch(1)
         group_box = QGroupBox("Keypoint selection")
@@ -574,6 +578,29 @@ class KeypointsDropdownMenu(QWidget):
         group_box.setLayout(layout2)
         layout1.addWidget(group_box)
         self.setLayout(layout1)
+
+    def _map_individuals_to_bodyparts(self):
+        for keypoint in self.store._keypoints:
+            label = keypoint.label
+            id_ = keypoint.id
+            if label not in self.id2label[id_]:
+                self.id2label[id_].append(label)
+
+    def _populate_menus(self):
+        id_ = self.store.ids[0]
+        if id_:
+            menu = create_dropdown_menu(self.store, list(self.id2label), "id")
+            menu.currentTextChanged.connect(self.refresh_label_menu)
+            self.menus["id"] = menu
+        self.menus["label"] = create_dropdown_menu(
+            self.store, self.id2label[id_], "label",
+        )
+
+    def _update_items(self):
+        id_ = self.store.ids[0]
+        if id_:
+            self.menus["id"].update_items(list(self.id2label))
+        self.menus["label"].update_items(self.id2label[id_])
 
     def update_menus(self, event):
         keypoint = self.store.current_keypoint
@@ -805,5 +832,8 @@ class ColorSchemeDisplay(QScrollArea):
         self._layout.addWidget(
             LabelPair(color, name, self), alignment=Qt.AlignmentFlag.AlignLeft
         )
-        self._container.setLayout(self._layout)
-        self._container.update()
+
+    def reset(self):
+        self.scheme_dict = {}
+        for i in reversed(range(self._layout.count())):
+            self._layout.itemAt(i).widget().deleteLater()
