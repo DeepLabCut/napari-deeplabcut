@@ -428,9 +428,20 @@ class KeypointControls(QWidget):
                 10, partial(self._move_image_layer_to_bottom, event.index)
             )
         elif isinstance(layer, Points):
-            # If the Points layer comes from a config file and some Points layers
-            # were already added, then we only update existing store's metadata.
+            # If the current Points layer comes from a config file, some have already
+            # been added and the body part names are different from the existing ones,
+            # then we update store's metadata and menus.
             if layer.metadata.get("project", "") and self._stores:
+                keypoints_menu = self._menus[0].menus["label"]
+                current_keypoint_set = set(
+                    keypoints_menu.itemText(i) for i in range(keypoints_menu.count())
+                )
+                new_keypoint_set = set(layer.metadata["header"].bodyparts)
+                diff = new_keypoint_set.difference(current_keypoint_set)
+                if not diff:
+                    return
+
+                self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
                 for _layer, store in self._stores.items():
                     _layer.metadata["header"] = layer.metadata["header"]
                     _layer.metadata["face_color_cycles"] = layer.metadata["face_color_cycles"]
@@ -442,6 +453,9 @@ class KeypointControls(QWidget):
                     menu._update_items()
 
                 self._update_color_scheme()
+
+                # Remove the unnecessary layer newly added
+                QTimer.singleShot(10, self.viewer.layers.pop)
                 return
 
             store = keypoints.KeypointStore(self.viewer, layer)
@@ -487,7 +501,7 @@ class KeypointControls(QWidget):
             while self._menus:
                 menu = self._menus.pop()
                 self._layout.removeWidget(menu)
-                menu.setParent(None)
+                menu.deleteLater()
                 menu.destroy()
             self._trail_cb.setEnabled(False)
             self.last_saved_label.hide()
