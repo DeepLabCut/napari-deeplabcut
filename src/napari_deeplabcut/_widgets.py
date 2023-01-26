@@ -494,7 +494,7 @@ class KeypointControls(QWidget):
         n_points_layer = sum(isinstance(l, Points) for l in self.viewer.layers)
         if isinstance(layer, Points) and n_points_layer == 0:
             if self._color_scheme_display is not None:
-                self.viewer.window.remove_dock_widget(self._color_scheme_display)
+                self._display.reset()
             self._stores.pop(layer, None)
             while self._menus:
                 menu = self._menus.pop()
