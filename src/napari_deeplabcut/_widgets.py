@@ -439,6 +439,10 @@ class KeypointControls(QWidget):
                 new_keypoint_set = set(layer.metadata["header"].bodyparts)
                 diff = new_keypoint_set.difference(current_keypoint_set)
                 if diff:
+                    answer = QMessageBox.question(self, "", "Do you want to display the new keypoints only?")
+                    if answer  == QMessageBox.Yes:
+                        self.viewer.layers[-2].shown = False
+
                     self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
                     for _layer, store in self._stores.items():
                         _layer.metadata["header"] = layer.metadata["header"]
