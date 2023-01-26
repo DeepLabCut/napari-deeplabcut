@@ -438,21 +438,19 @@ class KeypointControls(QWidget):
                 )
                 new_keypoint_set = set(layer.metadata["header"].bodyparts)
                 diff = new_keypoint_set.difference(current_keypoint_set)
-                if not diff:
-                    return
+                if diff:
+                    self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
+                    for _layer, store in self._stores.items():
+                        _layer.metadata["header"] = layer.metadata["header"]
+                        _layer.metadata["face_color_cycles"] = layer.metadata["face_color_cycles"]
+                        _layer.face_color_cycle = layer.face_color_cycle
+                        store.layer = _layer
 
-                self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
-                for _layer, store in self._stores.items():
-                    _layer.metadata["header"] = layer.metadata["header"]
-                    _layer.metadata["face_color_cycles"] = layer.metadata["face_color_cycles"]
-                    _layer.face_color_cycle = layer.face_color_cycle
-                    store.layer = _layer
+                    for menu in self._menus:
+                        menu._map_individuals_to_bodyparts()
+                        menu._update_items()
 
-                for menu in self._menus:
-                    menu._map_individuals_to_bodyparts()
-                    menu._update_items()
-
-                self._update_color_scheme()
+                    self._update_color_scheme()
 
                 # Remove the unnecessary layer newly added
                 QTimer.singleShot(10, self.viewer.layers.pop)
