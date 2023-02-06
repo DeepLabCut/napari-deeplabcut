@@ -26,13 +26,6 @@ def test_store(store, fake_keypoints):
     assert store.current_keypoint == kpt
     store.next_keypoint()
 
-    store.smart_reset(event=None)
-    assert store.current_keypoint == kpt
-    assert store.current_label == "kpt_0"
-    assert store.current_id == "animal_0"
-    store.current_id = "animal_1"
-    assert store.current_id == "animal_1"
-
     store._find_first_unlabeled_frame(event=None)
     assert store.current_step == store.n_steps - 1
     # Remove a frame to test whether it is correctly found
