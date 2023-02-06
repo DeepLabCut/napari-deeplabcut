@@ -15,8 +15,8 @@ from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from qtpy.QtCore import Qt, QTimer, Signal
-from qtpy.QtGui import QPainter
+from qtpy.QtCore import Qt, QTimer, Signal, QSize
+from qtpy.QtGui import QPainter, QIcon
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -324,6 +324,11 @@ class KeypointControls(QWidget):
 
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)
+        self.viewer.dims.events.current_step.connect(
+            menu.smart_reset,
+            position="last",
+        )
+        menu.smart_reset(event=None)
         self._menus.append(menu)
         layout = QVBoxLayout()
         layout.addWidget(menu)
@@ -447,11 +452,7 @@ class KeypointControls(QWidget):
             layer.events.query_next_frame.connect(store._advance_step)
             layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
             layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
-            self.viewer.dims.events.current_step.connect(
-                store.smart_reset,
-                position="last",
-            )
-            store.smart_reset(event=None)
+
             layer.bind_key("Down", store.next_keypoint, overwrite=True)
             layer.bind_key("Up", store.prev_keypoint, overwrite=True)
             layer.face_color_mode = "cycle"
@@ -548,6 +549,7 @@ class KeypointsDropdownMenu(QWidget):
         super().__init__(parent)
         self.store = store
         self.store.layer.events.current_properties.connect(self.update_menus)
+        self._locked = False
 
         # Map individuals to their respective bodyparts
         self.id2label = defaultdict(list)
@@ -571,9 +573,23 @@ class KeypointsDropdownMenu(QWidget):
         layout2 = QVBoxLayout()
         for menu in self.menus.values():
             layout2.addWidget(menu)
+        self.lock_button = QPushButton("Lock selection")
+        self.lock_button.setIcon(QIcon('src/napari_deeplabcut/assets/unlock.svg'))
+        self.lock_button.setIconSize(QSize(24, 24))
+        self.lock_button.clicked.connect(self._lock_current_keypoint)
+        layout2.addWidget(self.lock_button)
         group_box.setLayout(layout2)
         layout1.addWidget(group_box)
         self.setLayout(layout1)
+
+    def _lock_current_keypoint(self):
+        self._locked = not self._locked
+        if self._locked:
+            self.lock_button.setText("Unlock selection")
+            self.lock_button.setIcon(QIcon('src/napari_deeplabcut/assets/lock.svg'))
+        else:
+            self.lock_button.setText("Lock selection")
+            self.lock_button.setIcon(QIcon('src/napari_deeplabcut/assets/unlock.svg'))
 
     def update_menus(self, event):
         keypoint = self.store.current_keypoint
@@ -588,6 +604,18 @@ class KeypointsDropdownMenu(QWidget):
         menu.clear()
         menu.blockSignals(False)
         menu.addItems(self.id2label[text])
+
+    def smart_reset(self, event):
+        """Set current keypoint to the first unlabeled one."""
+        if self._locked:
+            return
+        unannotated = ""
+        already_annotated = self.store.annotated_keypoints
+        for keypoint in self.store._keypoints:
+            if keypoint not in already_annotated:
+                unannotated = keypoint
+                break
+        self.store.current_keypoint = unannotated if unannotated else self.store._keypoints[0]
 
 
 def create_dropdown_menu(store, items, attr):

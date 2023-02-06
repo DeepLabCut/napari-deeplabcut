@@ -99,16 +99,6 @@ class KeypointStore:
             current_properties["id"] = np.asarray([keypoint.id])
             self.layer.current_properties = current_properties
 
-    def smart_reset(self, event):
-        """Set current keypoint to the first unlabeled one."""
-        unannotated = ""
-        already_annotated = self.annotated_keypoints
-        for keypoint in self._keypoints:
-            if keypoint not in already_annotated:
-                unannotated = keypoint
-                break
-        self.current_keypoint = unannotated if unannotated else self._keypoints[0]
-
     def next_keypoint(self, *args):
         ind = self._keypoints.index(self.current_keypoint) + 1
         if ind <= len(self._keypoints) - 1:
