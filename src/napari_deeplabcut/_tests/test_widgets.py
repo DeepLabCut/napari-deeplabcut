@@ -90,6 +90,18 @@ def test_keypoints_dropdown_menu(store):
     assert label_menu.count() == 0
 
 
+def test_keypoints_dropdown_menu_smart_reset(store):
+    widget = _widgets.KeypointsDropdownMenu(store)
+    label_menu = widget.menus['label']
+    label_menu.update_to("kpt_2")
+    widget._locked = True
+    widget.smart_reset(event=None)
+    assert label_menu.currentText() == "kpt_2"
+    widget._locked = False
+    widget.smart_reset(event=None)
+    assert label_menu.currentText() == "kpt_0"
+
+
 def test_color_pair():
     pair = _widgets.LabelPair(color="pink", name="kpt", parent=None)
     assert pair.part_name == "kpt"

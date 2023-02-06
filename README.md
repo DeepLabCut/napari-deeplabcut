@@ -45,7 +45,7 @@ The easiest way to get started is to drop a folder (typically a folder from with
 
 - `2` and `3`, to easily switch between labeling and selection mode
 - `4`, to enable pan & zoom (which is achieved using the mouse wheel or finger scrolling on the Trackpad)
-- `M`, to cycle through regular (sequential), quick, and cycle annotation mode (see the description [here](https://github.com/DeepLabCut/DeepLabCut-label/blob/ee71b0e15018228c98db3b88769e8a8f4e2c0454/dlclabel/layers.py#L9-L19))
+- `M`, to cycle through regular (sequential), quick, and cycle annotation mode (see the description [here](https://github.com/DeepLabCut/napari-deeplabcut/blob/5a5709dd38868341568d66eab548ae8abf37cd63/src/napari_deeplabcut/keypoints.py#L25-L34))
 - `E`, to enable edge coloring (by default, if using this in refinement GUI mode, points with a confidence lower than 0.6 are marked
 in red)
 - `F`, to toggle between animal and body part color scheme.
