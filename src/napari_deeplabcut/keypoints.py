@@ -65,12 +65,21 @@ Keypoint = namedtuple("Keypoint", ["label", "id"])
 class KeypointStore:
     def __init__(self, viewer, layer: Points):
         self.viewer = viewer
+        self._keypoints = []
         self.layer = layer
+        self.viewer.dims.set_current_step(0, 0)
+
+    @property
+    def layer(self):
+        return self._layer
+
+    @layer.setter
+    def layer(self, layer):
+        self._layer = layer
         all_pairs = self.layer.metadata["header"].form_individual_bodypart_pairs()
         self._keypoints = [
             Keypoint(label, id_) for id_, label in all_pairs
         ]  # Ordered references to all possible keypoints
-        self.viewer.dims.set_current_step(0, 0)
 
     @property
     def current_step(self):
