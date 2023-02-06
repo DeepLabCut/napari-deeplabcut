@@ -31,6 +31,9 @@ class LabelMode(CycleEnum):
         annotated point actually moves it to the cursor location.
     LOOP: the first point is placed frame by frame, then it wraps
         to the next label at the end and restart from frame 1, etc.
+        Unless the keypoint selection is locked, the dropdown menu is
+        automatically set to the first unlabeled keypoint of
+        the current frame.
     """
 
     SEQUENTIAL = auto()
@@ -49,7 +52,10 @@ TOOLTIPS = {
     "QUICK": "Similar to SEQUENTIAL, but trying to add an already\n"
     "annotated point actually moves it to the cursor location.",
     "LOOP": "The first point is placed frame by frame, then it wraps\n"
-    "to the next label at the end and restart from frame 1, etc.",
+    "to the next label at the end and restart from frame 1, etc.\n"
+    "Unless the keypoint selection is locked, the dropdown menu is\n"
+    "automatically set to the first unlabeled keypoint of\n"
+    "the current frame.",
 }
 
 
