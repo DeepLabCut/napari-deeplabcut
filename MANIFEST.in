@@ -1,5 +1,6 @@
 include LICENSE
 include README.md
+include src/napari_deeplabcut/assets/*.svg
 
 recursive-exclude * __pycache__
 recursive-exclude * *.py[co]
