@@ -36,6 +36,8 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+ICON_FOLDER = os.path.join(os.path.dirname(__file__), "assets")
+
 from napari_deeplabcut import keypoints
 from napari_deeplabcut._reader import _load_config
 from napari_deeplabcut._writer import _write_config, _write_image, _form_df
@@ -594,7 +596,7 @@ class KeypointsDropdownMenu(QWidget):
         for menu in self.menus.values():
             layout2.addWidget(menu)
         self.lock_button = QPushButton("Lock selection")
-        self.lock_button.setIcon(QIcon('src/napari_deeplabcut/assets/unlock.svg'))
+        self.lock_button.setIcon(QIcon(os.path.join(ICON_FOLDER, "unlock.svg")))
         self.lock_button.setIconSize(QSize(24, 24))
         self.lock_button.clicked.connect(self._lock_current_keypoint)
         layout2.addWidget(self.lock_button)
@@ -629,10 +631,10 @@ class KeypointsDropdownMenu(QWidget):
         self._locked = not self._locked
         if self._locked:
             self.lock_button.setText("Unlock selection")
-            self.lock_button.setIcon(QIcon('src/napari_deeplabcut/assets/lock.svg'))
+            self.lock_button.setIcon(QIcon(os.path.join(ICON_FOLDER, "lock.svg")))
         else:
             self.lock_button.setText("Lock selection")
-            self.lock_button.setIcon(QIcon('src/napari_deeplabcut/assets/unlock.svg'))
+            self.lock_button.setIcon(QIcon(os.path.join(ICON_FOLDER, "unlock.svg")))
 
     def update_menus(self, event):
         keypoint = self.store.current_keypoint
