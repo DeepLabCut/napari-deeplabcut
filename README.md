@@ -49,6 +49,7 @@ The easiest way to get started is to drop a folder (typically a folder from with
 - `E`, to enable edge coloring (by default, if using this in refinement GUI mode, points with a confidence lower than 0.6 are marked
 in red)
 - `F`, to toggle between animal and body part color scheme.
+- `V`, to toggle visibility of the selected layer.
 - `backspace` to delete a point.
 - Check the box "display text" to show the label names on the canvas.
 - To move to another folder, be sure to save (Ctrl+S), then delete the layers, and re-drag/drop the next folder.
