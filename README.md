@@ -61,6 +61,7 @@ Only when saving segmentation masks does a save file dialog pop up to name the d
 keypoint annotations are otherwise automatically saved in the corresponding folder as `CollectedData_<ScorerName>.h5`.
 - As a reminder, DLC will only use the H5 file; so be sure if you open already labeled images you save/overwrite the H5.
 - Note, before saving a layer, make sure the points layer is selected. If the user clicked on the image(s) layer first, does `Save As`, then closes the window, any labeling work during that session will be lost!
+- Modifying and then saving points in a `machinelabels...` layer will add to or overwrite the existing `CollectedData` layer and will **not** save to the `machinelabels` file. 
 
 
 ### Video frame extraction and prediction refinement
