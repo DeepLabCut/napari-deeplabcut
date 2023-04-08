@@ -121,6 +121,35 @@ Suggested workflows, depending on the image folder contents:
     and start drawing rectangles over the images. Masks and rectangle vertices are saved as described in [Save Layers](#save-layers).
     Note that masks can be reloaded and edited at a later stage by dropping the `vertices.csv` file onto the canvas.
 
+### Workflow flowchart
+
+```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}} }%%
+graph TD
+  id1[What stage of labeling?]
+  id2[deeplabcut.label_frames]
+  id3[deeplabcut.refine_labels]
+  id4[Add labels to, or modify in, \n `CollectedData...` layer and save that layer]
+  id5[Modify labels in `machinelabels` layer and save \n which will create a `CollectedData...` file]
+  id6[Have you refined some labels from the most recent iteration and saved already?]
+  id7["All extracted frames are already saved in `CollectedData...`. 
+1. Hide or trash all `machinelabels` layers.
+2. Then modify in and save `CollectedData`"]
+  id8["
+1. hide or trash all `machinelabels` layers except for the most recent. 
+2. Select most recent `machinelabels` and hit `e` to show edges. 
+3. Modify only in `machinelabels` and skip frames with labels without edges shown.
+4. Save `machinelabels` layer, which will add data to `CollectedData`. 
+	- If you need to revisit this video later, ignore `machinelabels` and work only in `CollectedData`"]
+
+  id1 -->|I need to manually label new frames \n or fix my labels|id2
+  id1 ---->|I need to refine outlier frames \nfrom analyzed videos|id3
+  id2 -->id4
+  id3 -->|I only have a `machinelabels...` file|id5
+  id3 ---->|I have both `machinelabels` and `CollectedData` files|id6
+  id6 -->|yes|id7
+  id6 ---->|no, I just extracted outliers|id8
+```
 
 ### Labeling multiple image folders
 
