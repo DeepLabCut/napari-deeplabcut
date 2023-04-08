@@ -106,6 +106,14 @@ Suggested workflows, depending on the image folder contents:
 3. **Refining labels** – the image folder contains a `machinelabels-iter<#>.h5` file.
 
     The process is analog to *2*.
+    Open *napari* and open an image folder.
+    If the video was originally labeled, *and* had outliers extracted it will contain a `CollectedData_<ScorerName>.h5` file and a `machinelabels-iter<#>.h5` file. In this case, select the `machinelabels` layer in the GUI, and type `e` to show edges. Red indicates likelihood < 0.6. As you navigate through frames, images with labels with edges will need to be refined (moved, deleted, etc). Images with labels without edges will be on the `CollectedData` (previous manual annotations) layer and shouldn't need refining. However, you can switch to that layer and fix errors. You can also right-click on the `CollectedData` layer and select `toggle visibility` to hide that layer. Select the `machinelabels` layer before saving which will append your refined annoations to `CollectedData`.
+    
+    If the folder only had outliers extracted and wasn't originally labeled, it will not have a `CollectedData` layer. Work with the `machinelabels` layer selected to refine annoation positions, then save.
+    
+    In this case, it is not necessary to open the DLC project's `config.yaml` file, as all necessary metadata is read from the `h5` data file.
+
+    Saving works as described in *1*.
 
 4. **Drawing segmentation masks**
 
