@@ -1,5 +1,6 @@
 import os
 from itertools import groupby
+from pathlib import Path
 
 import pandas as pd
 import yaml
@@ -66,8 +67,8 @@ def write_hdf(filename, data, metadata):
             name = os.path.splitext(gt_file)[0]
         else:
             # Let us fetch the config.yaml file to get the scorer name...
-            project_folder = root.rsplit(os.sep, 2)[0]
-            config = _load_config(os.path.join(project_folder, "config.yaml"))
+            project_folder = Path(root).parents[1]
+            config = _load_config(str(project_folder / "config.yaml"))
             new_scorer = config["scorer"]
             header.scorer = new_scorer
             df.columns = header.columns
