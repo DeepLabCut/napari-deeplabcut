@@ -11,6 +11,7 @@ import yaml
 from dask import delayed
 from dask_image.imread import imread
 from napari.types import LayerData
+from natsort import natsorted
 
 from napari_deeplabcut import misc
 
@@ -94,7 +95,7 @@ def read_images(path):
     params = {
         "name": "images",
         "metadata": {
-            "paths": sorted(filepaths),
+            "paths": natsorted(filepaths),
             "root": os.path.split(path)[0],
         },
     }
