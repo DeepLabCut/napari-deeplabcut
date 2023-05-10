@@ -125,6 +125,7 @@ def _populate_metadata(
         "label": dict(zip(header.bodyparts, label_colors)),
         "id": dict(zip(header.individuals, id_colors)),
     }
+    face_color_prop = "id" if ids[0] else "label"
     return {
         "name": "keypoints",
         "text": "{id}–{label}" if ids[0] else "label",
@@ -134,8 +135,8 @@ def _populate_metadata(
             "likelihood": likelihood,
             "valid": likelihood > pcutoff,
         },
-        "face_color_cycle": label_colors,
-        "face_color": "id" if ids[0] else "label",
+        "face_color_cycle": face_color_cycle_maps[face_color_prop],
+        "face_color": face_color_prop,
         "face_colormap": colormap,
         "edge_color": "valid",
         "edge_color_cycle": ["black", "red"],
