@@ -454,7 +454,9 @@ class KeypointControls(QWidget):
                     for _layer, store in self._stores.items():
                         _layer.metadata["header"] = layer.metadata["header"]
                         _layer.metadata["face_color_cycles"] = layer.metadata["face_color_cycles"]
-                        _layer.face_color_cycle = layer.face_color_cycle
+                        _layer.face_color = "label"
+                        _layer.face_color_cycle = layer.metadata["face_color_cycles"]["label"]
+                        _layer.events.face_color()
                         store.layer = _layer
 
                     for menu in self._menus:
