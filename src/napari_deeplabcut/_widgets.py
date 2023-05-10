@@ -492,6 +492,15 @@ class KeypointControls(QWidget):
                 }
             )
             self._trail_cb.setEnabled(True)
+
+            # Hide the color pickers, as colormaps are strictly defined by users
+            controls = self.viewer.window.qt_viewer.dockLayerControls
+            point_controls = controls.widget().widgets[layer]
+            point_controls.faceColorEdit.hide()
+            point_controls.edgeColorEdit.hide()
+            point_controls.layout().itemAt(9).widget().hide()
+            point_controls.layout().itemAt(11).widget().hide()
+
         for layer_ in self.viewer.layers:
             if not isinstance(layer_, Image):
                 self._remap_frame_indices(layer_)
