@@ -1,5 +1,6 @@
 import os
 from collections import defaultdict
+from copy import deepcopy
 from datetime import datetime
 from functools import partial
 from math import ceil, log10
@@ -13,6 +14,7 @@ from napari._qt.widgets.qt_welcome import QtWelcomeLabel
 from napari.layers import Image, Points, Shapes, Tracks
 from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
+from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
 from qtpy.QtCore import Qt, QTimer, Signal, QSize
@@ -76,6 +78,75 @@ def guess_continuous(property):
 
 
 color_manager.guess_continuous = guess_continuous
+
+
+def _paste_data(self, store):
+    """Paste only currently unannotated data."""
+    features = self._clipboard.pop("features")
+    if features is None:
+        return
+    unannotated = [
+        keypoints.Keypoint(label, id_) not in store.annotated_keypoints
+        for label, id_ in zip(features["label"], features["id"])
+    ]
+    new_features = features.iloc[unannotated]
+    indices_ = self._clipboard.pop("indices")
+    text_ = self._clipboard.pop("text")
+    self._clipboard = {k: v[unannotated] for k, v in self._clipboard.items()}
+    self._clipboard["features"] = new_features
+    self._clipboard["indices"] = indices_
+    if text_ is not None:
+        new_text = {k: v[unannotated] for k, v in text_.items()}
+        self._clipboard["text"] = new_text
+
+    npoints = len(self._view_data)
+    totpoints = len(self.data)
+
+    if len(self._clipboard.keys()) > 0:
+        not_disp = self._dims_not_displayed
+        data = deepcopy(self._clipboard['data'])
+        offset = [
+            self._slice_indices[i] - self._clipboard['indices'][i]
+            for i in not_disp
+        ]
+        data[:, not_disp] = data[:, not_disp] + np.array(offset)
+        self._data = np.append(self.data, data, axis=0)
+        self._shown = np.append(
+            self.shown, deepcopy(self._clipboard['shown']), axis=0
+        )
+        self._size = np.append(
+            self.size, deepcopy(self._clipboard['size']), axis=0
+        )
+
+        self._feature_table.append(self._clipboard['features'])
+
+        self.text._paste(**self._clipboard['text'])
+
+        self._edge_width = np.append(
+            self.edge_width,
+            deepcopy(self._clipboard['edge_width']),
+            axis=0,
+        )
+        self._edge._paste(
+            colors=self._clipboard['edge_color'],
+            properties=_features_to_properties(
+                self._clipboard['features']
+            ),
+        )
+        self._face._paste(
+            colors=self._clipboard['face_color'],
+            properties=_features_to_properties(
+                self._clipboard['features']
+            ),
+        )
+
+        self._selected_view = list(
+            range(npoints, npoints + len(self._clipboard['data']))
+        )
+        self._selected_data = set(
+            range(totpoints, totpoints + len(self._clipboard['data']))
+        )
+        self.refresh()
 
 
 # Hack to save a KeyPoints layer without showing the Save dialog
@@ -477,6 +548,8 @@ class KeypointControls(QWidget):
             layer.metadata["controls"] = self
             layer.text.visible = False
             layer.bind_key("M", self.cycle_through_label_modes)
+            func = partial(_paste_data, store=store)
+            layer._paste_data = MethodType(func, layer)
             layer.add = MethodType(keypoints._add, store)
             layer.events.add(query_next_frame=Event)
             layer.events.query_next_frame.connect(store._advance_step)
