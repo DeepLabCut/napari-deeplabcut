@@ -105,6 +105,8 @@ Suggested workflows, depending on the image folder contents:
 
     ***Note that if a new body part has been added to the `config.yaml` file after having started to label, loading the config in the GUI is necessary to update the dropdown menus and other metadata.***
 
+    ***As `viridis` is `napari-deeplabcut` default colormap, loading the config in the GUI is also needed to update the color scheme.***
+
 3. **Refining labels** – the image folder contains a `machinelabels-iter<#>.h5` file.
 
     The process is analog to *2*.
