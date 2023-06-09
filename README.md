@@ -62,7 +62,7 @@ Only when saving segmentation masks does a save file dialog pop up to name the d
 keypoint annotations are otherwise automatically saved in the corresponding folder as `CollectedData_<ScorerName>.h5`.
 - As a reminder, DLC will only use the H5 file; so be sure if you open already labeled images you save/overwrite the H5.
 - Note, before saving a layer, make sure the points layer is selected. If the user clicked on the image(s) layer first, does `Save As`, then closes the window, any labeling work during that session will be lost!
-- Modifying and then saving points in a `machinelabels...` layer will add to or overwrite the existing `CollectedData` layer and will **not** save to the `machinelabels` file. 
+- Modifying and then saving points in a `machinelabels...` layer will add to or overwrite the existing `CollectedData` layer and will **not** save to the `machinelabels` file.
 
 
 ### Video frame extraction and prediction refinement
@@ -109,10 +109,10 @@ Suggested workflows, depending on the image folder contents:
 
     The process is analog to *2*.
     Open *napari* and open an image folder.
-    If the video was originally labeled, *and* had outliers extracted it will contain a `CollectedData_<ScorerName>.h5` file and a `machinelabels-iter<#>.h5` file. In this case, select the `machinelabels` layer in the GUI, and type `e` to show edges. Red indicates likelihood < 0.6. As you navigate through frames, images with labels with edges will need to be refined (moved, deleted, etc). Images with labels without edges will be on the `CollectedData` (previous manual annotations) layer and shouldn't need refining. However, you can switch to that layer and fix errors. You can also right-click on the `CollectedData` layer and select `toggle visibility` to hide that layer. Select the `machinelabels` layer before saving which will append your refined annoations to `CollectedData`.
-    
-    If the folder only had outliers extracted and wasn't originally labeled, it will not have a `CollectedData` layer. Work with the `machinelabels` layer selected to refine annoation positions, then save.
-    
+    If the video was originally labeled, *and* had outliers extracted it will contain a `CollectedData_<ScorerName>.h5` file and a `machinelabels-iter<#>.h5` file. In this case, select the `machinelabels` layer in the GUI, and type `e` to show edges. Red indicates likelihood < 0.6. As you navigate through frames, images with labels with edges will need to be refined (moved, deleted, etc). Images with labels without edges will be on the `CollectedData` (previous manual annotations) layer and shouldn't need refining. However, you can switch to that layer and fix errors. You can also right-click on the `CollectedData` layer and select `toggle visibility` to hide that layer. Select the `machinelabels` layer before saving which will append your refined annotations to `CollectedData`.
+
+    If the folder only had outliers extracted and wasn't originally labeled, it will not have a `CollectedData` layer. Work with the `machinelabels` layer selected to refine annotation positions, then save.
+
     In this case, it is not necessary to open the DLC project's `config.yaml` file, as all necessary metadata is read from the `h5` data file.
 
     Saving works as described in *1*.
@@ -134,14 +134,14 @@ graph TD
   id4[Add labels to, or modify in, \n `CollectedData...` layer and save that layer]
   id5[Modify labels in `machinelabels` layer and save \n which will create a `CollectedData...` file]
   id6[Have you refined some labels from the most recent iteration and saved already?]
-  id7["All extracted frames are already saved in `CollectedData...`. 
+  id7["All extracted frames are already saved in `CollectedData...`.
 1. Hide or trash all `machinelabels` layers.
 2. Then modify in and save `CollectedData`"]
   id8["
-1. hide or trash all `machinelabels` layers except for the most recent. 
-2. Select most recent `machinelabels` and hit `e` to show edges. 
+1. hide or trash all `machinelabels` layers except for the most recent.
+2. Select most recent `machinelabels` and hit `e` to show edges.
 3. Modify only in `machinelabels` and skip frames with labels without edges shown.
-4. Save `machinelabels` layer, which will add data to `CollectedData`. 
+4. Save `machinelabels` layer, which will add data to `CollectedData`.
 	- If you need to revisit this video later, ignore `machinelabels` and work only in `CollectedData`"]
 
   id1 -->|I need to manually label new frames \n or fix my labels|id2
