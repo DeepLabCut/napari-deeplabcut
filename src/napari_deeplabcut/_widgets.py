@@ -261,8 +261,22 @@ class KeypointControls(QWidget):
         )
         self.video_widget.setVisible(False)
 
+        vlayout = QHBoxLayout()
+        trail_label = QLabel("Show trails")
+        self._trail_cb = QCheckBox()
+        self._trail_cb.setToolTip("toggle trails visibility")
+        self._trail_cb.setChecked(False)
+        self._trail_cb.setEnabled(False)
+        self._trail_cb.stateChanged.connect(self._show_trails)
+        self._trails = None
+
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
-        self._layout.addWidget(self._view_scheme_cb)
+
+        vlayout.addWidget(trail_label)
+        vlayout.addWidget(self._trail_cb)
+        vlayout.addWidget(self._view_scheme_cb)
+
+        self._layout.addLayout(vlayout)
 
         self._radio_group = self._form_mode_radio_buttons()
 
@@ -307,7 +321,7 @@ class KeypointControls(QWidget):
                     colormap="viridis",
                 )
             self._trails.visible = True
-        else:
+        elif self._trails is not None:
             self._trails.visible = False
 
     def _form_video_action_menu(self):
