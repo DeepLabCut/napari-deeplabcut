@@ -256,23 +256,13 @@ class KeypointControls(QWidget):
         self._menus = []
 
         self._video_group = self._form_video_action_menu()
-
-        vlayout = QHBoxLayout()
-        trail_label = QLabel("Show trails")
-        self._trail_cb = QCheckBox()
-        self._trail_cb.setToolTip("toggle trails visibility")
-        self._trail_cb.setChecked(False)
-        self._trail_cb.setEnabled(False)
-        self._trail_cb.stateChanged.connect(self._show_trails)
-        self._trails = None
+        self.video_widget = self.viewer.window.add_dock_widget(
+            self._video_group, name="video", area="right"
+        )
+        self.video_widget.setVisible(False)
 
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
-
-        vlayout.addWidget(trail_label)
-        vlayout.addWidget(self._trail_cb)
-        vlayout.addWidget(self._view_scheme_cb)
-
-        self._layout.addLayout(vlayout)
+        self._layout.addWidget(self._view_scheme_cb)
 
         self._radio_group = self._form_mode_radio_buttons()
 
@@ -325,15 +315,12 @@ class KeypointControls(QWidget):
         layout = QVBoxLayout()
         extract_button = QPushButton("Extract frame")
         extract_button.clicked.connect(self._extract_single_frame)
-        extract_button.setEnabled(False)
         layout.addWidget(extract_button)
         crop_button = QPushButton("Store crop coordinates")
         crop_button.clicked.connect(self._store_crop_coordinates)
-        crop_button.setEnabled(False)
         layout.addWidget(crop_button)
         group_box.setLayout(layout)
-        self._layout.addWidget(group_box)
-        return extract_button, crop_button
+        return group_box
 
     def _extract_single_frame(self, *args):
         image_layer = None
@@ -490,8 +477,7 @@ class KeypointControls(QWidget):
         if isinstance(layer, Image):
             paths = layer.metadata.get("paths")
             if paths is None:  # Then it's a video file
-                for widget in self._video_group:
-                    widget.setEnabled(True)
+                self.video_widget.setVisible(True)
             # Store the metadata and pass them on to the other layers
             self._images_meta.update(
                 {
@@ -598,8 +584,7 @@ class KeypointControls(QWidget):
             self._images_meta = dict()
             paths = layer.metadata.get("paths")
             if paths is None:
-                for widget in self._video_group:
-                    widget.setEnabled(False)
+                self.video_widget.setVisible(False)
         elif isinstance(layer, Tracks):
             self._trail_cb.setChecked(False)
             self._trails = None
