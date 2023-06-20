@@ -259,7 +259,18 @@ class KeypointControls(QWidget):
         )
         self.video_widget.setVisible(False)
 
-        vlayout = QHBoxLayout()
+        # Add some buttons to load files and data (as a complement to drag/drop)
+        hlayout = QHBoxLayout()
+        load_config_button = QPushButton("Load config file")
+        load_config_button.clicked.connect(self._load_config)
+        hlayout.addWidget(load_config_button)
+
+        load_data_button = QPushButton("Load data folder")
+        load_data_button.clicked.connect(self._load_data_folder)
+        hlayout.addWidget(load_data_button)
+        self._layout.addLayout(hlayout)
+
+        hlayout = QHBoxLayout()
         trail_label = QLabel("Show trails")
         self._trail_cb = QCheckBox()
         self._trail_cb.setToolTip("toggle trails visibility")
@@ -270,11 +281,11 @@ class KeypointControls(QWidget):
 
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
 
-        vlayout.addWidget(trail_label)
-        vlayout.addWidget(self._trail_cb)
-        vlayout.addWidget(self._view_scheme_cb)
+        hlayout.addWidget(trail_label)
+        hlayout.addWidget(self._trail_cb)
+        hlayout.addWidget(self._view_scheme_cb)
 
-        self._layout.addLayout(vlayout)
+        self._layout.addLayout(hlayout)
 
         self._radio_group = self._form_mode_radio_buttons()
 
@@ -296,6 +307,26 @@ class KeypointControls(QWidget):
                 )
             elif "save all layers" in action_name:
                 self.viewer.window.file_menu.removeAction(action)
+
+    def _load_config(self):
+        config = QFileDialog.getOpenFileName(
+            self, "Select a configuration file", "", "Config files (*.yaml)"
+        )
+        if not config:
+            return
+
+        try:  # Needed to silence a late ValueError caused by the layer having no data
+            self.viewer.open(config, plugin="napari-deeplabcut", stack=False)
+        except ValueError:
+            pass
+
+    def _load_data_folder(self):
+        dialog = QFileDialog(self)
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setViewMode(QFileDialog.Detail)
+        if dialog.exec_():
+            folder = dialog.selectedFiles()[0]
+            self.viewer.open(folder, plugin="napari-deeplabcut")
 
     def _move_image_layer_to_bottom(self, index):
         if (ind := index) != 0:
