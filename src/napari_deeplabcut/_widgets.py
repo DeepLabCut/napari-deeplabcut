@@ -163,9 +163,7 @@ def _save_layers_dialog(self, selected=False):
     if not len(self.viewer.layers):
         msg = "There are no layers in the viewer to save."
     elif selected and not len(selected_layers):
-        msg = (
-            "Please select one or more layers to save," '\nor use "Save all layers..."'
-        )
+        msg = "Please select a Points layer to save."
     if msg:
         QMessageBox.warning(self, "Nothing to save", msg, QMessageBox.Ok)
         return
@@ -286,8 +284,9 @@ class KeypointControls(QWidget):
         self._view_scheme_cb.toggle()
 
         # Substitute default menu action with custom one
-        for action in self.viewer.window.file_menu.actions():
-            if "save selected layer" in action.text().lower():
+        for action in self.viewer.window.file_menu.actions()[::-1]:
+            action_name = action.text().lower()
+            if "save selected layer" in action_name:
                 action.triggered.disconnect()
                 action.triggered.connect(
                     lambda: _save_layers_dialog(
@@ -295,7 +294,8 @@ class KeypointControls(QWidget):
                         selected=True,
                     )
                 )
-                break
+            elif "save all layers" in action_name:
+                self.viewer.window.file_menu.removeAction(action)
 
     def _move_image_layer_to_bottom(self, index):
         if (ind := index) != 0:
