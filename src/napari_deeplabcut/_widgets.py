@@ -575,6 +575,9 @@ class KeypointControls(QWidget):
             point_controls.edgeColorEdit.hide()
             point_controls.layout().itemAt(9).widget().hide()
             point_controls.layout().itemAt(11).widget().hide()
+            # Hide out of slice checkbox
+            point_controls.outOfSliceCheckBox.hide()
+            point_controls.layout().itemAt(15).widget().hide()
 
         for layer_ in self.viewer.layers:
             if not isinstance(layer_, Image):
