@@ -1,5 +1,5 @@
 import os
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from copy import deepcopy
 from datetime import datetime
 from functools import partial
@@ -17,12 +17,14 @@ from napari.layers.utils import color_manager
 from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from qtpy.QtCore import Qt, QTimer, Signal, QSize
+from qtpy.QtCore import Qt, QTimer, Signal, QSize, QPoint
 from qtpy.QtGui import QPainter, QIcon
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -48,6 +50,60 @@ from napari_deeplabcut.misc import (
     to_os_dir_sep,
     guarantee_multiindex_rows,
 )
+
+
+Tip = namedtuple('Tip', ['msg', 'pos'])
+
+
+class Tutorial(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent=parent)
+        self.setParent(parent)
+        self.setWindowTitle("Tutorial")
+        self.setModal(True)
+        self.setWindowOpacity(0.85)
+        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
+
+        self._current_tip = 0
+        self._tips = [
+            Tip('Load a folder of annotated data\n(and optionally a config file if labeling from scratch).\nAlternatively, files and folders of images can be dragged\nand dropped onto the main window.', (0.45, 0.05)),
+            Tip('Data layers will be listed at the bottom left;\ntheir visibility can be toggled by clicking on the small eye icon.', (0.1, 0.65)),
+            Tip('Corresponding layer controls can be found at the top left.\nSwitch between labeling and selection mode using the numeric keys 2 and 3,\nor clicking on the + or -> icons.', (0.1, 0.2)),
+            Tip('There are three keypoint labeling modes:\nthe key M can be used to cycle between them.', (0.65, 0.05)),
+            Tip('When done labeling, save your data by selecting the Points layer\nand hitting Ctrl+S (or File > Save Selected Layer(s)...).', (0.1, 0.65)),
+            Tip('''Read more at <a href='https://github.com/DeepLabCut/napari-deeplabcut#usage'>napari-deeplabcut</a>''', (0.4, 0.4)),
+        ]
+
+        buttons = QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Abort
+        self.button_box = QDialogButtonBox(buttons)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+
+        vlayout = QVBoxLayout()
+        self.message = QLabel("Let's get started with a quick walkthrough!")
+        self.message.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
+        self.message.setOpenExternalLinks(True)
+        vlayout.addWidget(self.message)
+        hlayout = QHBoxLayout()
+        self.count = QLabel(f"Tip {self._current_tip + 1}|{len(self._tips)}")
+        hlayout.addWidget(self.count)
+        hlayout.addWidget(self.button_box)
+        vlayout.addLayout(hlayout)
+        self.setLayout(vlayout)
+
+    def accept(self):
+        tip = self._tips[self._current_tip]
+        self.message.setText(tip.msg)
+        self.count.setText(f"Tip {self._current_tip + 1}|{len(self._tips)}")
+        self.adjustSize()
+        xrel, yrel = tip.pos
+        geom = self.parent().geometry()
+        p = QPoint(
+            int(geom.left() + geom.width() * xrel),
+            int(geom.top() + geom.height() * yrel),
+        )
+        self.move(p)
+        self._current_tip = (self._current_tip + 1) % len(self._tips)
 
 
 def _get_and_try_preferred_reader(
@@ -307,6 +363,11 @@ class KeypointControls(QWidget):
                 )
             elif "save all layers" in action_name:
                 self.viewer.window.file_menu.removeAction(action)
+
+        QTimer.singleShot(10, self.start_tutorial)
+
+    def start_tutorial(self):
+        tuto = Tutorial(self.viewer.window._qt_window.__wrapped__).show()
 
     def _load_config(self):
         config = QFileDialog.getOpenFileName(
