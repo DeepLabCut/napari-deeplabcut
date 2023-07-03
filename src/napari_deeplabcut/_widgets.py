@@ -321,9 +321,9 @@ class KeypointControls(QWidget):
         load_config_button.clicked.connect(self._load_config)
         hlayout.addWidget(load_config_button)
 
-        load_data_button = QPushButton("Load data folder")
-        load_data_button.clicked.connect(self._load_data_folder)
-        hlayout.addWidget(load_data_button)
+        self.load_data_button = QPushButton("Load data folder")
+        self.load_data_button.clicked.connect(self._load_data_folder)
+        hlayout.addWidget(self.load_data_button)
         self._layout.addLayout(hlayout)
 
         hlayout = QHBoxLayout()
@@ -670,6 +670,7 @@ class KeypointControls(QWidget):
                 }
             )
             self._trail_cb.setEnabled(True)
+            self.load_data_button.setDisabled(True)
 
             # Hide the color pickers, as colormaps are strictly defined by users
             controls = self.viewer.window.qt_viewer.dockLayerControls
@@ -699,6 +700,7 @@ class KeypointControls(QWidget):
                 menu.deleteLater()
                 menu.destroy()
             self._trail_cb.setEnabled(False)
+            self.load_data_button.setDisabled(False)
             self.last_saved_label.hide()
         elif isinstance(layer, Image):
             self._images_meta = dict()
