@@ -2,7 +2,7 @@ import os
 from collections import defaultdict, namedtuple
 from copy import deepcopy
 from datetime import datetime
-from functools import partial
+from functools import partial, cached_property
 from math import ceil, log10
 import pandas as pd
 from pathlib import Path
@@ -17,8 +17,8 @@ from napari.layers.utils import color_manager
 from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from qtpy.QtCore import Qt, QTimer, Signal, QSize, QPoint
-from qtpy.QtGui import QPainter, QIcon
+from qtpy.QtCore import Qt, QTimer, Signal, QSize, QPoint, QSettings
+from qtpy.QtGui import QPainter, QIcon, QAction
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -364,10 +364,21 @@ class KeypointControls(QWidget):
             elif "save all layers" in action_name:
                 self.viewer.window.file_menu.removeAction(action)
 
-        QTimer.singleShot(10, self.start_tutorial)
+        # Add action to show the walkthrough again
+        launch_tutorial = QAction("&Launch Tutorial", self)
+        launch_tutorial.triggered.connect(self.start_tutorial)
+        self.viewer.window.view_menu.addAction(launch_tutorial)
+
+        if self.settings.value("first_launch", True):
+            QTimer.singleShot(10, self.start_tutorial)
+            self.settings.setValue("first_launch", False)
+
+    @cached_property
+    def settings(self):
+        return QSettings()
 
     def start_tutorial(self):
-        tuto = Tutorial(self.viewer.window._qt_window.__wrapped__).show()
+        Tutorial(self.viewer.window._qt_window.__wrapped__).show()
 
     def _load_config(self):
         config = QFileDialog.getOpenFileName(
