@@ -283,7 +283,7 @@ class KeypointControls(QWidget):
         status_bar.addPermanentWidget(self.last_saved_label)
 
         # Hack napari's Welcome overlay to show more relevant instructions
-        overlay = self.viewer.window._qt_viewer._canvas_overlay
+        overlay = self.viewer.window._qt_viewer._welcome_widget
         welcome_widget = overlay.layout().itemAt(1).widget()
         welcome_widget.deleteLater()
         w = QtWelcomeWidget(None)
