@@ -85,13 +85,15 @@ class Tutorial(QDialog):
         self.message.setOpenExternalLinks(True)
         vlayout.addWidget(self.message)
         hlayout = QHBoxLayout()
-        self.count = QLabel(f"Tip {self._current_tip + 1}|{len(self._tips)}")
+        self.count = QLabel("")
         hlayout.addWidget(self.count)
         hlayout.addWidget(self.button_box)
         vlayout.addLayout(hlayout)
         self.setLayout(vlayout)
 
     def accept(self):
+        if self._current_tip == 0 and "walkthrough" not in self.message.text():
+            self.reject()
         tip = self._tips[self._current_tip]
         self.message.setText(tip.msg)
         self.count.setText(f"Tip {self._current_tip + 1}|{len(self._tips)}")
