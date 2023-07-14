@@ -99,6 +99,11 @@ def read_images(path):
             "root": os.path.split(path)[0],
         },
     }
+
+    # https://github.com/soft-matter/pims/issues/452
+    if len(filepaths) == 1:
+        path = glob.glob(path)[0]
+
     return [(imread(path), params, "image")]
 
 
