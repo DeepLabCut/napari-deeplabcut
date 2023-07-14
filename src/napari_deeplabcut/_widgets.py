@@ -1,8 +1,8 @@
 import os
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from copy import deepcopy
 from datetime import datetime
-from functools import partial
+from functools import partial, cached_property
 from math import ceil, log10
 import pandas as pd
 from pathlib import Path
@@ -17,12 +17,14 @@ from napari.layers.utils import color_manager
 from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from qtpy.QtCore import Qt, QTimer, Signal, QSize
-from qtpy.QtGui import QPainter, QIcon
+from qtpy.QtCore import Qt, QTimer, Signal, QSize, QPoint, QSettings
+from qtpy.QtGui import QPainter, QIcon, QAction
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -48,6 +50,62 @@ from napari_deeplabcut.misc import (
     to_os_dir_sep,
     guarantee_multiindex_rows,
 )
+
+
+Tip = namedtuple('Tip', ['msg', 'pos'])
+
+
+class Tutorial(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent=parent)
+        self.setParent(parent)
+        self.setWindowTitle("Tutorial")
+        self.setModal(True)
+        self.setWindowOpacity(0.85)
+        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
+
+        self._current_tip = 0
+        self._tips = [
+            Tip('Load a folder of annotated data\n(and optionally a config file if labeling from scratch).\nAlternatively, files and folders of images can be dragged\nand dropped onto the main window.', (0.45, 0.05)),
+            Tip('Data layers will be listed at the bottom left;\ntheir visibility can be toggled by clicking on the small eye icon.', (0.1, 0.65)),
+            Tip('Corresponding layer controls can be found at the top left.\nSwitch between labeling and selection mode using the numeric keys 2 and 3,\nor clicking on the + or -> icons.', (0.1, 0.2)),
+            Tip('There are three keypoint labeling modes:\nthe key M can be used to cycle between them.', (0.65, 0.05)),
+            Tip('When done labeling, save your data by selecting the Points layer\nand hitting Ctrl+S (or File > Save Selected Layer(s)...).', (0.1, 0.65)),
+            Tip('''Read more at <a href='https://github.com/DeepLabCut/napari-deeplabcut#usage'>napari-deeplabcut</a>''', (0.4, 0.4)),
+        ]
+
+        buttons = QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Abort
+        self.button_box = QDialogButtonBox(buttons)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+
+        vlayout = QVBoxLayout()
+        self.message = QLabel("Let's get started with a quick walkthrough!")
+        self.message.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
+        self.message.setOpenExternalLinks(True)
+        vlayout.addWidget(self.message)
+        hlayout = QHBoxLayout()
+        self.count = QLabel("")
+        hlayout.addWidget(self.count)
+        hlayout.addWidget(self.button_box)
+        vlayout.addLayout(hlayout)
+        self.setLayout(vlayout)
+
+    def accept(self):
+        if self._current_tip == 0 and "walkthrough" not in self.message.text():
+            self.reject()
+        tip = self._tips[self._current_tip]
+        self.message.setText(tip.msg)
+        self.count.setText(f"Tip {self._current_tip + 1}|{len(self._tips)}")
+        self.adjustSize()
+        xrel, yrel = tip.pos
+        geom = self.parent().geometry()
+        p = QPoint(
+            int(geom.left() + geom.width() * xrel),
+            int(geom.top() + geom.height() * yrel),
+        )
+        self.move(p)
+        self._current_tip = (self._current_tip + 1) % len(self._tips)
 
 
 def _get_and_try_preferred_reader(
@@ -163,9 +221,7 @@ def _save_layers_dialog(self, selected=False):
     if not len(self.viewer.layers):
         msg = "There are no layers in the viewer to save."
     elif selected and not len(selected_layers):
-        msg = (
-            "Please select one or more layers to save," '\nor use "Save all layers..."'
-        )
+        msg = "Please select a Points layer to save."
     if msg:
         QMessageBox.warning(self, "Nothing to save", msg, QMessageBox.Ok)
         return
@@ -227,7 +283,7 @@ class KeypointControls(QWidget):
         status_bar.addPermanentWidget(self.last_saved_label)
 
         # Hack napari's Welcome overlay to show more relevant instructions
-        overlay = self.viewer.window._qt_viewer._canvas_overlay
+        overlay = self.viewer.window._qt_viewer._welcome_widget
         welcome_widget = overlay.layout().itemAt(1).widget()
         welcome_widget.deleteLater()
         w = QtWelcomeWidget(None)
@@ -256,8 +312,23 @@ class KeypointControls(QWidget):
         self._menus = []
 
         self._video_group = self._form_video_action_menu()
+        self.video_widget = self.viewer.window.add_dock_widget(
+            self._video_group, name="video", area="right"
+        )
+        self.video_widget.setVisible(False)
 
-        vlayout = QHBoxLayout()
+        # Add some buttons to load files and data (as a complement to drag/drop)
+        hlayout = QHBoxLayout()
+        load_config_button = QPushButton("Load config file")
+        load_config_button.clicked.connect(self._load_config)
+        hlayout.addWidget(load_config_button)
+
+        self.load_data_button = QPushButton("Load data folder")
+        self.load_data_button.clicked.connect(self._load_data_folder)
+        hlayout.addWidget(self.load_data_button)
+        self._layout.addLayout(hlayout)
+
+        hlayout = QHBoxLayout()
         trail_label = QLabel("Show trails")
         self._trail_cb = QCheckBox()
         self._trail_cb.setToolTip("toggle trails visibility")
@@ -268,11 +339,11 @@ class KeypointControls(QWidget):
 
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
 
-        vlayout.addWidget(trail_label)
-        vlayout.addWidget(self._trail_cb)
-        vlayout.addWidget(self._view_scheme_cb)
+        hlayout.addWidget(trail_label)
+        hlayout.addWidget(self._trail_cb)
+        hlayout.addWidget(self._view_scheme_cb)
 
-        self._layout.addLayout(vlayout)
+        self._layout.addLayout(hlayout)
 
         self._radio_group = self._form_mode_radio_buttons()
 
@@ -282,8 +353,9 @@ class KeypointControls(QWidget):
         self._view_scheme_cb.toggle()
 
         # Substitute default menu action with custom one
-        for action in self.viewer.window.file_menu.actions():
-            if "save selected layer" in action.text().lower():
+        for action in self.viewer.window.file_menu.actions()[::-1]:
+            action_name = action.text().lower()
+            if "save selected layer" in action_name:
                 action.triggered.disconnect()
                 action.triggered.connect(
                     lambda: _save_layers_dialog(
@@ -291,7 +363,44 @@ class KeypointControls(QWidget):
                         selected=True,
                     )
                 )
-                break
+            elif "save all layers" in action_name:
+                self.viewer.window.file_menu.removeAction(action)
+
+        # Add action to show the walkthrough again
+        launch_tutorial = QAction("&Launch Tutorial", self)
+        launch_tutorial.triggered.connect(self.start_tutorial)
+        self.viewer.window.view_menu.addAction(launch_tutorial)
+
+        if self.settings.value("first_launch", True):
+            QTimer.singleShot(10, self.start_tutorial)
+            self.settings.setValue("first_launch", False)
+
+    @cached_property
+    def settings(self):
+        return QSettings()
+
+    def start_tutorial(self):
+        Tutorial(self.viewer.window._qt_window.__wrapped__).show()
+
+    def _load_config(self):
+        config = QFileDialog.getOpenFileName(
+            self, "Select a configuration file", "", "Config files (*.yaml)"
+        )
+        if not config:
+            return
+
+        try:  # Needed to silence a late ValueError caused by the layer having no data
+            self.viewer.open(config, plugin="napari-deeplabcut", stack=False)
+        except ValueError:
+            pass
+
+    def _load_data_folder(self):
+        dialog = QFileDialog(self)
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setViewMode(QFileDialog.Detail)
+        if dialog.exec_():
+            folder = dialog.selectedFiles()[0]
+            self.viewer.open(folder, plugin="napari-deeplabcut")
 
     def _move_image_layer_to_bottom(self, index):
         if (ind := index) != 0:
@@ -317,7 +426,7 @@ class KeypointControls(QWidget):
                     colormap="viridis",
                 )
             self._trails.visible = True
-        else:
+        elif self._trails is not None:
             self._trails.visible = False
 
     def _form_video_action_menu(self):
@@ -325,15 +434,12 @@ class KeypointControls(QWidget):
         layout = QVBoxLayout()
         extract_button = QPushButton("Extract frame")
         extract_button.clicked.connect(self._extract_single_frame)
-        extract_button.setEnabled(False)
         layout.addWidget(extract_button)
         crop_button = QPushButton("Store crop coordinates")
         crop_button.clicked.connect(self._store_crop_coordinates)
-        crop_button.setEnabled(False)
         layout.addWidget(crop_button)
         group_box.setLayout(layout)
-        self._layout.addWidget(group_box)
-        return extract_button, crop_button
+        return group_box
 
     def _extract_single_frame(self, *args):
         image_layer = None
@@ -490,8 +596,7 @@ class KeypointControls(QWidget):
         if isinstance(layer, Image):
             paths = layer.metadata.get("paths")
             if paths is None:  # Then it's a video file
-                for widget in self._video_group:
-                    widget.setEnabled(True)
+                self.video_widget.setVisible(True)
             # Store the metadata and pass them on to the other layers
             self._images_meta.update(
                 {
@@ -570,6 +675,7 @@ class KeypointControls(QWidget):
                 }
             )
             self._trail_cb.setEnabled(True)
+            self.load_data_button.setDisabled(True)
 
             # Hide the color pickers, as colormaps are strictly defined by users
             controls = self.viewer.window.qt_viewer.dockLayerControls
@@ -578,6 +684,9 @@ class KeypointControls(QWidget):
             point_controls.edgeColorEdit.hide()
             point_controls.layout().itemAt(9).widget().hide()
             point_controls.layout().itemAt(11).widget().hide()
+            # Hide out of slice checkbox
+            point_controls.outOfSliceCheckBox.hide()
+            point_controls.layout().itemAt(15).widget().hide()
 
         for layer_ in self.viewer.layers:
             if not isinstance(layer_, Image):
@@ -596,13 +705,13 @@ class KeypointControls(QWidget):
                 menu.deleteLater()
                 menu.destroy()
             self._trail_cb.setEnabled(False)
+            self.load_data_button.setDisabled(False)
             self.last_saved_label.hide()
         elif isinstance(layer, Image):
             self._images_meta = dict()
             paths = layer.metadata.get("paths")
             if paths is None:
-                for widget in self._video_group:
-                    widget.setEnabled(False)
+                self.video_widget.setVisible(False)
         elif isinstance(layer, Tracks):
             self._trail_cb.setChecked(False)
             self._trails = None
