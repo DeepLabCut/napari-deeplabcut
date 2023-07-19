@@ -161,7 +161,7 @@ def _paste_data(self, store):
     totpoints = len(self.data)
 
     if len(self._clipboard.keys()) > 0:
-        not_disp = self._dims_not_displayed
+        not_disp = self._slice_input.not_displayed
         data = deepcopy(self._clipboard['data'])
         offset = [
             self._slice_indices[i] - self._clipboard['indices'][i]
@@ -174,6 +174,9 @@ def _paste_data(self, store):
         )
         self._size = np.append(
             self.size, deepcopy(self._clipboard['size']), axis=0
+        )
+        self._symbol = np.append(
+            self.symbol, deepcopy(self._clipboard['symbol']), axis=0
         )
 
         self._feature_table.append(self._clipboard['features'])
