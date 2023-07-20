@@ -61,17 +61,18 @@ class Tutorial(QDialog):
         self.setParent(parent)
         self.setWindowTitle("Tutorial")
         self.setModal(True)
-        self.setWindowOpacity(0.85)
+        self.setStyleSheet("background:#cdb4db")
+        self.setWindowOpacity(0.95)
         self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
 
         self._current_tip = 0
         self._tips = [
-            Tip('Load a folder of annotated data\n(and optionally a config file if labeling from scratch).\nAlternatively, files and folders of images can be dragged\nand dropped onto the main window.', (0.45, 0.05)),
-            Tip('Data layers will be listed at the bottom left;\ntheir visibility can be toggled by clicking on the small eye icon.', (0.1, 0.65)),
-            Tip('Corresponding layer controls can be found at the top left.\nSwitch between labeling and selection mode using the numeric keys 2 and 3,\nor clicking on the + or -> icons.', (0.1, 0.2)),
-            Tip('There are three keypoint labeling modes:\nthe key M can be used to cycle between them.', (0.65, 0.05)),
-            Tip('When done labeling, save your data by selecting the Points layer\nand hitting Ctrl+S (or File > Save Selected Layer(s)...).', (0.1, 0.65)),
-            Tip('''Read more at <a href='https://github.com/DeepLabCut/napari-deeplabcut#usage'>napari-deeplabcut</a>''', (0.4, 0.4)),
+            Tip("Load a folder of annotated data\n(and optionally a config file if labeling from scratch).\nAlternatively, files and folders of images can be dragged\nand dropped onto the main window.", (0.45, 0.05)),
+            Tip("Data layers will be listed at the bottom left;\ntheir visibility can be toggled by clicking on the small eye icon.", (0.1, 0.65)),
+            Tip("Corresponding layer controls can be found at the top left.\nSwitch between labeling and selection mode using the numeric keys 2 and 3,\nor clicking on the + or -> icons.", (0.1, 0.2)),
+            Tip("There are three keypoint labeling modes:\nthe key M can be used to cycle between them.", (0.65, 0.05)),
+            Tip("When done labeling, save your data by selecting the Points layer\nand hitting Ctrl+S (or File > Save Selected Layer(s)...).", (0.1, 0.65)),
+            Tip("Read more at <a href='https://github.com/DeepLabCut/napari-deeplabcut#usage'>napari-deeplabcut</a>", (0.4, 0.4)),
         ]
 
         buttons = QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Abort
@@ -80,7 +81,7 @@ class Tutorial(QDialog):
         self.button_box.rejected.connect(self.reject)
 
         vlayout = QVBoxLayout()
-        self.message = QLabel("Let's get started with a quick walkthrough!")
+        self.message = QLabel("💡\n\nLet's get started with a quick walkthrough!")
         self.message.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
         self.message.setOpenExternalLinks(True)
         vlayout.addWidget(self.message)
@@ -95,7 +96,10 @@ class Tutorial(QDialog):
         if self._current_tip == 0 and "walkthrough" not in self.message.text():
             self.reject()
         tip = self._tips[self._current_tip]
-        self.message.setText(tip.msg)
+        msg = tip.msg
+        if self._current_tip < 5:  # No emoji in the last tip otherwise the hyperlink breaks
+            msg = "💡\n\n" + msg
+        self.message.setText(msg)
         self.count.setText(f"Tip {self._current_tip + 1}|{len(self._tips)}")
         self.adjustSize()
         xrel, yrel = tip.pos
