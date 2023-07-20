@@ -2,16 +2,31 @@ import numpy as np
 from napari_deeplabcut import keypoints
 
 
-def test_store(store, fake_keypoints):
+def test_store_advance_step(store):
     assert store.current_step == 0
     store._advance_step(event=None)
     assert store.current_step == 1
 
+
+def test_store_labels(store, fake_keypoints):
     assert store.n_steps == fake_keypoints.shape[0]
     assert store.labels == list(
         fake_keypoints.columns.get_level_values("bodyparts").unique()
     )
 
+
+def test_store_find_first_unlabeled_frame(store, fake_keypoints):
+    store._find_first_unlabeled_frame(event=None)
+    assert store.current_step == store.n_steps - 1
+    # Remove a frame to test whether it is correctly found
+    ind_to_remove = 2
+    data = store.layer.data
+    store.layer.data = data[data[:, 0] != ind_to_remove]
+    store._find_first_unlabeled_frame(event=None)
+    assert store.current_step == ind_to_remove
+
+
+def test_store_keypoints(store, fake_keypoints):
     annotated_keypoints = store.annotated_keypoints
     assert len(annotated_keypoints) == fake_keypoints.shape[1] // 2
     assert annotated_keypoints[0].id == "animal_0"
@@ -25,15 +40,6 @@ def test_store(store, fake_keypoints):
     store.prev_keypoint()
     assert store.current_keypoint == kpt
     store.next_keypoint()
-
-    store._find_first_unlabeled_frame(event=None)
-    assert store.current_step == store.n_steps - 1
-    # Remove a frame to test whether it is correctly found
-    ind_to_remove = 2
-    data = store.layer.data
-    store.layer.data = data[data[:, 0] != ind_to_remove]
-    store._find_first_unlabeled_frame(event=None)
-    assert store.current_step == ind_to_remove
 
 
 def test_point_resize(viewer, points):
