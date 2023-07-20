@@ -67,7 +67,7 @@ class Tutorial(QDialog):
 
         self._current_tip = 0
         self._tips = [
-            Tip("Load a folder of annotated data\n(and optionally a config file if labeling from scratch).\nAlternatively, files and folders of images can be dragged\nand dropped onto the main window.", (0.45, 0.05)),
+            Tip("Load a folder of annotated data\n(and optionally a config file if labeling from scratch)\nfrom the menu File > Open File or Open Folder.\nAlternatively, files and folders of images can be dragged\nand dropped onto the main window.", (0.35, 0.15)),
             Tip("Data layers will be listed at the bottom left;\ntheir visibility can be toggled by clicking on the small eye icon.", (0.1, 0.65)),
             Tip("Corresponding layer controls can be found at the top left.\nSwitch between labeling and selection mode using the numeric keys 2 and 3,\nor clicking on the + or -> icons.", (0.1, 0.2)),
             Tip("There are three keypoint labeling modes:\nthe key M can be used to cycle between them.", (0.65, 0.05)),
