@@ -8,7 +8,7 @@ from skimage.io import imsave
 
 @pytest.fixture  # TODO Hack to make this fixture session-scoped
 def viewer(make_napari_viewer):
-    viewer = make_napari_viewer()
+    viewer = make_napari_viewer(strict_qt=True)
     for action in viewer.window.plugins_menu.actions():
         if "deeplabcut" in action.text():
             action.trigger()
