@@ -321,17 +321,6 @@ class KeypointControls(QWidget):
         )
         self.video_widget.setVisible(False)
 
-        # Add some buttons to load files and data (as a complement to drag/drop)
-        hlayout = QHBoxLayout()
-        load_config_button = QPushButton("Load config file")
-        load_config_button.clicked.connect(self._load_config)
-        hlayout.addWidget(load_config_button)
-
-        self.load_data_button = QPushButton("Load data folder")
-        self.load_data_button.clicked.connect(self._load_data_folder)
-        hlayout.addWidget(self.load_data_button)
-        self._layout.addLayout(hlayout)
-
         hlayout = QHBoxLayout()
         trail_label = QLabel("Show trails")
         self._trail_cb = QCheckBox()
@@ -385,26 +374,6 @@ class KeypointControls(QWidget):
 
     def start_tutorial(self):
         Tutorial(self.viewer.window._qt_window.__wrapped__).show()
-
-    def _load_config(self):
-        config = QFileDialog.getOpenFileName(
-            self, "Select a configuration file", "", "Config files (*.yaml)"
-        )
-        if not config:
-            return
-
-        try:  # Needed to silence a late ValueError caused by the layer having no data
-            self.viewer.open(config, plugin="napari-deeplabcut", stack=False)
-        except ValueError:
-            pass
-
-    def _load_data_folder(self):
-        dialog = QFileDialog(self)
-        dialog.setFileMode(QFileDialog.Directory)
-        dialog.setViewMode(QFileDialog.Detail)
-        if dialog.exec_():
-            folder = dialog.selectedFiles()[0]
-            self.viewer.open(folder, plugin="napari-deeplabcut")
 
     def _move_image_layer_to_bottom(self, index):
         if (ind := index) != 0:
@@ -679,7 +648,6 @@ class KeypointControls(QWidget):
                 }
             )
             self._trail_cb.setEnabled(True)
-            self.load_data_button.setDisabled(True)
 
             # Hide the color pickers, as colormaps are strictly defined by users
             controls = self.viewer.window.qt_viewer.dockLayerControls
@@ -709,7 +677,6 @@ class KeypointControls(QWidget):
                 menu.deleteLater()
                 menu.destroy()
             self._trail_cb.setEnabled(False)
-            self.load_data_button.setDisabled(False)
             self.last_saved_label.hide()
         elif isinstance(layer, Image):
             self._images_meta = dict()
