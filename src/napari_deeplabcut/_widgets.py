@@ -380,7 +380,7 @@ class KeypointControls(QWidget):
         return QSettings()
 
     def start_tutorial(self):
-        Tutorial(self.viewer.window._qt_window.__wrapped__).show()
+        Tutorial(self.viewer.window._qt_window.current()).show()
 
     def _load_config(self):
         config = QFileDialog.getOpenFileName(
