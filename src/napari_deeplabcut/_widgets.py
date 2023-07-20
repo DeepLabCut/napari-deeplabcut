@@ -144,13 +144,17 @@ color_manager.guess_continuous = guess_continuous
 
 def _paste_data(self, store):
     """Paste only currently unannotated data."""
-    features = self._clipboard.pop("features")
+    features = self._clipboard.pop("features", None)
     if features is None:
         return
+
     unannotated = [
         keypoints.Keypoint(label, id_) not in store.annotated_keypoints
         for label, id_ in zip(features["label"], features["id"])
     ]
+    if not any(unannotated):
+        return
+
     new_features = features.iloc[unannotated]
     indices_ = self._clipboard.pop("indices")
     text_ = self._clipboard.pop("text")
@@ -158,14 +162,17 @@ def _paste_data(self, store):
     self._clipboard["features"] = new_features
     self._clipboard["indices"] = indices_
     if text_ is not None:
-        new_text = {k: v[unannotated] for k, v in text_.items()}
+        new_text = {
+            "string": text_["string"][unannotated],
+            "color": text_["color"],
+        }
         self._clipboard["text"] = new_text
 
     npoints = len(self._view_data)
     totpoints = len(self.data)
 
     if len(self._clipboard.keys()) > 0:
-        not_disp = self._dims_not_displayed
+        not_disp = self._slice_input.not_displayed
         data = deepcopy(self._clipboard['data'])
         offset = [
             self._slice_indices[i] - self._clipboard['indices'][i]
@@ -178,6 +185,9 @@ def _paste_data(self, store):
         )
         self._size = np.append(
             self.size, deepcopy(self._clipboard['size']), axis=0
+        )
+        self._symbol = np.append(
+            self.symbol, deepcopy(self._clipboard['symbol']), axis=0
         )
 
         self._feature_table.append(self._clipboard['features'])
