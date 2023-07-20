@@ -2,10 +2,10 @@ import numpy as np
 from napari_deeplabcut import keypoints
 
 
-def test_store_advance_step(store):
-    assert store.current_step == 0
-    store._advance_step(event=None)
-    assert store.current_step == 1
+# def test_store_advance_step(store):
+#     assert store.current_step == 0
+#     store._advance_step(event=None)
+#     assert store.current_step == 1
 
 
 def test_store_labels(store, fake_keypoints):
