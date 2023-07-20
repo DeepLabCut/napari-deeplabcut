@@ -140,13 +140,17 @@ color_manager.guess_continuous = guess_continuous
 
 def _paste_data(self, store):
     """Paste only currently unannotated data."""
-    features = self._clipboard.pop("features")
+    features = self._clipboard.pop("features", None)
     if features is None:
         return
+
     unannotated = [
         keypoints.Keypoint(label, id_) not in store.annotated_keypoints
         for label, id_ in zip(features["label"], features["id"])
     ]
+    if not any(unannotated):
+        return
+
     new_features = features.iloc[unannotated]
     indices_ = self._clipboard.pop("indices")
     text_ = self._clipboard.pop("text")
@@ -154,7 +158,10 @@ def _paste_data(self, store):
     self._clipboard["features"] = new_features
     self._clipboard["indices"] = indices_
     if text_ is not None:
-        new_text = {k: v[unannotated] for k, v in text_.items()}
+        new_text = {
+            "string": text_["string"][unannotated],
+            "color": text_["color"],
+        }
         self._clipboard["text"] = new_text
 
     npoints = len(self._view_data)
