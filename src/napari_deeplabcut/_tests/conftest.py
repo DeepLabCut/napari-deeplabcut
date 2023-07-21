@@ -6,16 +6,6 @@ from napari_deeplabcut import keypoints, _writer
 from skimage.io import imsave
 
 
-@pytest.fixture  # TODO Hack to make this fixture session-scoped
-def viewer(make_napari_viewer):
-    viewer = make_napari_viewer()
-    for action in viewer.window.plugins_menu.actions():
-        if "deeplabcut" in action.text():
-            action.trigger()
-            break
-    return viewer
-
-
 @pytest.fixture
 def fake_keypoints():
     n_rows = 10
@@ -33,10 +23,12 @@ def fake_keypoints():
 
 
 @pytest.fixture
-def points(tmp_path_factory, viewer, fake_keypoints):
+def points(tmp_path_factory, make_napari_viewer, fake_keypoints):
     output_path = str(tmp_path_factory.mktemp("folder") / "fake_data.h5")
     fake_keypoints.to_hdf(output_path, key="data")
+    viewer = make_napari_viewer()
     layer = viewer.open(output_path, plugin="napari-deeplabcut")[0]
+    layer._viewer = viewer  # Hold a reference to the viewer for the `store`
     return layer
 
 
@@ -46,16 +38,17 @@ def fake_image():
 
 
 @pytest.fixture
-def images(tmp_path_factory, viewer, fake_image):
+def images(tmp_path_factory, make_napari_viewer, fake_image):
     output_path = str(tmp_path_factory.mktemp("folder") / "img.png")
     imsave(output_path, fake_image)
+    viewer = make_napari_viewer()
     layer = viewer.open(output_path, plugin="napari-deeplabcut")[0]
     return layer
 
 
 @pytest.fixture
-def store(viewer, points):
-    return keypoints.KeypointStore(viewer, points)
+def store(points):
+    return keypoints.KeypointStore(points._viewer, points)
 
 
 @pytest.fixture(scope="session")
