@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import pytest
-from napari_deeplabcut import keypoints, _writer
+from napari_deeplabcut import keypoints, _writer, _widgets
 from skimage.io import imsave
 
 
@@ -49,6 +49,12 @@ def images(tmp_path_factory, make_napari_viewer, fake_image):
 @pytest.fixture
 def store(points):
     return keypoints.KeypointStore(points._viewer, points)
+
+
+@pytest.fixture
+def controls(make_napari_viewer):
+    viewer = make_napari_viewer()
+    return _widgets.KeypointControls(viewer)
 
 
 @pytest.fixture(scope="session")

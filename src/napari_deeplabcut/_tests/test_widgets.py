@@ -9,45 +9,35 @@ def test_guess_continuous():
     assert not _widgets.guess_continuous(np.array(list("abc")))
 
 
-def test_keypoint_controls(make_napari_viewer):
-    viewer = make_napari_viewer()
-    controls = _widgets.KeypointControls(viewer)
+def test_keypoint_controls(controls):
     controls.label_mode = "loop"
     assert controls._radio_group.checkedButton().text() == "loop"
     controls.cycle_through_label_modes()
     assert controls._radio_group.checkedButton().text() == "sequential"
 
 
-def test_save_layers(make_napari_viewer, points):
-    viewer = make_napari_viewer()
-    controls = _widgets.KeypointControls(viewer)
-    viewer.add_layer(points)
+def test_save_layers(controls, points):
+    controls.viewer.add_layer(points)
     _widgets._save_layers_dialog(controls)
 
 
-def test_show_trails(make_napari_viewer, store):
-    viewer = make_napari_viewer()
-    controls = _widgets.KeypointControls(viewer)
+def test_show_trails(controls, store):
     controls._stores["temp"] = store
     controls._is_saved = True
     controls._show_trails(state=2)
 
 
-def test_extract_single_frame(make_napari_viewer, images):
-    viewer = make_napari_viewer()
-    viewer.add_layer(images)
-    controls = _widgets.KeypointControls(viewer)
+def test_extract_single_frame(controls, images):
+    controls.viewer.add_layer(images)
     controls._extract_single_frame()
 
 
-def test_store_crop_coordinates(make_napari_viewer, images, config_path):
-    viewer = make_napari_viewer()
-    viewer.add_layer(images)
-    _ = viewer.add_shapes(
+def test_store_crop_coordinates(controls, images, config_path):
+    controls.viewer.add_layer(images)
+    _ = controls.viewer.add_shapes(
         np.random.random((4, 3)),
         shape_type='rectangle',
     )
-    controls = _widgets.KeypointControls(viewer)
     controls._images_meta = {
         "name": "fake_video",
         "project": os.path.dirname(config_path),
