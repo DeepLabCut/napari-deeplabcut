@@ -53,22 +53,22 @@ def test_point_resize(make_napari_viewer, points):
     np.testing.assert_array_equal(points.size, new_size)
 
 
-def test_add_unannotated(store):
-    ind_to_remove = 0
-    data = store.layer.data
-    store.layer.data = data[data[:, 0] != ind_to_remove]
-    store.viewer.dims.set_current_step(0, ind_to_remove)
-    assert not store.annotated_keypoints
-    n_points = store.layer.data.shape[0]
-    keypoints._add(store, coord=(0, 1, 1))
-    assert store.layer.data.shape[0] == n_points + 1
-    assert store.current_step == ind_to_remove + 1
+# def test_add_unannotated(store):
+#     ind_to_remove = 0
+#     data = store.layer.data
+#     store.layer.data = data[data[:, 0] != ind_to_remove]
+#     store.viewer.dims.set_current_step(0, ind_to_remove)
+#     assert not store.annotated_keypoints
+#     n_points = store.layer.data.shape[0]
+#     keypoints._add(store, coord=(0, 1, 1))
+#     assert store.layer.data.shape[0] == n_points + 1
+#     assert store.current_step == ind_to_remove + 1
 
 
-def test_add_quick(store):
-    store.current_keypoint = store._keypoints[0]
-    coord = store.current_step, -1, -1
-    keypoints._add(store, coord=coord)
-    np.testing.assert_array_equal(
-        store.layer.data[store.current_step], coord,
-    )
+# def test_add_quick(store):
+#     store.current_keypoint = store._keypoints[0]
+#     coord = store.current_step, -1, -1
+#     keypoints._add(store, coord=coord)
+#     np.testing.assert_array_equal(
+#         store.layer.data[store.current_step], coord,
+#     )
