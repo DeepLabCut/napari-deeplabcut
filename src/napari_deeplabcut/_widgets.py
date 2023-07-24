@@ -62,6 +62,7 @@ class Tutorial(QDialog):
         self.setWindowTitle("Tutorial")
         self.setModal(True)
         self.setStyleSheet("background:#cdb4db")
+        self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowOpacity(0.95)
         self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
 
@@ -370,13 +371,13 @@ class KeypointControls(QWidget):
                 self.viewer.window.file_menu.removeAction(action)
 
         # Add action to show the walkthrough again
-        # launch_tutorial = QAction("&Launch Tutorial", self)
-        # launch_tutorial.triggered.connect(self.start_tutorial)
-        # self.viewer.window.view_menu.addAction(launch_tutorial)
+        launch_tutorial = QAction("&Launch Tutorial", self)
+        launch_tutorial.triggered.connect(self.start_tutorial)
+        self.viewer.window.view_menu.addAction(launch_tutorial)
 
-        # if self.settings.value("first_launch", True):
-        #     QTimer.singleShot(10, self.start_tutorial)
-        #     self.settings.setValue("first_launch", False)
+        if self.settings.value("first_launch", True):
+            QTimer.singleShot(10, self.start_tutorial)
+            self.settings.setValue("first_launch", False)
 
     @cached_property
     def settings(self):
