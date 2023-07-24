@@ -8,7 +8,7 @@ from napari_deeplabcut import keypoints, _writer
 from skimage.io import imsave
 
 
-@pytest.fixture  # TODO Hack to make this fixture session-scoped
+@pytest.fixture
 def viewer(make_napari_viewer):
     viewer = make_napari_viewer()
     for action in viewer.window.plugins_menu.actions():
