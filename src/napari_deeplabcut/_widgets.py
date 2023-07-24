@@ -375,7 +375,8 @@ class KeypointControls(QWidget):
         launch_tutorial.triggered.connect(self.start_tutorial)
         self.viewer.window.view_menu.addAction(launch_tutorial)
 
-        if self.settings.value("first_launch", True):
+        if (self.settings.value("first_launch", True)
+            and not os.environ.get('hide_tutorial', False)):
             QTimer.singleShot(10, self.start_tutorial)
             self.settings.setValue("first_launch", False)
 

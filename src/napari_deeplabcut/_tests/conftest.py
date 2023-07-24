@@ -1,5 +1,7 @@
 import cv2
 import numpy as np
+import os
+os.environ["hide_tutorial"] = "True"
 import pandas as pd
 import pytest
 from napari_deeplabcut import keypoints, _writer
