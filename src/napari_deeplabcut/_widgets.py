@@ -52,7 +52,7 @@ from napari_deeplabcut.misc import (
 )
 
 
-Tip = namedtuple('Tip', ['msg', 'pos'])
+Tip = namedtuple("Tip", ["msg", "pos"])
 
 
 class Tutorial(QDialog):
@@ -62,20 +62,41 @@ class Tutorial(QDialog):
         self.setWindowTitle("Tutorial")
         self.setModal(True)
         self.setStyleSheet("background:#cdb4db")
+        self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowOpacity(0.95)
         self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
 
         self._current_tip = 0
         self._tips = [
-            Tip("Load a folder of annotated data\n(and optionally a config file if labeling from scratch)\nfrom the menu File > Open File or Open Folder.\nAlternatively, files and folders of images can be dragged\nand dropped onto the main window.", (0.35, 0.15)),
-            Tip("Data layers will be listed at the bottom left;\ntheir visibility can be toggled by clicking on the small eye icon.", (0.1, 0.65)),
-            Tip("Corresponding layer controls can be found at the top left.\nSwitch between labeling and selection mode using the numeric keys 2 and 3,\nor clicking on the + or -> icons.", (0.1, 0.2)),
-            Tip("There are three keypoint labeling modes:\nthe key M can be used to cycle between them.", (0.65, 0.05)),
-            Tip("When done labeling, save your data by selecting the Points layer\nand hitting Ctrl+S (or File > Save Selected Layer(s)...).", (0.1, 0.65)),
-            Tip("Read more at <a href='https://github.com/DeepLabCut/napari-deeplabcut#usage'>napari-deeplabcut</a>", (0.4, 0.4)),
+            Tip(
+                "Load a folder of annotated data\n(and optionally a config file if labeling from scratch)\nfrom the menu File > Open File or Open Folder.\nAlternatively, files and folders of images can be dragged\nand dropped onto the main window.",
+                (0.35, 0.15),
+            ),
+            Tip(
+                "Data layers will be listed at the bottom left;\ntheir visibility can be toggled by clicking on the small eye icon.",
+                (0.1, 0.65),
+            ),
+            Tip(
+                "Corresponding layer controls can be found at the top left.\nSwitch between labeling and selection mode using the numeric keys 2 and 3,\nor clicking on the + or -> icons.",
+                (0.1, 0.2),
+            ),
+            Tip(
+                "There are three keypoint labeling modes:\nthe key M can be used to cycle between them.",
+                (0.65, 0.05),
+            ),
+            Tip(
+                "When done labeling, save your data by selecting the Points layer\nand hitting Ctrl+S (or File > Save Selected Layer(s)...).",
+                (0.1, 0.65),
+            ),
+            Tip(
+                "Read more at <a href='https://github.com/DeepLabCut/napari-deeplabcut#usage'>napari-deeplabcut</a>",
+                (0.4, 0.4),
+            ),
         ]
 
-        buttons = QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Abort
+        buttons = (
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Abort
+        )
         self.button_box = QDialogButtonBox(buttons)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
@@ -97,7 +118,9 @@ class Tutorial(QDialog):
             self.reject()
         tip = self._tips[self._current_tip]
         msg = tip.msg
-        if self._current_tip < 5:  # No emoji in the last tip otherwise the hyperlink breaks
+        if (
+            self._current_tip < 5
+        ):  # No emoji in the last tip otherwise the hyperlink breaks
             msg = "💡\n\n" + msg
         self.message.setText(msg)
         self.count.setText(f"Tip {self._current_tip + 1}|{len(self._tips)}")
@@ -173,50 +196,41 @@ def _paste_data(self, store):
 
     if len(self._clipboard.keys()) > 0:
         not_disp = self._slice_input.not_displayed
-        data = deepcopy(self._clipboard['data'])
+        data = deepcopy(self._clipboard["data"])
         offset = [
-            self._slice_indices[i] - self._clipboard['indices'][i]
-            for i in not_disp
+            self._slice_indices[i] - self._clipboard["indices"][i] for i in not_disp
         ]
         data[:, not_disp] = data[:, not_disp] + np.array(offset)
         self._data = np.append(self.data, data, axis=0)
-        self._shown = np.append(
-            self.shown, deepcopy(self._clipboard['shown']), axis=0
-        )
-        self._size = np.append(
-            self.size, deepcopy(self._clipboard['size']), axis=0
-        )
+        self._shown = np.append(self.shown, deepcopy(self._clipboard["shown"]), axis=0)
+        self._size = np.append(self.size, deepcopy(self._clipboard["size"]), axis=0)
         self._symbol = np.append(
-            self.symbol, deepcopy(self._clipboard['symbol']), axis=0
+            self.symbol, deepcopy(self._clipboard["symbol"]), axis=0
         )
 
-        self._feature_table.append(self._clipboard['features'])
+        self._feature_table.append(self._clipboard["features"])
 
-        self.text._paste(**self._clipboard['text'])
+        self.text._paste(**self._clipboard["text"])
 
         self._edge_width = np.append(
             self.edge_width,
-            deepcopy(self._clipboard['edge_width']),
+            deepcopy(self._clipboard["edge_width"]),
             axis=0,
         )
         self._edge._paste(
-            colors=self._clipboard['edge_color'],
-            properties=_features_to_properties(
-                self._clipboard['features']
-            ),
+            colors=self._clipboard["edge_color"],
+            properties=_features_to_properties(self._clipboard["features"]),
         )
         self._face._paste(
-            colors=self._clipboard['face_color'],
-            properties=_features_to_properties(
-                self._clipboard['features']
-            ),
+            colors=self._clipboard["face_color"],
+            properties=_features_to_properties(self._clipboard["features"]),
         )
 
         self._selected_view = list(
-            range(npoints, npoints + len(self._clipboard['data']))
+            range(npoints, npoints + len(self._clipboard["data"]))
         )
         self._selected_data = set(
-            range(totpoints, totpoints + len(self._clipboard['data']))
+            range(totpoints, totpoints + len(self._clipboard["data"]))
         )
         self.refresh()
 
@@ -374,7 +388,9 @@ class KeypointControls(QWidget):
         launch_tutorial.triggered.connect(self.start_tutorial)
         self.viewer.window.view_menu.addAction(launch_tutorial)
 
-        if self.settings.value("first_launch", True):
+        if self.settings.value("first_launch", True) and not os.environ.get(
+            "hide_tutorial", False
+        ):
             QTimer.singleShot(10, self.start_tutorial)
             self.settings.setValue("first_launch", False)
 
@@ -449,16 +465,17 @@ class KeypointControls(QWidget):
                         "properties": points_layer.properties,
                     },
                 )
-                df = df.iloc[ind:ind + 1]
+                df = df.iloc[ind : ind + 1]
                 df.index = pd.MultiIndex.from_tuples([Path(output_path).parts[-3:]])
-                filepath = os.path.join(image_layer.metadata["root"], "machinelabels-iter0.h5")
+                filepath = os.path.join(
+                    image_layer.metadata["root"], "machinelabels-iter0.h5"
+                )
                 if Path(filepath).is_file():
                     df_prev = pd.read_hdf(filepath)
                     guarantee_multiindex_rows(df_prev)
                     df = pd.concat([df_prev, df])
                     df = df[~df.index.duplicated(keep="first")]
                 df.to_hdf(filepath, key="machinelabels")
-
 
     def _store_crop_coordinates(self, *args):
         if not (project_path := self._images_meta.get("project")):
@@ -605,8 +622,10 @@ class KeypointControls(QWidget):
                 new_keypoint_set = set(layer.metadata["header"].bodyparts)
                 diff = new_keypoint_set.difference(current_keypoint_set)
                 if diff:
-                    answer = QMessageBox.question(self, "", "Do you want to display the new keypoints only?")
-                    if answer  == QMessageBox.Yes:
+                    answer = QMessageBox.question(
+                        self, "", "Do you want to display the new keypoints only?"
+                    )
+                    if answer == QMessageBox.Yes:
                         self.viewer.layers[-2].shown = False
 
                     self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
@@ -620,9 +639,13 @@ class KeypointControls(QWidget):
 
                 # Always update the colormap to reflect the one in the config.yaml file
                 for _layer, store in self._stores.items():
-                    _layer.metadata["face_color_cycles"] = layer.metadata["face_color_cycles"]
+                    _layer.metadata["face_color_cycles"] = layer.metadata[
+                        "face_color_cycles"
+                    ]
                     _layer.face_color = "label"
-                    _layer.face_color_cycle = layer.metadata["face_color_cycles"]["label"]
+                    _layer.face_color_cycle = layer.metadata["face_color_cycles"][
+                        "label"
+                    ]
                     _layer.events.face_color()
                     store.layer = _layer
                 self._update_color_scheme()
@@ -795,7 +818,9 @@ class KeypointsDropdownMenu(QWidget):
             menu.currentTextChanged.connect(self.refresh_label_menu)
             self.menus["id"] = menu
         self.menus["label"] = create_dropdown_menu(
-            self.store, self.id2label[id_], "label",
+            self.store,
+            self.id2label[id_],
+            "label",
         )
 
     def _update_items(self):
@@ -837,7 +862,9 @@ class KeypointsDropdownMenu(QWidget):
             if keypoint not in already_annotated:
                 unannotated = keypoint
                 break
-        self.store.current_keypoint = unannotated if unannotated else self.store._keypoints[0]
+        self.store.current_keypoint = (
+            unannotated if unannotated else self.store._keypoints[0]
+        )
 
 
 def create_dropdown_menu(store, items, attr):

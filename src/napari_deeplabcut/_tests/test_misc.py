@@ -40,8 +40,7 @@ def test_to_os_dir_sep_invalid():
 
 def test_guarantee_multiindex_rows():
     fake_index = [
-        f"labeled-data/subfolder_{i}/image_{j}"
-        for i in range(3) for j in range(10)
+        f"labeled-data/subfolder_{i}/image_{j}" for i in range(3) for j in range(10)
     ]
     df = pd.DataFrame(index=fake_index)
     misc.guarantee_multiindex_rows(df)
@@ -68,9 +67,15 @@ def test_dlc_header():
     scorer = "me"
     animals = [f"animal_{n}" for n in range(n_animals)]
     keypoints = [f"kpt_{n}" for n in range(n_keypoints)]
-    fake_columns = pd.MultiIndex.from_product([
-        [scorer], animals, keypoints, ["x", "y", "likelihood"],
-    ], names=["scorer", "individuals", "bodyparts", "coords"])
+    fake_columns = pd.MultiIndex.from_product(
+        [
+            [scorer],
+            animals,
+            keypoints,
+            ["x", "y", "likelihood"],
+        ],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
     header = misc.DLCHeader(fake_columns)
     assert header.scorer == scorer
     header.scorer = "you"

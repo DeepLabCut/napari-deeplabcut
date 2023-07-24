@@ -64,8 +64,7 @@ def test_read_config(config_path):
 def test_read_hdf_old_index(tmp_path_factory, fake_keypoints):
     path = str(tmp_path_factory.mktemp("folder") / "data.h5")
     old_index = [
-        f"labeled-data/video/img{i}.png"
-        for i in range(fake_keypoints.shape[0])
+        f"labeled-data/video/img{i}.png" for i in range(fake_keypoints.shape[0])
     ]
     fake_keypoints.index = old_index
     fake_keypoints.to_hdf(path, key="data")
@@ -79,11 +78,13 @@ def test_read_hdf_old_index(tmp_path_factory, fake_keypoints):
 
 def test_read_hdf_new_index(tmp_path_factory, fake_keypoints):
     path = str(tmp_path_factory.mktemp("folder") / "data.h5")
-    new_index = pd.MultiIndex.from_product([
-        ["labeled-data"],
-        ["video"],
-        [f"img{i}.png" for i in range(fake_keypoints.shape[0])]
-    ])
+    new_index = pd.MultiIndex.from_product(
+        [
+            ["labeled-data"],
+            ["video"],
+            [f"img{i}.png" for i in range(fake_keypoints.shape[0])],
+        ]
+    )
     fake_keypoints.index = new_index
     fake_keypoints.to_hdf(path, key="data")
     layers = _reader.read_hdf(path)

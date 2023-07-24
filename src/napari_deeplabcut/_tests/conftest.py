@@ -1,12 +1,15 @@
 import cv2
 import numpy as np
+import os
+
+os.environ["hide_tutorial"] = "True"
 import pandas as pd
 import pytest
 from napari_deeplabcut import keypoints, _writer
 from skimage.io import imsave
 
 
-@pytest.fixture  # TODO Hack to make this fixture session-scoped
+@pytest.fixture
 def viewer(make_napari_viewer):
     viewer = make_napari_viewer()
     for action in viewer.window.plugins_menu.actions():
@@ -22,12 +25,15 @@ def fake_keypoints():
     n_animals = 2
     n_kpts = 3
     data = np.random.rand(n_rows, n_animals * n_kpts * 2)
-    cols = pd.MultiIndex.from_product([
-        ["me"],
-        [f"animal_{i}" for i in range(n_animals)],
-        [f"kpt_{i}" for i in range(n_kpts)],
-        ["x", "y"]
-    ], names=["scorer", "individuals", "bodyparts", "coords"])
+    cols = pd.MultiIndex.from_product(
+        [
+            ["me"],
+            [f"animal_{i}" for i in range(n_animals)],
+            [f"kpt_{i}" for i in range(n_kpts)],
+            ["x", "y"],
+        ],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
     df = pd.DataFrame(data, columns=cols, index=range(n_rows))
     return df
 
@@ -68,11 +74,12 @@ def config_path(tmp_path_factory):
         "colormap": "viridis",
         "video_sets": {
             "fake_video": [],
-        }
+        },
     }
     path = str(tmp_path_factory.mktemp("configs") / "config.yaml")
     _writer._write_config(
-        path, params=cfg,
+        path,
+        params=cfg,
     )
     return path
 
@@ -83,7 +90,7 @@ def video_path(tmp_path_factory):
     h = w = 50
     writer = cv2.VideoWriter(
         output_path,
-        cv2.VideoWriter_fourcc(*'MJPG'),
+        cv2.VideoWriter_fourcc(*"MJPG"),
         2,
         (w, h),
     )
