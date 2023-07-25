@@ -182,6 +182,7 @@ def read_hdf(filename: str) -> List[LayerData]:
     layers = []
     for filename in glob.iglob(filename):
         temp = pd.read_hdf(filename)
+        temp = misc.merge_multiple_scorers(temp)
         header = misc.DLCHeader(temp.columns)
         temp = temp.droplevel("scorer", axis=1)
         if "individuals" not in temp.columns.names:

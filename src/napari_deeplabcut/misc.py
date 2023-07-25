@@ -27,6 +27,34 @@ def encode_categories(
     return inds
 
 
+def merge_multiple_scorers(
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    n_frames = df.shape[0]
+    header = DLCHeader(df.columns)
+    n_scorers = len(header._get_unique("scorer"))
+    if n_scorers == 1:
+        return df
+
+    n_bodyparts = len(header.bodyparts)
+    if "likelihood" in header.coords:
+        # Merge annotations from multiple scorers to keep
+        # detections with highest confidence
+        data = df.to_numpy().reshape((n_frames, n_scorers, n_bodyparts, -1))
+        idx = np.nanargmax(data[..., 2], axis=1)
+        data_best = data[
+            np.arange(n_frames)[:, None], idx, np.arange(n_bodyparts)
+        ].reshape((n_frames, -1))
+        df = pd.DataFrame(
+            data_best,
+            index=df.index,
+            columns=header.columns[: data_best.shape[1]],
+        )
+    else:  # Arbitrarily pick data from the first scorer
+        df = df.loc(axis=1)[: header.scorer]
+    return df
+
+
 def to_os_dir_sep(path: str) -> str:
     """
     Replace all directory separators in `path` with `os.path.sep`.

@@ -1,3 +1,4 @@
+import numpy as np
 import os
 import pandas as pd
 import pytest
@@ -22,6 +23,31 @@ def test_encode_categories():
     assert list(inds) == [0, 1, 2, 3, 0, 1, 2, 3]
     assert map_ == dict(zip(list("abcd"), range(4)))
     inds = misc.encode_categories(categories, return_map=False)
+
+
+def test_merge_multiple_scorers_no_likelihood(fake_keypoints):
+    temp = fake_keypoints.copy(deep=True)
+    temp.columns = temp.columns.set_levels(["you"], level="scorer")
+    df = fake_keypoints.merge(temp, left_index=True, right_index=True)
+    df = misc.merge_multiple_scorers(df)
+    pd.testing.assert_frame_equal(df, fake_keypoints)
+
+
+def test_merge_multiple_scorers(fake_keypoints):
+    new_columns = pd.MultiIndex.from_product(
+        fake_keypoints.columns.levels[:-1] + [["x", "y", "likelihood"]],
+        names=fake_keypoints.columns.names,
+    )
+    fake_keypoints = fake_keypoints.reindex(new_columns, axis=1)
+    fake_keypoints.loc(axis=1)[:, :, :, "likelihood"] = 1
+    temp = fake_keypoints.copy(deep=True)
+    temp.columns = temp.columns.set_levels(["you"], level="scorer")
+    fake_keypoints.iloc[:5] = np.nan
+    temp.iloc[5:] = np.nan
+    df = fake_keypoints.merge(temp, left_index=True, right_index=True)
+    df = misc.merge_multiple_scorers(df)
+    pd.testing.assert_index_equal(df.columns, fake_keypoints.columns)
+    assert not df.isna().any(axis=None)
 
 
 @pytest.mark.parametrize(
