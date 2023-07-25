@@ -46,7 +46,7 @@ def test_point_resize(viewer, points):
 
 
 def test_add_unnanotated(store):
-    store.layer.metadata["controls"].label_mode = 'loop'
+    store.layer.metadata["controls"].label_mode = "loop"
     ind_to_remove = 0
     data = store.layer.data
     store.layer.data = data[data[:, 0] != ind_to_remove]
@@ -59,10 +59,11 @@ def test_add_unnanotated(store):
 
 
 def test_add_quick(store):
-    store.layer.metadata["controls"].label_mode = 'quick'
+    store.layer.metadata["controls"].label_mode = "quick"
     store.current_keypoint = store._keypoints[0]
     coord = store.current_step, -1, -1
     keypoints._add(store, coord=coord)
     np.testing.assert_array_equal(
-        store.layer.data[store.current_step], coord,
+        store.layer.data[store.current_step],
+        coord,
     )

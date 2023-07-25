@@ -5,7 +5,7 @@ from vispy import keys
 
 
 def test_guess_continuous():
-    assert _widgets.guess_continuous(np.array([0.]))
+    assert _widgets.guess_continuous(np.array([0.0]))
     assert not _widgets.guess_continuous(np.array(list("abc")))
 
 
@@ -40,7 +40,7 @@ def test_store_crop_coordinates(viewer, images, config_path):
     viewer.layers.selection.add(images)
     _ = viewer.add_shapes(
         np.random.random((4, 3)),
-        shape_type='rectangle',
+        shape_type="rectangle",
     )
     controls = _widgets.KeypointControls(viewer)
     controls._images_meta = {
@@ -55,9 +55,9 @@ def test_toggle_face_color(viewer, points):
     view = viewer.window._qt_viewer
     # By default, points are colored by individual with multi-animal data
     assert points._face.color_properties.name == "id"
-    view.canvas.events.key_press(key=keys.Key('F'))
+    view.canvas.events.key_press(key=keys.Key("F"))
     assert points._face.color_properties.name == "label"
-    view.canvas.events.key_press(key=keys.Key('F'))
+    view.canvas.events.key_press(key=keys.Key("F"))
     assert points._face.color_properties.name == "id"
 
 
@@ -65,7 +65,7 @@ def test_toggle_edge_color(viewer, points):
     viewer.layers.selection.add(points)
     view = viewer.window._qt_viewer
     np.testing.assert_array_equal(points.edge_width, 0)
-    view.canvas.events.key_press(key=keys.Key('E'))
+    view.canvas.events.key_press(key=keys.Key("E"))
     np.testing.assert_array_equal(points.edge_width, 2)
 
 
@@ -82,7 +82,7 @@ def test_keypoints_dropdown_menu(store):
     widget = _widgets.KeypointsDropdownMenu(store)
     assert "id" in widget.menus
     assert "label" in widget.menus
-    label_menu = widget.menus['label']
+    label_menu = widget.menus["label"]
     label_menu.currentText() == "kpt_0"
     widget.update_menus(event=None)
     label_menu.currentText() == "kpt_2"
@@ -92,7 +92,7 @@ def test_keypoints_dropdown_menu(store):
 
 def test_keypoints_dropdown_menu_smart_reset(store):
     widget = _widgets.KeypointsDropdownMenu(store)
-    label_menu = widget.menus['label']
+    label_menu = widget.menus["label"]
     label_menu.update_to("kpt_2")
     widget._locked = True
     widget.smart_reset(event=None)
