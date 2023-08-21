@@ -227,7 +227,31 @@ def read_hdf(filename: str) -> List[LayerData]:
         metadata["metadata"]["root"] = os.path.split(filename)[0]
         # Store file name in case the layer's name is edited by the user
         metadata["metadata"]["name"] = metadata["name"]
+        
+        limb_pairs = [['nose','LeftForelimb'], 
+                      ['nose', 'RightForelimb'], 
+                      ['LeftForelimb', 'RightForelimb'], 
+                      ['LeftHindlimb', 'RightHindlimb'], 
+                      ['TailBase', 'LeftHindlimb'], 
+                      ['TailBase', 'RightHindlimb'],
+                      ['TailBase', 'Tail1'],
+                      ['Tail1', 'Tail2'],
+                      ['Tail2', 'Tail3']
+        ]
+        n = temp.shape[0]
+        vectors = np.zeros((n*len(limb_pairs), 2, 3))
+        for i, (kpt1, kpt2) in enumerate(limb_pairs):
+            origin = temp.xs(kpt1, level='bodyparts', axis=1).to_numpy()[:,:2]
+            end = temp.xs(kpt2, level='bodyparts', axis=1).to_numpy()[:,:2]
+            vec = end-origin
+            vectors[i*n:(i+1)*n, 0, [2,1]] = origin
+            vectors[i*n:(i+1)*n, 1, [2,1]] = vec
+            vectors[i*n:(i+1)*n, :, 0] = np.arange(temp.shape[0])[:, None]
+
         layers.append((data, metadata, "points"))
+        layers.append((vectors, {'edge_width':1, 'edge_color':'yellow'}, "vectors"))
+
+
     return layers
 
 

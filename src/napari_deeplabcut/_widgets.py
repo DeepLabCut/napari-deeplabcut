@@ -458,10 +458,22 @@ class KeypointControls(QWidget):
         self._matplotlib_cb.setEnabled(False)
         self._matplotlib_cb.stateChanged.connect(self._show_matplotlib_canvas)
         self._matplotlib_canvas = None
+
+        # Add checkbox to show skeleton
+        skeleton_label = QLabel("Show skeleton")
+        self._skeleton_cb = QCheckBox()
+        self._skeleton_cb.setToolTip("toggle skeleton visibility")
+        self._skeleton_cb.setChecked(False)
+        self._skeleton_cb.setEnabled(False)
+        self._skeleton_cb.stateChanged.connect(self._show_skeleton)
+        self._skeleton = None
+
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
 
         hlayout.addWidget(self._matplotlib_cb)
         hlayout.addWidget(matplotlib_label)
+        hlayout.addWidget(self._skeleton_cb)
+        hlayout.addWidget(skeleton_label)
         hlayout.addWidget(self._trail_cb)
         hlayout.addWidget(trail_label)
         hlayout.addWidget(self._view_scheme_cb)
@@ -545,6 +557,12 @@ class KeypointControls(QWidget):
             self._canvas.show()
         else:
             self._canvas.close()
+
+    def _show_skeleton(self, state):
+        if state == Qt.Checked:
+            # Check if "skeleton" and "skeleton_color" are in the config.yaml metadata
+            return True
+
 
     def _form_video_action_menu(self):
         group_box = QGroupBox("Video")
@@ -800,6 +818,7 @@ class KeypointControls(QWidget):
             )
             self._trail_cb.setEnabled(True)
             self._matplotlib_cb.setEnabled(True)
+            self._skeleton_cb.setEnabled(True)
 
             # Hide the color pickers, as colormaps are strictly defined by users
             controls = self.viewer.window.qt_viewer.dockLayerControls
@@ -830,6 +849,7 @@ class KeypointControls(QWidget):
                 menu.destroy()
             self._trail_cb.setEnabled(False)
             self._matplotlib_cb.setEnabled(False)
+            self._skeleton_cb.setEnabled(False)
             self.last_saved_label.hide()
         elif isinstance(layer, Image):
             self._images_meta = dict()
@@ -839,6 +859,7 @@ class KeypointControls(QWidget):
         elif isinstance(layer, Tracks):
             self._trail_cb.setChecked(False)
             self._matplotlib_cb.setChecked(False)
+            self._skeleton_cb.setChecked(False)
             self._trails = None
 
     @register_points_action("Change labeling mode")
