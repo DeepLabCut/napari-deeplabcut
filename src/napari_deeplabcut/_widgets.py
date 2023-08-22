@@ -17,8 +17,8 @@ from napari.layers.utils import color_manager
 from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from qtpy.QtCore import Qt, QTimer, Signal, QSize, QPoint, QSettings
-from qtpy.QtGui import QPainter, QIcon, QAction
+from qtpy.QtCore import Qt, QTimer, Signal, QSize, QPoint, QSettings, QObject, Slot, QThread, QUrl
+from qtpy.QtGui import QPainter, QIcon, QAction, QPixmap
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -29,16 +29,21 @@ from qtpy.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMainWindow,
     QMessageBox,
     QPushButton,
     QRadioButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QStyle,
     QStyleOption,
     QVBoxLayout,
     QWidget,
 )
+from qtpy.QtMultimedia import QMediaPlayer, QVideoSink, QVideoFrame
+from qtpy.QtMultimediaWidgets import QVideoWidget
+
 
 ICON_FOLDER = os.path.join(os.path.dirname(__file__), "assets")
 
@@ -1087,3 +1092,87 @@ class ColorSchemeDisplay(QScrollArea):
         self.scheme_dict = {}
         for i in reversed(range(self._layout.count())):
             self._layout.itemAt(i).widget().deleteLater()
+
+
+class VideoPlayer(QWidget):
+    def __init__(self, parent, video_path):
+        super().__init__(parent)
+
+        self.media_player = QMediaPlayer(self)
+        self.video_widget = QVideoWidget(self)
+        self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.setSource(QUrl(video_path))
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setMinimum(0)
+        self.media_player.durationChanged.connect(lambda x: self.slider.setMaximum(x))
+        self.slider.sliderMoved.connect(self.set_position)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.video_widget)
+        layout.addWidget(self.slider)
+        self.setLayout(layout)
+
+    def set_position(self, pos):
+        self.media_player.setPosition(pos)
+
+
+class FrameWorker(QObject):
+
+    pixmapChanged = Signal(QPixmap)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.ready = True
+
+    @Slot(QVideoFrame)
+    def setVideoFrame(self, frame: QVideoFrame):
+        self.ready = False
+        self.pixmapChanged.emit(QPixmap.fromImage(frame.toImage()))
+        self.ready = True
+
+
+class FrameSender(QObject):
+    frameChanged = Signal(QVideoFrame)
+
+
+class Window(QMainWindow):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.workerThread = QThread()
+        self.player = QMediaPlayer()
+        self.frameSender = FrameSender()
+        self.frameWorker = FrameWorker()
+        self.displayLabel = QLabel()
+
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setMinimum(0)
+        self.player.durationChanged.connect(lambda x: self.slider.setMaximum(x))
+        self.slider.sliderMoved.connect(self.set_position)
+
+        self.frameWorker.moveToThread(self.workerThread)
+        self.workerThread.start()
+
+        self.player.setVideoSink(QVideoSink(self))
+        self.player.videoSink().videoFrameChanged.connect(self.onFramePassedFromPlayer)
+        self.frameSender.frameChanged.connect(self.frameWorker.setVideoFrame)
+        self.frameWorker.pixmapChanged.connect(self.displayLabel.setPixmap)
+        layout = QVBoxLayout()
+        layout.addWidget(self.displayLabel)
+        layout.addWidget(self.slider)
+
+        container = QWidget()
+        container.setLayout(layout)
+        self.setCentralWidget(container)
+
+    def set_position(self, position):
+        self.player.setPosition(position)
+
+    @Slot(QVideoFrame)
+    def onFramePassedFromPlayer(self, frame: QVideoFrame):
+        if self.frameWorker.ready:
+            self.frameSender.frameChanged.emit(frame)
+
+    def closeEvent(self, event):
+        self.workerThread.quit()
+        self.workerThread.wait()
+        super().closeEvent(event)
