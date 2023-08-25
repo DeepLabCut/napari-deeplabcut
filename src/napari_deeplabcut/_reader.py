@@ -249,6 +249,9 @@ def read_hdf(filename: str) -> List[LayerData]:
             vectors[i*n:(i+1)*n, :, 0] = np.arange(temp.shape[0])[:, None]
 
         layers.append((data, metadata, "points"))
+        # Make a dictionary of the colors of the bodyparts based on the colormap
+        # and the bodyparts
+
         layers.append((vectors, {'edge_width':1, 'edge_color':'yellow'}, "vectors"))
 
 

@@ -9,10 +9,6 @@ from pathlib import Path
 from types import MethodType
 from typing import Optional, Sequence, Union
 
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
-from PyQt5.QtWidgets import QSlider
-
 import numpy as np
 from napari._qt.widgets.qt_welcome import QtWelcomeLabel
 from napari.layers import Image, Points, Shapes, Tracks
@@ -294,100 +290,6 @@ def on_close(self, event, widget):
     else:
         event.accept()
 
-class KeypointMatplotlibCanvas(QWidget):
-    """
-    Class about matplotlib canvas in which I will draw the keypoints over a range of frames
-    It will be at the bottom of the screen and will use the keypoints from the range of frames to plot them on a x-y time series.
-    """
-    def __init__(self, napari_viewer):
-        super().__init__()
-
-        self.viewer = napari_viewer
-        self.figure = Figure()
-        self.canvas = FigureCanvas(self.figure)
-        self.ax = self.figure.add_subplot(111)
-        self.vline = self.ax.axvline(0,0,1, color='k', linestyle='--')
-        self.ax.set_xlabel('Frame')
-        self.ax.set_ylabel('Y position')
-        # Add a slot to specify the range of frames to plot
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.setMinimum(50)
-        self.slider.setMaximum(10000)
-        self.slider.setValue(50)
-        self.slider.setTickPosition(QSlider.TicksBelow)
-        self.slider.setTickInterval(50)
-        self.slider_value = QLabel(str(self.slider.value()))
-        self._window = self.slider.value()
-        # Connect slider to window setter
-        self.slider.valueChanged.connect(self.set_window)
-
-        layout = QVBoxLayout()
-        layout.addWidget(self.canvas)
-        layout2 = QHBoxLayout()
-        layout2.addWidget(self.slider)
-        layout2.addWidget(self.slider_value)
-
-        layout.addLayout(layout2)
-        self.setLayout(layout)
-
-        self.frames = []
-        self.keypoints = []
-        self.df = None
-        # Make widget larger
-        self.setMinimumHeight(300)
-        # connect sliders to update plot
-        self.viewer.dims.events.current_step.connect(self.update_plot_range)
-
-        # Run update plot range once to initialize the plot
-        self.update_plot_range(Event(type_name='',value=[self.viewer.dims.current_step[0]]))
-    
-    def set_window(self, value):
-        self._window = value
-        self.slider_value.setText(str(value))
-        self.update_plot_range(Event(type_name='',value=[self.viewer.dims.current_step[0]]))
-        
-
-    def update_plot_range(self, event):
-        
-        value = event.value[0]
-        if self.df is None:
-            points_layer = None
-            for layer in self.viewer.layers:
-                if isinstance(layer, Points):
-                    points_layer = layer
-                    break
-            
-            if points_layer is None:
-                return
-
-            self.df = _form_df(
-                points_layer.data,
-                {
-                    "metadata": points_layer.metadata,
-                    "properties": points_layer.properties,
-                },
-            )
-
-            # Find the bodyparts names
-            bodyparts = self.df.columns.get_level_values('bodyparts').unique()
-            # Get only the body parts that contain the word limb in them
-            limb_bodyparts = [limb for limb in bodyparts if 'limb' in limb.lower()]
-
-            for limb in limb_bodyparts:
-                y = self.df.xs((limb, 'y'), axis=1, level=['bodyparts', 'coords'])
-                x = np.arange(len(y))
-                # color by limb colormap using point layer metadata
-                color = points_layer.metadata['face_color_cycles']['label'][limb]
-                self.ax.plot(x, y, color=color, label=limb)
-
-        start = max(0, value-self._window//2)
-        end = min(value + self._window//2, len(self.df))
-        
-        self.ax.set_xlim(start, end)
-        self.vline.set_xdata(value)
-
-        self.canvas.draw_idle()
-
 class KeypointControls(QWidget):
     def __init__(self, napari_viewer):
         super().__init__()
@@ -451,14 +353,6 @@ class KeypointControls(QWidget):
         self._trail_cb.stateChanged.connect(self._show_trails)
         self._trails = None
 
-        matplotlib_label = QLabel("Show matplotlib canvas")
-        self._matplotlib_cb = QCheckBox()
-        self._matplotlib_cb.setToolTip("toggle matplotlib canvas visibility")
-        self._matplotlib_cb.setChecked(False)
-        self._matplotlib_cb.setEnabled(False)
-        self._matplotlib_cb.stateChanged.connect(self._show_matplotlib_canvas)
-        self._matplotlib_canvas = None
-
         # Add checkbox to show skeleton
         skeleton_label = QLabel("Show skeleton")
         self._skeleton_cb = QCheckBox()
@@ -470,8 +364,6 @@ class KeypointControls(QWidget):
 
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
 
-        hlayout.addWidget(self._matplotlib_cb)
-        hlayout.addWidget(matplotlib_label)
         hlayout.addWidget(self._skeleton_cb)
         hlayout.addWidget(skeleton_label)
         hlayout.addWidget(self._trail_cb)
@@ -512,8 +404,6 @@ class KeypointControls(QWidget):
             QTimer.singleShot(10, self.start_tutorial)
             self.settings.setValue("first_launch", False)
 
-        matplotlib_widget = KeypointMatplotlibCanvas(self.viewer)
-        matplotlib_widget.setVisible(False)
 
 
     @cached_property
@@ -550,13 +440,6 @@ class KeypointControls(QWidget):
         elif self._trails is not None:
             self._trails.visible = False
     
-    def _show_matplotlib_canvas(self, state):
-        if state == Qt.Checked:
-            self._canvas = KeypointMatplotlibCanvas(self.viewer)
-            self.viewer.window.add_dock_widget(self._canvas, name="Trajectory plot", area="bottom")
-            self._canvas.show()
-        else:
-            self._canvas.close()
 
     def _show_skeleton(self, state):
         if state == Qt.Checked:
@@ -817,7 +700,6 @@ class KeypointControls(QWidget):
                 }
             )
             self._trail_cb.setEnabled(True)
-            self._matplotlib_cb.setEnabled(True)
             self._skeleton_cb.setEnabled(True)
 
             # Hide the color pickers, as colormaps are strictly defined by users
@@ -848,7 +730,6 @@ class KeypointControls(QWidget):
                 menu.deleteLater()
                 menu.destroy()
             self._trail_cb.setEnabled(False)
-            self._matplotlib_cb.setEnabled(False)
             self._skeleton_cb.setEnabled(False)
             self.last_saved_label.hide()
         elif isinstance(layer, Image):
@@ -858,7 +739,6 @@ class KeypointControls(QWidget):
                 self.video_widget.setVisible(False)
         elif isinstance(layer, Tracks):
             self._trail_cb.setChecked(False)
-            self._matplotlib_cb.setChecked(False)
             self._skeleton_cb.setChecked(False)
             self._trails = None
 
