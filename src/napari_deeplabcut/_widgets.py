@@ -22,7 +22,7 @@ from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
 from qtpy.QtCore import Qt, QTimer, Signal, QSize, QPoint, QSettings
-from qtpy.QtGui import QPainter, QIcon, QAction
+from qtpy.QtGui import QPainter, QIcon, QAction, QCursor
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -1110,6 +1110,26 @@ class QtWelcomeWidget(QWidget):
         self.sig_dropped.emit(event)
 
 
+class ClickableLabel(QLabel):
+    clicked = Signal(str)
+
+    def __init__(self, text="", color="turquoise", parent=None):
+        super().__init__(text, parent)
+        self._default_style = self.styleSheet()
+        self.color = color
+
+    def mousePressEvent(self, event):
+        self.clicked.emit(self.text())
+
+    def enterEvent(self, event):
+        self.setCursor(QCursor(Qt.PointingHandCursor))
+        self.setStyleSheet(f"color: {self.color}")
+
+    def leaveEvent(self, event):
+        self.unsetCursor()
+        self.setStyleSheet(self._default_style)
+
+
 class LabelPair(QWidget):
     def __init__(self, color: str, name: str, parent: QWidget):
         super().__init__(parent)
@@ -1118,7 +1138,7 @@ class LabelPair(QWidget):
         self._part_name = name
 
         self.color_label = QLabel("", parent=self)
-        self.part_label = QLabel(name, parent=self)
+        self.part_label = ClickableLabel(name, color=color, parent=self)
 
         self.color_label.setToolTip(name)
         self.part_label.setToolTip(name)
@@ -1177,6 +1197,15 @@ class ColorSchemeDisplay(QScrollArea):
         )  # workaround to use setWidget, let me know if there's a better option
 
         self._build()
+
+    @property
+    def labels(self):
+        labels = []
+        for i in range(self._layout.count()):
+            item = self._layout.itemAt(i)
+            if w := item.widget():
+                labels.append(w)
+        return labels
 
     def _build(self):
         self._container.setSizePolicy(
