@@ -9,9 +9,8 @@ from pathlib import Path
 from types import MethodType
 from typing import Optional, Sequence, Union
 
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qtagg import FigureCanvas
 from matplotlib.figure import Figure
-from PyQt5.QtWidgets import QSlider
 
 import numpy as np
 from napari._qt.widgets.qt_welcome import QtWelcomeLabel
@@ -38,6 +37,7 @@ from qtpy.QtWidgets import (
     QRadioButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QStyle,
     QStyleOption,
     QVBoxLayout,
@@ -294,21 +294,23 @@ def on_close(self, event, widget):
     else:
         event.accept()
 
+
 class KeypointMatplotlibCanvas(QWidget):
     """
     Class about matplotlib canvas in which I will draw the keypoints over a range of frames
     It will be at the bottom of the screen and will use the keypoints from the range of frames to plot them on a x-y time series.
     """
-    def __init__(self, napari_viewer):
-        super().__init__()
+
+    def __init__(self, napari_viewer, parent=None):
+        super().__init__(parent=parent)
 
         self.viewer = napari_viewer
         self.figure = Figure()
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111)
-        self.vline = self.ax.axvline(0,0,1, color='k', linestyle='--')
-        self.ax.set_xlabel('Frame')
-        self.ax.set_ylabel('Y position')
+        self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
+        self.ax.set_xlabel("Frame")
+        self.ax.set_ylabel("Y position")
         # Add a slot to specify the range of frames to plot
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setMinimum(50)
@@ -339,16 +341,18 @@ class KeypointMatplotlibCanvas(QWidget):
         self.viewer.dims.events.current_step.connect(self.update_plot_range)
 
         # Run update plot range once to initialize the plot
-        self.update_plot_range(Event(type_name='',value=[self.viewer.dims.current_step[0]]))
-    
+        self.update_plot_range(
+            Event(type_name="", value=[self.viewer.dims.current_step[0]])
+        )
+
     def set_window(self, value):
         self._window = value
         self.slider_value.setText(str(value))
-        self.update_plot_range(Event(type_name='',value=[self.viewer.dims.current_step[0]]))
-        
+        self.update_plot_range(
+            Event(type_name="", value=[self.viewer.dims.current_step[0]])
+        )
 
     def update_plot_range(self, event):
-        
         value = event.value[0]
         if self.df is None:
             points_layer = None
@@ -356,7 +360,7 @@ class KeypointMatplotlibCanvas(QWidget):
                 if isinstance(layer, Points):
                     points_layer = layer
                     break
-            
+
             if points_layer is None:
                 return
 
@@ -369,24 +373,25 @@ class KeypointMatplotlibCanvas(QWidget):
             )
 
             # Find the bodyparts names
-            bodyparts = self.df.columns.get_level_values('bodyparts').unique()
+            bodyparts = self.df.columns.get_level_values("bodyparts").unique()
             # Get only the body parts that contain the word limb in them
-            limb_bodyparts = [limb for limb in bodyparts if 'limb' in limb.lower()]
+            limb_bodyparts = [limb for limb in bodyparts if "limb" in limb.lower()]
 
             for limb in limb_bodyparts:
-                y = self.df.xs((limb, 'y'), axis=1, level=['bodyparts', 'coords'])
+                y = self.df.xs((limb, "y"), axis=1, level=["bodyparts", "coords"])
                 x = np.arange(len(y))
                 # color by limb colormap using point layer metadata
-                color = points_layer.metadata['face_color_cycles']['label'][limb]
+                color = points_layer.metadata["face_color_cycles"]["label"][limb]
                 self.ax.plot(x, y, color=color, label=limb)
 
-        start = max(0, value-self._window//2)
-        end = min(value + self._window//2, len(self.df))
-        
+        start = max(0, value - self._window // 2)
+        end = min(value + self._window // 2, len(self.df))
+
         self.ax.set_xlim(start, end)
         self.vline.set_xdata(value)
 
         self.canvas.draw_idle()
+
 
 class KeypointControls(QWidget):
     def __init__(self, napari_viewer):
@@ -503,7 +508,6 @@ class KeypointControls(QWidget):
         matplotlib_widget = KeypointMatplotlibCanvas(self.viewer)
         matplotlib_widget.setVisible(False)
 
-
     @cached_property
     def settings(self):
         return QSettings()
@@ -537,11 +541,13 @@ class KeypointControls(QWidget):
             self._trails.visible = True
         elif self._trails is not None:
             self._trails.visible = False
-    
+
     def _show_matplotlib_canvas(self, state):
         if state == Qt.Checked:
             self._canvas = KeypointMatplotlibCanvas(self.viewer)
-            self.viewer.window.add_dock_widget(self._canvas, name="Trajectory plot", area="bottom")
+            self.viewer.window.add_dock_widget(
+                self._canvas, name="Trajectory plot", area="bottom"
+            )
             self._canvas.show()
         else:
             self._canvas.close()
