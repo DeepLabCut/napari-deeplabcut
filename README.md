@@ -41,6 +41,9 @@ either by dropping them directly onto the canvas or via the File menu.
 
 The easiest way to get started is to drop a folder (typically a folder from within a DeepLabCut's `labeled-data` directory), and, if labeling from scratch, drop the corresponding `config.yaml` to automatically add a `Points layer` and populate the dropdown menus.
 
+[🎥 DEMO
+](https://youtu.be/hsA9IB5r73E)
+
 **Tools & shortcuts are:**
 
 - `2` and `3`, to easily switch between labeling and selection mode
