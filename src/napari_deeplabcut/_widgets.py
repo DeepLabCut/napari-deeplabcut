@@ -990,7 +990,7 @@ class QtWelcomeWidget(QWidget):
 
 
 class ClickableLabel(QLabel):
-    clicked = Signal()
+    clicked = Signal(str)
 
     def __init__(self, text="", color="turquoise", parent=None):
         super().__init__(text, parent)
@@ -998,7 +998,7 @@ class ClickableLabel(QLabel):
         self.color = color
 
     def mousePressEvent(self, event):
-        self.clicked.emit()
+        self.clicked.emit(self.text())
 
     def enterEvent(self, event):
         self.setCursor(QCursor(Qt.PointingHandCursor))
@@ -1076,6 +1076,15 @@ class ColorSchemeDisplay(QScrollArea):
         )  # workaround to use setWidget, let me know if there's a better option
 
         self._build()
+
+    @property
+    def labels(self):
+        labels = []
+        for i in range(self._layout.count()):
+            item = self._layout.itemAt(i)
+            if w := item.widget():
+                labels.append(w)
+        return labels
 
     def _build(self):
         self._container.setSizePolicy(
