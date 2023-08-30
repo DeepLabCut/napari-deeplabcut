@@ -1017,7 +1017,7 @@ class LabelPair(QWidget):
         self._part_name = name
 
         self.color_label = QLabel("", parent=self)
-        self.part_label = ClickableLabel(name, parent=self)
+        self.part_label = ClickableLabel(name, color=color, parent=self)
 
         self.color_label.setToolTip(name)
         self.part_label.setToolTip(name)
