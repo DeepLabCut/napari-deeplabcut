@@ -310,6 +310,7 @@ class KeypointMatplotlibCanvas(QWidget):
             self.canvas = FigureCanvas()
             self.canvas.figure.set_layout_engine("constrained")
             self.ax = self.canvas.figure.subplots()
+        self.canvas.mpl_connect("button_press_event", self.on_doubleclick)
         self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
         self.ax.set_xlabel("Frame")
         self.ax.set_ylabel("Y position")
@@ -350,6 +351,13 @@ class KeypointMatplotlibCanvas(QWidget):
 
         self.viewer.layers.events.inserted.connect(self._load_dataframe)
         self._lines = {}
+
+    def on_doubleclick(self, event):
+        if event.dblclick:
+            show = list(self._lines.values())[0].get_visible()
+            for l in self._lines.values():
+                l.set_visible(not show)
+            self._refresh_canvas(value=self._n)
 
     def _napari_theme_has_light_bg(self) -> bool:
         """
