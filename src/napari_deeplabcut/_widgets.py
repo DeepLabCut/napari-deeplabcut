@@ -4,13 +4,14 @@ from copy import deepcopy
 from datetime import datetime
 from functools import partial, cached_property
 from math import ceil, log10
+import matplotlib.style as mplstyle
+import napari
 import pandas as pd
 from pathlib import Path
 from types import MethodType
 from typing import Optional, Sequence, Union
 
 from matplotlib.backends.backend_qtagg import FigureCanvas
-from matplotlib.figure import Figure
 
 import numpy as np
 from napari._qt.widgets.qt_welcome import QtWelcomeLabel
@@ -305,9 +306,10 @@ class KeypointMatplotlibCanvas(QWidget):
         super().__init__(parent=parent)
 
         self.viewer = napari_viewer
-        self.figure = Figure()
-        self.canvas = FigureCanvas(self.figure)
-        self.ax = self.figure.add_subplot(111)
+        with mplstyle.context(self.mpl_style_sheet_path):
+            self.canvas = FigureCanvas()
+            self.canvas.figure.set_layout_engine("constrained")
+            self.ax = self.canvas.figure.subplots()
         self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
         self.ax.set_xlabel("Frame")
         self.ax.set_ylabel("Y position")
@@ -341,56 +343,92 @@ class KeypointMatplotlibCanvas(QWidget):
         self.viewer.dims.events.current_step.connect(self.update_plot_range)
 
         # Run update plot range once to initialize the plot
+        self._n = 0
         self.update_plot_range(
             Event(type_name="", value=[self.viewer.dims.current_step[0]])
         )
 
-    def set_window(self, value):
-        self._window = value
-        self.slider_value.setText(str(value))
-        self.update_plot_range(
-            Event(type_name="", value=[self.viewer.dims.current_step[0]])
+        self.viewer.layers.events.inserted.connect(self._load_dataframe)
+        self._lines = {}
+
+    def _napari_theme_has_light_bg(self) -> bool:
+        """
+        Does this theme have a light background?
+
+        Returns
+        -------
+        bool
+            True if theme's background colour has hsl lighter than 50%, False if darker.
+        """
+        theme = napari.utils.theme.get_theme(self.viewer.theme, as_dict=False)
+        _, _, bg_lightness = theme.background.as_hsl_tuple()
+        return bg_lightness > 0.5
+
+    @property
+    def mpl_style_sheet_path(self) -> Path:
+        """
+        Path to the set Matplotlib style sheet.
+        """
+        if self._napari_theme_has_light_bg():
+            return Path(__file__).parent / "styles" / "light.mplstyle"
+        else:
+            return Path(__file__).parent / "styles" / "dark.mplstyle"
+
+    def _load_dataframe(self):
+        points_layer = None
+        for layer in self.viewer.layers:
+            if isinstance(layer, Points):
+                points_layer = layer
+                break
+
+        if points_layer is None:
+            return
+
+        self.viewer.window.add_dock_widget(self, name="Trajectory plot", area="right")
+        self.hide()
+
+        self.df = _form_df(
+            points_layer.data,
+            {
+                "metadata": points_layer.metadata,
+                "properties": points_layer.properties,
+            },
         )
+        for keypoint in self.df.columns.get_level_values("bodyparts").unique():
+            y = self.df.xs((keypoint, "y"), axis=1, level=["bodyparts", "coords"])
+            x = np.arange(len(y))
+            color = points_layer.metadata["face_color_cycles"]["label"][keypoint]
+            (line,) = self.ax.plot(x, y, color=color, label=keypoint)
+            self._lines[keypoint] = line
 
-    def update_plot_range(self, event):
-        value = event.value[0]
-        if self.df is None:
-            points_layer = None
-            for layer in self.viewer.layers:
-                if isinstance(layer, Points):
-                    points_layer = layer
-                    break
+        self._refresh_canvas(value=self._n)
 
-            if points_layer is None:
-                return
+    def _toggle_line_visibility(self, keypoint):
+        artist = self._lines[keypoint]
+        artist.set_visible(not artist.get_visible())
+        self._refresh_canvas(value=self._n)
 
-            self.df = _form_df(
-                points_layer.data,
-                {
-                    "metadata": points_layer.metadata,
-                    "properties": points_layer.properties,
-                },
-            )
-
-            # Find the bodyparts names
-            bodyparts = self.df.columns.get_level_values("bodyparts").unique()
-            # Get only the body parts that contain the word limb in them
-            limb_bodyparts = [limb for limb in bodyparts if "limb" in limb.lower()]
-
-            for limb in limb_bodyparts:
-                y = self.df.xs((limb, "y"), axis=1, level=["bodyparts", "coords"])
-                x = np.arange(len(y))
-                # color by limb colormap using point layer metadata
-                color = points_layer.metadata["face_color_cycles"]["label"][limb]
-                self.ax.plot(x, y, color=color, label=limb)
-
+    def _refresh_canvas(self, value):
         start = max(0, value - self._window // 2)
         end = min(value + self._window // 2, len(self.df))
 
         self.ax.set_xlim(start, end)
         self.vline.set_xdata(value)
+        self.canvas.draw()
 
-        self.canvas.draw_idle()
+    def set_window(self, value):
+        self._window = value
+        self.slider_value.setText(str(value))
+        self.update_plot_range(Event(type_name="", value=[self._n]))
+
+    def update_plot_range(self, event):
+        value = event.value[0]
+        self._n = value
+
+        if self.df is None:
+            return
+
+        self._refresh_canvas(value)
 
 
 class KeypointControls(QWidget):
@@ -457,12 +495,12 @@ class KeypointControls(QWidget):
         self._trails = None
 
         matplotlib_label = QLabel("Show matplotlib canvas")
+        self._matplotlib_canvas = KeypointMatplotlibCanvas(self.viewer)
         self._matplotlib_cb = QCheckBox()
         self._matplotlib_cb.setToolTip("toggle matplotlib canvas visibility")
+        self._matplotlib_cb.stateChanged.connect(self._show_matplotlib_canvas)
         self._matplotlib_cb.setChecked(False)
         self._matplotlib_cb.setEnabled(False)
-        self._matplotlib_cb.stateChanged.connect(self._show_matplotlib_canvas)
-        self._matplotlib_canvas = None
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
 
         hlayout.addWidget(self._matplotlib_cb)
@@ -479,6 +517,11 @@ class KeypointControls(QWidget):
         self._color_scheme_display = self._form_color_scheme_display(self.viewer)
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
         self._view_scheme_cb.toggle()
+        self._display.added.connect(
+            lambda w: w.part_label.clicked.connect(
+                self._matplotlib_canvas._toggle_line_visibility
+            ),
+        )
 
         # Substitute default menu action with custom one
         for action in self.viewer.window.file_menu.actions()[::-1]:
@@ -504,9 +547,6 @@ class KeypointControls(QWidget):
         ):
             QTimer.singleShot(10, self.start_tutorial)
             self.settings.setValue("first_launch", False)
-
-        matplotlib_widget = KeypointMatplotlibCanvas(self.viewer)
-        matplotlib_widget.setVisible(False)
 
     @cached_property
     def settings(self):
@@ -544,13 +584,9 @@ class KeypointControls(QWidget):
 
     def _show_matplotlib_canvas(self, state):
         if state == Qt.Checked:
-            self._canvas = KeypointMatplotlibCanvas(self.viewer)
-            self.viewer.window.add_dock_widget(
-                self._canvas, name="Trajectory plot", area="bottom"
-            )
-            self._canvas.show()
+            self._matplotlib_canvas.show()
         else:
-            self._canvas.close()
+            self._matplotlib_canvas.hide()
 
     def _form_video_action_menu(self):
         group_box = QGroupBox("Video")
@@ -1192,6 +1228,8 @@ class LabelPair(QWidget):
 
 
 class ColorSchemeDisplay(QScrollArea):
+    added = Signal(object)
+
     def __init__(self, parent):
         super().__init__(parent)
 
@@ -1235,9 +1273,9 @@ class ColorSchemeDisplay(QScrollArea):
     def add_entry(self, name, color):
         self.scheme_dict.update({name: color})
 
-        self._layout.addWidget(
-            LabelPair(color, name, self), alignment=Qt.AlignmentFlag.AlignLeft
-        )
+        widget = LabelPair(color, name, self)
+        self._layout.addWidget(widget, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.added.emit(widget)
 
     def reset(self):
         self.scheme_dict = {}
