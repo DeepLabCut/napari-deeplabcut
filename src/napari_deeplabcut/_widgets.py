@@ -354,9 +354,10 @@ class KeypointMatplotlibCanvas(QWidget):
 
     def on_doubleclick(self, event):
         if event.dblclick:
-            show = list(self._lines.values())[0].get_visible()
-            for l in self._lines.values():
-                l.set_visible(not show)
+            show = list(self._lines.values())[0][0].get_visible()
+            for lines in self._lines.values():
+                for l in lines:
+                    l.set_visible(not show)
             self._refresh_canvas(value=self._n)
 
     def _napari_theme_has_light_bg(self) -> bool:
@@ -406,14 +407,14 @@ class KeypointMatplotlibCanvas(QWidget):
             y = self.df.xs((keypoint, "y"), axis=1, level=["bodyparts", "coords"])
             x = np.arange(len(y))
             color = points_layer.metadata["face_color_cycles"]["label"][keypoint]
-            (line,) = self.ax.plot(x, y, color=color, label=keypoint)
-            self._lines[keypoint] = line
+            lines = self.ax.plot(x, y, color=color, label=keypoint)
+            self._lines[keypoint] = lines
 
         self._refresh_canvas(value=self._n)
 
     def _toggle_line_visibility(self, keypoint):
-        artist = self._lines[keypoint]
-        artist.set_visible(not artist.get_visible())
+        for artist in self._lines[keypoint]:
+            artist.set_visible(not artist.get_visible())
         self._refresh_canvas(value=self._n)
 
     def _refresh_canvas(self, value):
