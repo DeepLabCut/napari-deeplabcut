@@ -11,7 +11,7 @@ from pathlib import Path
 from types import MethodType
 from typing import Optional, Sequence, Union
 
-from matplotlib.backends.backend_qtagg import FigureCanvas
+from matplotlib.backends.backend_qtagg import FigureCanvas, NavigationToolbar2QT
 
 import numpy as np
 from napari._qt.widgets.qt_welcome import QtWelcomeLabel
@@ -296,6 +296,40 @@ def on_close(self, event, widget):
         event.accept()
 
 
+# Class taken from https://github.com/matplotlib/napari-matplotlib/blob/53aa5ec95c1f3901e21dedce8347d3f95efe1f79/src/napari_matplotlib/base.py#L309
+class NapariNavigationToolbar(NavigationToolbar2QT):
+    """Custom Toolbar style for Napari."""
+
+    def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        self.setIconSize(QSize(28, 28))
+
+    def _update_buttons_checked(self) -> None:
+        """Update toggle tool icons when selected/unselected."""
+        super()._update_buttons_checked()
+        icon_dir = self.parentWidget()._get_path_to_icon()
+
+        # changes pan/zoom icons depending on state (checked or not)
+        if "pan" in self._actions:
+            if self._actions["pan"].isChecked():
+                self._actions["pan"].setIcon(
+                    QIcon(os.path.join(icon_dir, "Pan_checked.png"))
+                )
+            else:
+                self._actions["pan"].setIcon(
+                    QIcon(os.path.join(icon_dir, "Pan.png"))
+                )
+        if "zoom" in self._actions:
+            if self._actions["zoom"].isChecked():
+                self._actions["zoom"].setIcon(
+                    QIcon(os.path.join(icon_dir, "Zoom_checked.png"))
+                )
+            else:
+                self._actions["zoom"].setIcon(
+                    QIcon(os.path.join(icon_dir, "Zoom.png"))
+                )
+
+
 class KeypointMatplotlibCanvas(QWidget):
     """
     Class about matplotlib canvas in which I will draw the keypoints over a range of frames
@@ -310,6 +344,8 @@ class KeypointMatplotlibCanvas(QWidget):
             self.canvas = FigureCanvas()
             self.canvas.figure.set_layout_engine("constrained")
             self.ax = self.canvas.figure.subplots()
+        self.toolbar = NapariNavigationToolbar(self.canvas, parent=self)
+        self._replace_toolbar_icons()
         self.canvas.mpl_connect("button_press_event", self.on_doubleclick)
         self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
         self.ax.set_xlabel("Frame")
@@ -328,6 +364,7 @@ class KeypointMatplotlibCanvas(QWidget):
 
         layout = QVBoxLayout()
         layout.addWidget(self.canvas)
+        layout.addWidget(self.toolbar)
         layout2 = QHBoxLayout()
         layout2.addWidget(self.slider)
         layout2.addWidget(self.slider_value)
@@ -382,6 +419,40 @@ class KeypointMatplotlibCanvas(QWidget):
             return Path(__file__).parent / "styles" / "light.mplstyle"
         else:
             return Path(__file__).parent / "styles" / "dark.mplstyle"
+
+    def _get_path_to_icon(self) -> Path:
+        """
+        Get the icons directory (which is theme-dependent).
+
+        Icons modified from
+        https://github.com/matplotlib/matplotlib/tree/main/lib/matplotlib/mpl-data/images
+        """
+        icon_root = Path(__file__).parent / "assets"
+        if self._napari_theme_has_light_bg():
+            return icon_root / "black"
+        else:
+            return icon_root / "white"
+
+    def _replace_toolbar_icons(self) -> None:
+        """
+        Modifies toolbar icons to match the napari theme, and add some tooltips.
+        """
+        icon_dir = self._get_path_to_icon()
+        for action in self.toolbar.actions():
+            text = action.text()
+            if text == "Pan":
+                action.setToolTip(
+                    "Pan/Zoom: Left button pans; Right button zooms; "
+                    "Click once to activate; Click again to deactivate"
+                )
+            if text == "Zoom":
+                action.setToolTip(
+                    "Zoom to rectangle; Click once to activate; "
+                    "Click again to deactivate"
+                )
+            if len(text) > 0:  # i.e. not a separator item
+                icon_path = os.path.join(icon_dir, text + ".png")
+                action.setIcon(QIcon(icon_path))
 
     def _load_dataframe(self):
         points_layer = None
