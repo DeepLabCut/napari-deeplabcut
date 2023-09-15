@@ -41,11 +41,8 @@ class LabelMode(CycleEnum):
         clicking to add an already annotated point has no effect.
     QUICK: similar to SEQUENTIAL, but trying to add an already
         annotated point actually moves it to the cursor location.
-    LOOP: the first point is placed frame by frame, then it wraps
-        to the next label at the end and restart from frame 1, etc.
-        Unless the keypoint selection is locked, the dropdown menu is
-        automatically set to the first unlabeled keypoint of
-        the current frame.
+    LOOP: the currently selected point is placed frame after frame,
+        before wrapping at the end to frame 1, etc.
     """
 
     SEQUENTIAL = auto()
@@ -63,11 +60,8 @@ TOOLTIPS = {
     "clicking to add an already annotated point has no effect.",
     "QUICK": "Similar to SEQUENTIAL, but trying to add an already\n"
     "annotated point actually moves it to the cursor location.",
-    "LOOP": "The first point is placed frame by frame, then it wraps\n"
-    "to the next label at the end and restart from frame 1, etc.\n"
-    "Unless the keypoint selection is locked, the dropdown menu is\n"
-    "automatically set to the first unlabeled keypoint of\n"
-    "the current frame.",
+    "LOOP": "The currently selected point is placed frame after frame,\n"
+    "before wrapping at the end to frame 1, etc.",
 }
 
 

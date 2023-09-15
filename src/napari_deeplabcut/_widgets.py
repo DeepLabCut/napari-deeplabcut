@@ -18,8 +18,8 @@ from napari.layers.utils import color_manager
 from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from qtpy.QtCore import Qt, QTimer, Signal, QSize, QPoint, QSettings
-from qtpy.QtGui import QPainter, QIcon, QAction, QCursor
+from qtpy.QtCore import Qt, QTimer, Signal, QPoint, QSettings
+from qtpy.QtGui import QPainter, QAction, QCursor
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -40,8 +40,6 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-ICON_FOLDER = os.path.join(os.path.dirname(__file__), "assets")
 
 from napari_deeplabcut import keypoints
 from napari_deeplabcut._reader import _load_config
@@ -764,8 +762,15 @@ class KeypointControls(QWidget):
     def label_mode(self, mode: Union[str, keypoints.LabelMode]):
         self._label_mode = keypoints.LabelMode(mode)
         self.viewer.status = self.label_mode
+        mode_ = str(mode)
+        if mode_ == "loop":
+            for menu in self._menus:
+                menu._locked = True
+        else:
+            for menu in self._menus:
+                menu._locked = False
         for btn in self._radio_group.buttons():
-            if btn.text() == str(mode):
+            if btn.text() == mode_:
                 btn.setChecked(True)
                 break
 
@@ -827,11 +832,6 @@ class KeypointsDropdownMenu(QWidget):
         layout2 = QVBoxLayout()
         for menu in self.menus.values():
             layout2.addWidget(menu)
-        self.lock_button = QPushButton("Lock selection")
-        self.lock_button.setIcon(QIcon(os.path.join(ICON_FOLDER, "unlock.svg")))
-        self.lock_button.setIconSize(QSize(24, 24))
-        self.lock_button.clicked.connect(self._lock_current_keypoint)
-        layout2.addWidget(self.lock_button)
         group_box.setLayout(layout2)
         layout1.addWidget(group_box)
         self.setLayout(layout1)
@@ -861,15 +861,6 @@ class KeypointsDropdownMenu(QWidget):
             self.menus["id"].update_items(list(self.id2label))
         self.menus["label"].update_items(self.id2label[id_])
 
-    def _lock_current_keypoint(self):
-        self._locked = not self._locked
-        if self._locked:
-            self.lock_button.setText("Unlock selection")
-            self.lock_button.setIcon(QIcon(os.path.join(ICON_FOLDER, "lock.svg")))
-        else:
-            self.lock_button.setText("Lock selection")
-            self.lock_button.setIcon(QIcon(os.path.join(ICON_FOLDER, "unlock.svg")))
-
     def update_menus(self, event):
         keypoint = self.store.current_keypoint
         for attr, menu in self.menus.items():
@@ -886,7 +877,7 @@ class KeypointsDropdownMenu(QWidget):
 
     def smart_reset(self, event):
         """Set current keypoint to the first unlabeled one."""
-        if self._locked:
+        if self._locked:  # The currently selected point is not updated
             return
         unannotated = ""
         already_annotated = self.store.annotated_keypoints
