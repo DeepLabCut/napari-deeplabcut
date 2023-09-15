@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime
 from functools import partial, cached_property
 from math import ceil, log10
+import matplotlib.pyplot as plt
 import matplotlib.style as mplstyle
 import napari
 import pandas as pd
@@ -21,8 +22,8 @@ from napari.layers.utils import color_manager
 from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from qtpy.QtCore import Qt, QTimer, Signal, QSize, QPoint, QSettings
-from qtpy.QtGui import QPainter, QIcon, QAction, QCursor
+from qtpy.QtCore import Qt, QTimer, Signal, QPoint, QSettings
+from qtpy.QtGui import QPainter, QAction, QCursor
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -45,8 +46,6 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-ICON_FOLDER = os.path.join(os.path.dirname(__file__), "assets")
-
 from napari_deeplabcut import keypoints
 from napari_deeplabcut._reader import _load_config
 from napari_deeplabcut._writer import _write_config, _write_image, _form_df
@@ -54,6 +53,7 @@ from napari_deeplabcut.misc import (
     encode_categories,
     to_os_dir_sep,
     guarantee_multiindex_rows,
+    build_color_cycles
 )
 
 
@@ -622,6 +622,13 @@ class KeypointControls(QWidget):
         launch_tutorial.triggered.connect(self.start_tutorial)
         self.viewer.window.view_menu.addAction(launch_tutorial)
 
+        # Hide some unused viewer buttons
+        self.viewer.window._qt_viewer.viewerButtons.gridViewButton.hide()
+        self.viewer.window._qt_viewer.viewerButtons.rollDimsButton.hide()
+        self.viewer.window._qt_viewer.viewerButtons.transposeDimsButton.hide()
+        self.viewer.window._qt_viewer.layerButtons.newPointsButton.setDisabled(True)
+        self.viewer.window._qt_viewer.layerButtons.newLabelsButton.setDisabled(True)
+
         if self.settings.value("first_launch", True) and not os.environ.get(
             "hide_tutorial", False
         ):
@@ -650,13 +657,17 @@ class KeypointControls(QWidget):
                 store = list(self._stores.values())[0]
                 inds = encode_categories(store.layer.properties["label"])
                 temp = np.c_[inds, store.layer.data]
+                cmap = "viridis"
+                for layer in self.viewer.layers:
+                    if isinstance(layer, Points) and layer.metadata:
+                        cmap = layer.metadata["colormap_name"]
                 self._trails = self.viewer.add_tracks(
                     temp,
                     tail_length=50,
                     head_length=50,
                     tail_width=6,
                     name="trails",
-                    colormap="viridis",
+                    colormap=cmap,
                 )
             self._trails.visible = True
         elif self._trails is not None:
@@ -933,6 +944,11 @@ class KeypointControls(QWidget):
             # Hide out of slice checkbox
             point_controls.outOfSliceCheckBox.hide()
             point_controls.layout().itemAt(15).widget().hide()
+            # Add dropdown menu for colormap picking
+            colormap_selector = DropdownMenu(plt.colormaps, self)
+            colormap_selector.update_to(layer.metadata["colormap_name"])
+            colormap_selector.currentTextChanged.connect(self._update_colormap)
+            point_controls.layout().addRow("colormap", colormap_selector)
 
         for layer_ in self.viewer.layers:
             if not isinstance(layer_, Image):
@@ -963,6 +979,20 @@ class KeypointControls(QWidget):
             self._matplotlib_cb.setChecked(False)
             self._trails = None
 
+    def _update_colormap(self, colormap_name):
+        for layer in self.viewer.layers:
+            if isinstance(layer, Points) and layer.metadata:
+                face_color_cycle_maps = build_color_cycles(
+                    layer.metadata["header"], colormap_name,
+                )
+                layer.metadata["face_color_cycles"] = face_color_cycle_maps
+                face_color_prop = layer._face.color_properties.name
+                layer.face_color = face_color_prop
+                layer.face_color_cycle = face_color_cycle_maps[face_color_prop]
+                layer.events.face_color()
+                self._update_color_scheme()
+                break
+
     @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):
         self.label_mode = next(keypoints.LabelMode)
@@ -975,8 +1005,15 @@ class KeypointControls(QWidget):
     def label_mode(self, mode: Union[str, keypoints.LabelMode]):
         self._label_mode = keypoints.LabelMode(mode)
         self.viewer.status = self.label_mode
+        mode_ = str(mode)
+        if mode_ == "loop":
+            for menu in self._menus:
+                menu._locked = True
+        else:
+            for menu in self._menus:
+                menu._locked = False
         for btn in self._radio_group.buttons():
-            if btn.text() == str(mode):
+            if btn.text() == mode_:
                 btn.setChecked(True)
                 break
 
@@ -1038,11 +1075,6 @@ class KeypointsDropdownMenu(QWidget):
         layout2 = QVBoxLayout()
         for menu in self.menus.values():
             layout2.addWidget(menu)
-        self.lock_button = QPushButton("Lock selection")
-        self.lock_button.setIcon(QIcon(os.path.join(ICON_FOLDER, "unlock.svg")))
-        self.lock_button.setIconSize(QSize(24, 24))
-        self.lock_button.clicked.connect(self._lock_current_keypoint)
-        layout2.addWidget(self.lock_button)
         group_box.setLayout(layout2)
         layout1.addWidget(group_box)
         self.setLayout(layout1)
@@ -1072,15 +1104,6 @@ class KeypointsDropdownMenu(QWidget):
             self.menus["id"].update_items(list(self.id2label))
         self.menus["label"].update_items(self.id2label[id_])
 
-    def _lock_current_keypoint(self):
-        self._locked = not self._locked
-        if self._locked:
-            self.lock_button.setText("Unlock selection")
-            self.lock_button.setIcon(QIcon(os.path.join(ICON_FOLDER, "lock.svg")))
-        else:
-            self.lock_button.setText("Lock selection")
-            self.lock_button.setIcon(QIcon(os.path.join(ICON_FOLDER, "unlock.svg")))
-
     def update_menus(self, event):
         keypoint = self.store.current_keypoint
         for attr, menu in self.menus.items():
@@ -1097,7 +1120,7 @@ class KeypointsDropdownMenu(QWidget):
 
     def smart_reset(self, event):
         """Set current keypoint to the first unlabeled one."""
-        if self._locked:
+        if self._locked:  # The currently selected point is not updated
             return
         unannotated = ""
         already_annotated = self.store.annotated_keypoints
@@ -1360,4 +1383,5 @@ class ColorSchemeDisplay(QScrollArea):
     def reset(self):
         self.scheme_dict = {}
         for i in reversed(range(self._layout.count())):
-            self._layout.itemAt(i).widget().deleteLater()
+            w = self._layout.itemAt(i).widget()
+            self._layout.removeWidget(w)

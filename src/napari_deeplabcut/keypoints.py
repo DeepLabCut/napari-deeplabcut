@@ -5,6 +5,8 @@ from typing import List, Sequence
 import numpy as np
 from napari._qt.layer_controls.qt_points_controls import QtPointsControls
 from napari.layers import Points
+from napari.layers.points._points_constants import SYMBOL_TRANSLATION_INVERTED
+from napari.layers.points._points_utils import coerce_symbols
 
 from napari_deeplabcut.misc import CycleEnum
 
@@ -19,7 +21,17 @@ def _change_size(self, value):
         self.layer.events.size()
 
 
-QtPointsControls.changeSize = _change_size
+def _change_symbol(self, text):
+    symbol = coerce_symbols(np.array([SYMBOL_TRANSLATION_INVERTED[text]]))[0]
+    self.layer._current_symbol = symbol
+    if self.layer._update_properties:
+        self.layer.symbol = symbol
+        self.layer.events.symbol()
+    self.layer.events.current_symbol()
+
+
+QtPointsControls.changeCurrentSize = _change_size
+QtPointsControls.changeCurrentSymbol = _change_symbol
 
 
 class LabelMode(CycleEnum):
@@ -29,11 +41,8 @@ class LabelMode(CycleEnum):
         clicking to add an already annotated point has no effect.
     QUICK: similar to SEQUENTIAL, but trying to add an already
         annotated point actually moves it to the cursor location.
-    LOOP: the first point is placed frame by frame, then it wraps
-        to the next label at the end and restart from frame 1, etc.
-        Unless the keypoint selection is locked, the dropdown menu is
-        automatically set to the first unlabeled keypoint of
-        the current frame.
+    LOOP: the currently selected point is placed frame after frame,
+        before wrapping at the end to frame 1, etc.
     """
 
     SEQUENTIAL = auto()
@@ -51,11 +60,8 @@ TOOLTIPS = {
     "clicking to add an already annotated point has no effect.",
     "QUICK": "Similar to SEQUENTIAL, but trying to add an already\n"
     "annotated point actually moves it to the cursor location.",
-    "LOOP": "The first point is placed frame by frame, then it wraps\n"
-    "to the next label at the end and restart from frame 1, etc.\n"
-    "Unless the keypoint selection is locked, the dropdown menu is\n"
-    "automatically set to the first unlabeled keypoint of\n"
-    "the current frame.",
+    "LOOP": "The currently selected point is placed frame after frame,\n"
+    "before wrapping at the end to frame 1, etc.",
 }
 
 

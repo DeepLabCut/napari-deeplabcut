@@ -124,12 +124,7 @@ def _populate_metadata(
         ids = header.individuals
     if likelihood is None:
         likelihood = np.ones(len(labels))
-    label_colors = misc.build_color_cycle(len(header.bodyparts), colormap)
-    id_colors = misc.build_color_cycle(len(header.individuals), colormap)
-    face_color_cycle_maps = {
-        "label": dict(zip(header.bodyparts, label_colors)),
-        "id": dict(zip(header.individuals, id_colors)),
-    }
+    face_color_cycle_maps = misc.build_color_cycles(header, colormap)
     face_color_prop = "id" if ids[0] else "label"
     return {
         "name": "keypoints",
@@ -151,6 +146,7 @@ def _populate_metadata(
         "metadata": {
             "header": header,
             "face_color_cycles": face_color_cycle_maps,
+            "colormap_name": colormap,
             "paths": paths or [],
         },
     }

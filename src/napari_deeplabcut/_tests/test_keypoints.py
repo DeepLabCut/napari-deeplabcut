@@ -47,7 +47,7 @@ def test_point_resize(viewer, points):
     layer = viewer.layers[0]
     controls = keypoints.QtPointsControls(layer)
     new_size = 10
-    controls.changeSize(new_size)
+    controls.changeCurrentSize(new_size)
     np.testing.assert_array_equal(points.size, new_size)
 
 
