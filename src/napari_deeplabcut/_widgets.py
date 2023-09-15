@@ -61,7 +61,7 @@ class Tutorial(QDialog):
         self.setParent(parent)
         self.setWindowTitle("Tutorial")
         self.setModal(True)
-        self.setStyleSheet("background:#cdb4db")
+        self.setStyleSheet("background:#361AE5")
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowOpacity(0.95)
         self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
