@@ -5,6 +5,8 @@ from typing import List, Sequence
 import numpy as np
 from napari._qt.layer_controls.qt_points_controls import QtPointsControls
 from napari.layers import Points
+from napari.layers.points._points_constants import SYMBOL_TRANSLATION_INVERTED
+from napari.layers.points._points_utils import coerce_symbols
 
 from napari_deeplabcut.misc import CycleEnum
 
@@ -19,7 +21,17 @@ def _change_size(self, value):
         self.layer.events.size()
 
 
+def _change_symbol(self, text):
+    symbol = coerce_symbols(np.array([SYMBOL_TRANSLATION_INVERTED[text]]))[0]
+    self.layer._current_symbol = symbol
+    if self.layer._update_properties:
+        self.layer.symbol = symbol
+        self.layer.events.symbol()
+    self.layer.events.current_symbol()
+
+
 QtPointsControls.changeCurrentSize = _change_size
+QtPointsControls.changeCurrentSymbol = _change_symbol
 
 
 class LabelMode(CycleEnum):
