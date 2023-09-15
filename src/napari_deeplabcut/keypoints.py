@@ -19,7 +19,7 @@ def _change_size(self, value):
         self.layer.events.size()
 
 
-QtPointsControls.changeSize = _change_size
+QtPointsControls.changeCurrentSize = _change_size
 
 
 class LabelMode(CycleEnum):
