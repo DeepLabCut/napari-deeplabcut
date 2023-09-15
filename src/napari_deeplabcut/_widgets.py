@@ -5,10 +5,14 @@ from datetime import datetime
 from functools import partial, cached_property
 from math import ceil, log10
 import matplotlib.pyplot as plt
+import matplotlib.style as mplstyle
+import napari
 import pandas as pd
 from pathlib import Path
 from types import MethodType
 from typing import Optional, Sequence, Union
+
+from matplotlib.backends.backend_qtagg import FigureCanvas, NavigationToolbar2QT
 
 import numpy as np
 from napari._qt.widgets.qt_welcome import QtWelcomeLabel
@@ -35,6 +39,7 @@ from qtpy.QtWidgets import (
     QRadioButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QStyle,
     QStyleOption,
     QVBoxLayout,
@@ -61,7 +66,7 @@ class Tutorial(QDialog):
         self.setParent(parent)
         self.setWindowTitle("Tutorial")
         self.setModal(True)
-        self.setStyleSheet("background:#cdb4db")
+        self.setStyleSheet("background:#361AE5")
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowOpacity(0.95)
         self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
@@ -291,6 +296,221 @@ def on_close(self, event, widget):
         event.accept()
 
 
+# Class taken from https://github.com/matplotlib/napari-matplotlib/blob/53aa5ec95c1f3901e21dedce8347d3f95efe1f79/src/napari_matplotlib/base.py#L309
+class NapariNavigationToolbar(NavigationToolbar2QT):
+    """Custom Toolbar style for Napari."""
+
+    def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        self.setIconSize(QSize(28, 28))
+
+    def _update_buttons_checked(self) -> None:
+        """Update toggle tool icons when selected/unselected."""
+        super()._update_buttons_checked()
+        icon_dir = self.parentWidget()._get_path_to_icon()
+
+        # changes pan/zoom icons depending on state (checked or not)
+        if "pan" in self._actions:
+            if self._actions["pan"].isChecked():
+                self._actions["pan"].setIcon(
+                    QIcon(os.path.join(icon_dir, "Pan_checked.png"))
+                )
+            else:
+                self._actions["pan"].setIcon(
+                    QIcon(os.path.join(icon_dir, "Pan.png"))
+                )
+        if "zoom" in self._actions:
+            if self._actions["zoom"].isChecked():
+                self._actions["zoom"].setIcon(
+                    QIcon(os.path.join(icon_dir, "Zoom_checked.png"))
+                )
+            else:
+                self._actions["zoom"].setIcon(
+                    QIcon(os.path.join(icon_dir, "Zoom.png"))
+                )
+
+
+class KeypointMatplotlibCanvas(QWidget):
+    """
+    Class about matplotlib canvas in which I will draw the keypoints over a range of frames
+    It will be at the bottom of the screen and will use the keypoints from the range of frames to plot them on a x-y time series.
+    """
+
+    def __init__(self, napari_viewer, parent=None):
+        super().__init__(parent=parent)
+
+        self.viewer = napari_viewer
+        with mplstyle.context(self.mpl_style_sheet_path):
+            self.canvas = FigureCanvas()
+            self.canvas.figure.set_layout_engine("constrained")
+            self.ax = self.canvas.figure.subplots()
+        self.toolbar = NapariNavigationToolbar(self.canvas, parent=self)
+        self._replace_toolbar_icons()
+        self.canvas.mpl_connect("button_press_event", self.on_doubleclick)
+        self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
+        self.ax.set_xlabel("Frame")
+        self.ax.set_ylabel("Y position")
+        # Add a slot to specify the range of frames to plot
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setMinimum(50)
+        self.slider.setMaximum(10000)
+        self.slider.setValue(50)
+        self.slider.setTickPosition(QSlider.TicksBelow)
+        self.slider.setTickInterval(50)
+        self.slider_value = QLabel(str(self.slider.value()))
+        self._window = self.slider.value()
+        # Connect slider to window setter
+        self.slider.valueChanged.connect(self.set_window)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.canvas)
+        layout.addWidget(self.toolbar)
+        layout2 = QHBoxLayout()
+        layout2.addWidget(self.slider)
+        layout2.addWidget(self.slider_value)
+
+        layout.addLayout(layout2)
+        self.setLayout(layout)
+
+        self.frames = []
+        self.keypoints = []
+        self.df = None
+        # Make widget larger
+        self.setMinimumHeight(300)
+        # connect sliders to update plot
+        self.viewer.dims.events.current_step.connect(self.update_plot_range)
+
+        # Run update plot range once to initialize the plot
+        self._n = 0
+        self.update_plot_range(
+            Event(type_name="", value=[self.viewer.dims.current_step[0]])
+        )
+
+        self.viewer.layers.events.inserted.connect(self._load_dataframe)
+        self._lines = {}
+
+    def on_doubleclick(self, event):
+        if event.dblclick:
+            show = list(self._lines.values())[0][0].get_visible()
+            for lines in self._lines.values():
+                for l in lines:
+                    l.set_visible(not show)
+            self._refresh_canvas(value=self._n)
+
+    def _napari_theme_has_light_bg(self) -> bool:
+        """
+        Does this theme have a light background?
+
+        Returns
+        -------
+        bool
+            True if theme's background colour has hsl lighter than 50%, False if darker.
+        """
+        theme = napari.utils.theme.get_theme(self.viewer.theme, as_dict=False)
+        _, _, bg_lightness = theme.background.as_hsl_tuple()
+        return bg_lightness > 0.5
+
+    @property
+    def mpl_style_sheet_path(self) -> Path:
+        """
+        Path to the set Matplotlib style sheet.
+        """
+        if self._napari_theme_has_light_bg():
+            return Path(__file__).parent / "styles" / "light.mplstyle"
+        else:
+            return Path(__file__).parent / "styles" / "dark.mplstyle"
+
+    def _get_path_to_icon(self) -> Path:
+        """
+        Get the icons directory (which is theme-dependent).
+
+        Icons modified from
+        https://github.com/matplotlib/matplotlib/tree/main/lib/matplotlib/mpl-data/images
+        """
+        icon_root = Path(__file__).parent / "assets"
+        if self._napari_theme_has_light_bg():
+            return icon_root / "black"
+        else:
+            return icon_root / "white"
+
+    def _replace_toolbar_icons(self) -> None:
+        """
+        Modifies toolbar icons to match the napari theme, and add some tooltips.
+        """
+        icon_dir = self._get_path_to_icon()
+        for action in self.toolbar.actions():
+            text = action.text()
+            if text == "Pan":
+                action.setToolTip(
+                    "Pan/Zoom: Left button pans; Right button zooms; "
+                    "Click once to activate; Click again to deactivate"
+                )
+            if text == "Zoom":
+                action.setToolTip(
+                    "Zoom to rectangle; Click once to activate; "
+                    "Click again to deactivate"
+                )
+            if len(text) > 0:  # i.e. not a separator item
+                icon_path = os.path.join(icon_dir, text + ".png")
+                action.setIcon(QIcon(icon_path))
+
+    def _load_dataframe(self):
+        points_layer = None
+        for layer in self.viewer.layers:
+            if isinstance(layer, Points):
+                points_layer = layer
+                break
+
+        if points_layer is None:
+            return
+
+        self.viewer.window.add_dock_widget(self, name="Trajectory plot", area="right")
+        self.hide()
+
+        self.df = _form_df(
+            points_layer.data,
+            {
+                "metadata": points_layer.metadata,
+                "properties": points_layer.properties,
+            },
+        )
+        for keypoint in self.df.columns.get_level_values("bodyparts").unique():
+            y = self.df.xs((keypoint, "y"), axis=1, level=["bodyparts", "coords"])
+            x = np.arange(len(y))
+            color = points_layer.metadata["face_color_cycles"]["label"][keypoint]
+            lines = self.ax.plot(x, y, color=color, label=keypoint)
+            self._lines[keypoint] = lines
+
+        self._refresh_canvas(value=self._n)
+
+    def _toggle_line_visibility(self, keypoint):
+        for artist in self._lines[keypoint]:
+            artist.set_visible(not artist.get_visible())
+        self._refresh_canvas(value=self._n)
+
+    def _refresh_canvas(self, value):
+        start = max(0, value - self._window // 2)
+        end = min(value + self._window // 2, len(self.df))
+
+        self.ax.set_xlim(start, end)
+        self.vline.set_xdata(value)
+        self.canvas.draw()
+
+    def set_window(self, value):
+        self._window = value
+        self.slider_value.setText(str(value))
+        self.update_plot_range(Event(type_name="", value=[self._n]))
+
+    def update_plot_range(self, event):
+        value = event.value[0]
+        self._n = value
+
+        if self.df is None:
+            return
+
+        self._refresh_canvas(value)
+
+
 class KeypointControls(QWidget):
     def __init__(self, napari_viewer):
         super().__init__()
@@ -354,10 +574,19 @@ class KeypointControls(QWidget):
         self._trail_cb.stateChanged.connect(self._show_trails)
         self._trails = None
 
+        matplotlib_label = QLabel("Show matplotlib canvas")
+        self._matplotlib_canvas = KeypointMatplotlibCanvas(self.viewer)
+        self._matplotlib_cb = QCheckBox()
+        self._matplotlib_cb.setToolTip("toggle matplotlib canvas visibility")
+        self._matplotlib_cb.stateChanged.connect(self._show_matplotlib_canvas)
+        self._matplotlib_cb.setChecked(False)
+        self._matplotlib_cb.setEnabled(False)
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
 
-        hlayout.addWidget(trail_label)
+        hlayout.addWidget(self._matplotlib_cb)
+        hlayout.addWidget(matplotlib_label)
         hlayout.addWidget(self._trail_cb)
+        hlayout.addWidget(trail_label)
         hlayout.addWidget(self._view_scheme_cb)
 
         self._layout.addLayout(hlayout)
@@ -368,6 +597,11 @@ class KeypointControls(QWidget):
         self._color_scheme_display = self._form_color_scheme_display(self.viewer)
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
         self._view_scheme_cb.toggle()
+        self._display.added.connect(
+            lambda w: w.part_label.clicked.connect(
+                self._matplotlib_canvas._toggle_line_visibility
+            ),
+        )
 
         # Substitute default menu action with custom one
         for action in self.viewer.window.file_menu.actions()[::-1]:
@@ -438,6 +672,12 @@ class KeypointControls(QWidget):
             self._trails.visible = True
         elif self._trails is not None:
             self._trails.visible = False
+
+    def _show_matplotlib_canvas(self, state):
+        if state == Qt.Checked:
+            self._matplotlib_canvas.show()
+        else:
+            self._matplotlib_canvas.hide()
 
     def _form_video_action_menu(self):
         group_box = QGroupBox("Video")
@@ -692,6 +932,7 @@ class KeypointControls(QWidget):
                 }
             )
             self._trail_cb.setEnabled(True)
+            self._matplotlib_cb.setEnabled(True)
 
             # Hide the color pickers, as colormaps are strictly defined by users
             controls = self.viewer.window.qt_viewer.dockLayerControls
@@ -726,6 +967,7 @@ class KeypointControls(QWidget):
                 menu.deleteLater()
                 menu.destroy()
             self._trail_cb.setEnabled(False)
+            self._matplotlib_cb.setEnabled(False)
             self.last_saved_label.hide()
         elif isinstance(layer, Image):
             self._images_meta = dict()
@@ -734,6 +976,7 @@ class KeypointControls(QWidget):
                 self.video_widget.setVisible(False)
         elif isinstance(layer, Tracks):
             self._trail_cb.setChecked(False)
+            self._matplotlib_cb.setChecked(False)
             self._trails = None
 
     def _update_colormap(self, colormap_name):
@@ -1088,6 +1331,8 @@ class LabelPair(QWidget):
 
 
 class ColorSchemeDisplay(QScrollArea):
+    added = Signal(object)
+
     def __init__(self, parent):
         super().__init__(parent)
 
@@ -1131,9 +1376,9 @@ class ColorSchemeDisplay(QScrollArea):
     def add_entry(self, name, color):
         self.scheme_dict.update({name: color})
 
-        self._layout.addWidget(
-            LabelPair(color, name, self), alignment=Qt.AlignmentFlag.AlignLeft
-        )
+        widget = LabelPair(color, name, self)
+        self._layout.addWidget(widget, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.added.emit(widget)
 
     def reset(self):
         self.scheme_dict = {}
