@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime
 from functools import partial, cached_property
 from math import ceil, log10
+import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
 from types import MethodType
@@ -49,6 +50,7 @@ from napari_deeplabcut.misc import (
     encode_categories,
     to_os_dir_sep,
     guarantee_multiindex_rows,
+    build_color_cycles
 )
 
 
@@ -701,6 +703,11 @@ class KeypointControls(QWidget):
             # Hide out of slice checkbox
             point_controls.outOfSliceCheckBox.hide()
             point_controls.layout().itemAt(15).widget().hide()
+            # Add dropdown menu for colormap picking
+            colormap_selector = DropdownMenu(plt.colormaps, self)
+            colormap_selector.update_to(layer.metadata["colormap_name"])
+            colormap_selector.currentTextChanged.connect(self._update_colormap)
+            point_controls.layout().addRow("colormap", colormap_selector)
 
         for layer_ in self.viewer.layers:
             if not isinstance(layer_, Image):
@@ -731,6 +738,20 @@ class KeypointControls(QWidget):
         elif isinstance(layer, Tracks):
             self._trail_cb.setChecked(False)
             self._trails = None
+
+    def _update_colormap(self, colormap_name):
+        for layer in self.viewer.layers:
+            if isinstance(layer, Points) and layer.metadata:
+                face_color_cycle_maps = build_color_cycles(
+                    layer.metadata["header"], colormap_name,
+                )
+                layer.metadata["face_color_cycles"] = face_color_cycle_maps
+                face_color_prop = layer._face.color_properties.name
+                layer.face_color = face_color_prop
+                layer.face_color_cycle = face_color_cycle_maps[face_color_prop]
+                layer.events.face_color()
+                self._update_color_scheme()
+                break
 
     @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):
@@ -1127,4 +1148,5 @@ class ColorSchemeDisplay(QScrollArea):
     def reset(self):
         self.scheme_dict = {}
         for i in reversed(range(self._layout.count())):
-            self._layout.itemAt(i).widget().deleteLater()
+            w = self._layout.itemAt(i).widget()
+            self._layout.removeWidget(w)

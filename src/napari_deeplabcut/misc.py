@@ -101,6 +101,15 @@ def build_color_cycle(n_colors: int, colormap: Optional[str] = "viridis") -> np.
     return cmap.map(np.linspace(0, 1, n_colors))
 
 
+def build_color_cycles(header: DLCHeader, colormap: Optional[str] = "viridis"):
+    label_colors = build_color_cycle(len(header.bodyparts), colormap)
+    id_colors = build_color_cycle(len(header.individuals), colormap)
+    return {
+        "label": dict(zip(header.bodyparts, label_colors)),
+        "id": dict(zip(header.individuals, id_colors)),
+    }
+
+
 class DLCHeader:
     def __init__(self, columns: pd.MultiIndex):
         self.columns = columns
