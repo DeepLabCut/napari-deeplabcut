@@ -423,13 +423,17 @@ class KeypointControls(QWidget):
                 store = list(self._stores.values())[0]
                 inds = encode_categories(store.layer.properties["label"])
                 temp = np.c_[inds, store.layer.data]
+                cmap = "viridis"
+                for layer in self.viewer.layers:
+                    if isinstance(layer, Points) and layer.metadata:
+                        cmap = layer.metadata["colormap_name"]
                 self._trails = self.viewer.add_tracks(
                     temp,
                     tail_length=50,
                     head_length=50,
                     tail_width=6,
                     name="trails",
-                    colormap="viridis",
+                    colormap=cmap,
                 )
             self._trails.visible = True
         elif self._trails is not None:
