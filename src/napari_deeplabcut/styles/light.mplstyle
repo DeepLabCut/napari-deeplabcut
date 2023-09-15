@@ -1,0 +1,12 @@
+# Light-theme napari colour scheme for matplotlib plots
+
+# text (very dark grey - almost black): #3b3a39
+# foreground (mid grey):                #d6d0ce
+# background (brownish beige):          #efebe9
+
+figure.facecolor    : none
+axes.labelcolor     : 3b3a39
+axes.facecolor      : none
+axes.edgecolor      : d6d0ce
+xtick.color         : 3b3a39
+ytick.color         : 3b3a39
