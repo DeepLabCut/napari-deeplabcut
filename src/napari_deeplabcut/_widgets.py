@@ -388,6 +388,12 @@ class KeypointControls(QWidget):
         launch_tutorial.triggered.connect(self.start_tutorial)
         self.viewer.window.view_menu.addAction(launch_tutorial)
 
+        # Hide some unused viewer buttons
+        self.viewer.window._qt_viewer.viewerButtons.gridViewButton.hide()
+        self.viewer.window._qt_viewer.viewerButtons.rollDimsButton.hide()
+        self.viewer.window._qt_viewer.viewerButtons.transposeDimsButton.hide()
+        self.viewer.window._qt_viewer.viewerButtons.ndisplayButton.setDisabled(True)
+
         if self.settings.value("first_launch", True) and not os.environ.get(
             "hide_tutorial", False
         ):
@@ -597,6 +603,9 @@ class KeypointControls(QWidget):
             paths = layer.metadata.get("paths")
             if paths is None:  # Then it's a video file
                 self.video_widget.setVisible(True)
+                self.viewer.window._qt_viewer.viewerButtons.ndisplayButton.setDisabled(
+                    False
+                )
             # Store the metadata and pass them on to the other layers
             self._images_meta.update(
                 {
@@ -716,6 +725,9 @@ class KeypointControls(QWidget):
             paths = layer.metadata.get("paths")
             if paths is None:
                 self.video_widget.setVisible(False)
+                self.viewer.window._qt_viewer.viewerButtons.ndisplayButton.setDisabled(
+                    True
+                )
         elif isinstance(layer, Tracks):
             self._trail_cb.setChecked(False)
             self._trails = None
