@@ -394,6 +394,8 @@ class KeypointControls(QWidget):
         self.viewer.window._qt_viewer.viewerButtons.gridViewButton.hide()
         self.viewer.window._qt_viewer.viewerButtons.rollDimsButton.hide()
         self.viewer.window._qt_viewer.viewerButtons.transposeDimsButton.hide()
+        self.viewer.window._qt_viewer.layerButtons.newPointsButton.setDisabled(True)
+        self.viewer.window._qt_viewer.layerButtons.newLabelsButton.setDisabled(True)
 
         if self.settings.value("first_launch", True) and not os.environ.get(
             "hide_tutorial", False
