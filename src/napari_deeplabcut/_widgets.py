@@ -22,8 +22,8 @@ from napari.layers.utils import color_manager
 from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from qtpy.QtCore import Qt, QTimer, Signal, QPoint, QSettings
-from qtpy.QtGui import QPainter, QAction, QCursor
+from qtpy.QtCore import Qt, QTimer, Signal, QPoint, QSettings, QSize
+from qtpy.QtGui import QPainter, QAction, QCursor, QIcon
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
