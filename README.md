@@ -1,7 +1,12 @@
-# napari-deeplabcut
+# napari-deeplabcut: keypoint annotation for pose estimation
 
 
-<img src="https://images.squarespace-cdn.com/content/v1/57f6d51c9f74566f55ecf271/1d409ffe-c9f4-47e1-bde2-3010c1c40455/naparidlc.png?format=750w" width="250" title="napari-deeplabcut" alt="napari+deeplabcut" align="right" vspace = "80">
+
+<img src="https://images.squarespace-cdn.com/content/v1/57f6d51c9f74566f55ecf271/1d409ffe-c9f4-47e1-bde2-3010c1c40455/naparidlc.png?format=750w" width="450" title="napari-deeplabcut" alt="napari+deeplabcut" align="right" vspace = "80">
+
+[📚Documentation](https://deeplabcut.github.io/DeepLabCut/README.html) |
+[🛠️ DeepLabCut Installation](https://deeplabcut.github.io/DeepLabCut/docs/installation.html) |
+[🌎 Home Page](https://www.deeplabcut.org) |
 
 [![License: BSD-3](https://img.shields.io/badge/License-BSD3-blue.svg)](https://www.gnu.org/licenses/bsd3)
 [![PyPI](https://img.shields.io/pypi/v/napari-deeplabcut.svg?color=green)](https://pypi.org/project/napari-deeplabcut)
@@ -10,10 +15,12 @@
 [![codecov](https://codecov.io/gh/DeepLabCut/napari-deeplabcut/branch/main/graph/badge.svg)](https://codecov.io/gh/DeepLabCut/napari-deeplabcut)
 [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-deeplabcut)](https://napari-hub.org/plugins/napari-deeplabcut)
 
-A napari plugin for keypoint annotation with DeepLabCut
+A napari plugin for keypoint annotation, also used within DeepLabCut!
 
 
 ## Installation
+
+If you installed DeepLabCut[gui], this plugin is already installed. However, you can also use this as a stand-alone keypoint annotator without using DeepLabCut. Instructions below!
 
 Start by installing PySide6 with `pip install "pyside6<6.3.2"`; this is the library we now use to build GUIs.
 
@@ -195,7 +202,7 @@ If you encounter any problems, please [file an issue] along with a detailed desc
 ## Acknowledgements
 
 
-This [napari] plugin was generated with [Cookiecutter] using [@napari]'s [cookiecutter-napari-plugin] template. We thank the Chan Zuckerberg Initiative (CZI) for funding this work!
+This [napari] plugin was generated with [Cookiecutter] using [@napari]'s [cookiecutter-napari-plugin] template. We thank the Chan Zuckerberg Initiative (CZI) for funding the initial development of this work!
 
 <!--
 Don't miss the full getting started guide to set up your new package:
