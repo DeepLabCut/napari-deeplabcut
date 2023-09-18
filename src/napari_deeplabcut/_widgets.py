@@ -461,7 +461,7 @@ class KeypointMatplotlibCanvas(QWidget):
                 points_layer = layer
                 break
 
-        if points_layer is None:
+        if points_layer is None or ~np.any(points_layer.data):
             return
 
         self.viewer.window.add_dock_widget(self, name="Trajectory plot", area="right")
