@@ -60,6 +60,26 @@ from napari_deeplabcut.misc import (
 Tip = namedtuple("Tip", ["msg", "pos"])
 
 
+class Shortcuts(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent=parent)
+        self.setParent(parent)
+        self.setWindowTitle("Shortcuts")
+        vlayout = QVBoxLayout()
+        shortcuts = """
+            * `2` and `3`, to switch between labeling and selection mode
+            * `4`, to enable pan & zoom
+            * `M`, to cycle through regular (sequential), quick, and loop annotation mode
+            * `E`, to enable edge coloring
+            * `F`, to toggle between animal and body part color scheme
+            * `V`, to toggle visibility of the selected layer
+            * `backspace`, to delete a point
+        """
+        message = QLabel(shortcuts)
+        vlayout.addWidget(message)
+        self.setLayout(vlayout)
+
+
 class Tutorial(QDialog):
     def __init__(self, parent):
         super().__init__(parent=parent)
@@ -622,6 +642,11 @@ class KeypointControls(QWidget):
         launch_tutorial.triggered.connect(self.start_tutorial)
         self.viewer.window.view_menu.addAction(launch_tutorial)
 
+        # Add action to view keyboard shortcuts
+        display_shortcuts = QAction("&Shortcuts", self)
+        display_shortcuts.triggered.connect(self.display_shortcuts)
+        self.viewer.window.help_menu.addAction(display_shortcuts)
+
         # Hide some unused viewer buttons
         self.viewer.window._qt_viewer.viewerButtons.gridViewButton.hide()
         self.viewer.window._qt_viewer.viewerButtons.rollDimsButton.hide()
@@ -641,6 +666,9 @@ class KeypointControls(QWidget):
 
     def start_tutorial(self):
         Tutorial(self.viewer.window._qt_window.current()).show()
+
+    def display_shortcuts(self):
+        Shortcuts(self.viewer.window._qt_window.current()).show()
 
     def _move_image_layer_to_bottom(self, index):
         if (ind := index) != 0:
