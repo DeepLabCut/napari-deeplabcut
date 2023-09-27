@@ -663,7 +663,7 @@ class KeypointControls(QWidget):
     def start_tutorial(self):
         Tutorial(self.viewer.window._qt_window.current()).show()
 
-     def display_shortcuts(self):
+    def display_shortcuts(self):
         image_path = 'https://raw.githubusercontent.com/Timokleia/napari-deeplabcut/main/src/napari_deeplabcut/assets/black/napari_shortcuts.png'
         shortcuts_dialog = Shortcuts(self, image_path)
         shortcuts_dialog.exec_()
