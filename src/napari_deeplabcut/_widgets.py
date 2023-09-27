@@ -638,11 +638,10 @@ class KeypointControls(QWidget):
         launch_tutorial.triggered.connect(self.start_tutorial)
         self.viewer.window.view_menu.addAction(launch_tutorial)
 
-         # Add action to view keyboard shortcuts
-        print("show_shortcuts_dialog method was called.")
-        self.display_shortcuts_action = QAction("&Shortcuts", self)
-        self.display_shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
-        self.viewer.window.help_menu.addAction(self.display_shortcuts_action)
+          # Add action to view keyboard shortcuts
+        display_shortcuts = QAction("&Shortcuts", self)
+        display_shortcuts.triggered.connect(self.display_shortcuts)
+        self.viewer.window.help_menu.addAction(display_shortcuts)
         
 
         # Hide some unused viewer buttons
@@ -665,11 +664,8 @@ class KeypointControls(QWidget):
     def start_tutorial(self):
         Tutorial(self.viewer.window._qt_window.current()).show()
 
-    def show_shortcuts_dialog(self):
-        print("Shortcuts dialog triggered")
-        image_path = 'https://raw.githubusercontent.com/Timokleia/napari-deeplabcut/main/src/napari_deeplabcut/assets/black/napari_shortcuts.png'
-        shortcuts_dialog = Shortcuts(self, image_path)
-        shortcuts_dialog.exec_()
+    def display_shortcuts(self):
+        Shortcuts(self.viewer.window._qt_window.current()).show()
 
     def _move_image_layer_to_bottom(self, index):
         if (ind := index) != 0:
