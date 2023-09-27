@@ -1108,6 +1108,7 @@ class KeypointsDropdownMenu(QWidget):
         self.setLayout(layout1)
 
     def _map_individuals_to_bodyparts(self):
+        self.id2label.clear()  # Empty dict so entries are ordered as in the config
         for keypoint in self.store._keypoints:
             label = keypoint.label
             id_ = keypoint.id
@@ -1412,4 +1413,5 @@ class ColorSchemeDisplay(QScrollArea):
         self.scheme_dict = {}
         for i in reversed(range(self._layout.count())):
             w = self._layout.itemAt(i).widget()
+            w.setParent(None)
             self._layout.removeWidget(w)
