@@ -61,16 +61,15 @@ from napari_deeplabcut.misc import (
 
 Tip = namedtuple("Tip", ["msg", "pos"])
 
-
 class Shortcuts(QDialog):
-    def __init__(self, parent, image_path):
+    def __init__(self, parent, image_path):  
         super().__init__(parent=parent)
         self.setParent(parent)
         self.setWindowTitle("Shortcuts")
         
         vlayout = QVBoxLayout()
         image_label = QLabel(self)
-        pixmap = QPixmap(image_path)
+        pixmap = QPixmap(image_path)  # Creating QPixmap from the provided image_path
         image_label.setPixmap(pixmap)
         vlayout.addWidget(image_label)
         self.setLayout(vlayout)
@@ -638,11 +637,10 @@ class KeypointControls(QWidget):
         launch_tutorial.triggered.connect(self.start_tutorial)
         self.viewer.window.view_menu.addAction(launch_tutorial)
 
-          # Add action to view keyboard shortcuts
-        display_shortcuts = QAction("&Shortcuts", self)
-        display_shortcuts.triggered.connect(self.display_shortcuts)
-        self.viewer.window.help_menu.addAction(display_shortcuts)
-        
+        # Add action to view keyboard shortcuts
+        display_shortcuts_action = QAction("&Shortcuts", self)
+        display_shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
+        self.viewer.window.help_menu.addAction(display_shortcuts_action)
 
         # Hide some unused viewer buttons
         self.viewer.window._qt_viewer.viewerButtons.gridViewButton.hide()
@@ -664,8 +662,12 @@ class KeypointControls(QWidget):
     def start_tutorial(self):
         Tutorial(self.viewer.window._qt_window.current()).show()
 
-    def display_shortcuts(self):
-        Shortcuts(self.viewer.window._qt_window.current()).show()
+    def show_shortcuts_dialog(self):
+    print("Shortcuts Action Triggered")
+    image_path = 'https://raw.githubusercontent.com/Timokleia/napari-deeplabcut/main/src/napari_deeplabcut/assets/black/napari_shortcuts.png'  
+    shortcuts_dialog = Shortcuts(self, image_path)
+    shortcuts_dialog.exec_()
+
 
     def _move_image_layer_to_bottom(self, index):
         if (ind := index) != 0:
