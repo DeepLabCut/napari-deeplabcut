@@ -22,6 +22,8 @@ from napari.layers.utils import color_manager
 from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
+from PyQt5.QtWidgets import QLabel, QVBoxLayout, QDialog
+from PyQt5.QtGui import QPixmap
 from qtpy.QtCore import Qt, QTimer, Signal, QPoint, QSettings, QSize
 from qtpy.QtGui import QPainter, QAction, QCursor, QIcon
 from qtpy.QtWidgets import (
@@ -61,22 +63,16 @@ Tip = namedtuple("Tip", ["msg", "pos"])
 
 
 class Shortcuts(QDialog):
-    def __init__(self, parent):
+    def __init__(self, parent, image_path):
         super().__init__(parent=parent)
         self.setParent(parent)
         self.setWindowTitle("Shortcuts")
+        
         vlayout = QVBoxLayout()
-        shortcuts = """
-            * `2` and `3`, to switch between labeling and selection mode
-            * `4`, to enable pan & zoom
-            * `M`, to cycle through regular (sequential), quick, and loop annotation mode
-            * `E`, to enable edge coloring
-            * `F`, to toggle between animal and body part color scheme
-            * `V`, to toggle visibility of the selected layer
-            * `backspace`, to delete a point
-        """
-        message = QLabel(shortcuts)
-        vlayout.addWidget(message)
+        image_label = QLabel(self)
+        pixmap = QPixmap(image_path)
+        image_label.setPixmap(pixmap)
+        vlayout.addWidget(image_label)
         self.setLayout(vlayout)
 
 
@@ -667,8 +663,10 @@ class KeypointControls(QWidget):
     def start_tutorial(self):
         Tutorial(self.viewer.window._qt_window.current()).show()
 
-    def display_shortcuts(self):
-        Shortcuts(self.viewer.window._qt_window.current()).show()
+     def display_shortcuts(self):
+        image_path = 'https://raw.githubusercontent.com/Timokleia/napari-deeplabcut/main/src/napari_deeplabcut/assets/black/napari_shortcuts.png'
+        shortcuts_dialog = Shortcuts(self, image_path)
+        shortcuts_dialog.exec_()
 
     def _move_image_layer_to_bottom(self, index):
         if (ind := index) != 0:
