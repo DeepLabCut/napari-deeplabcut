@@ -639,6 +639,7 @@ class KeypointControls(QWidget):
         self.viewer.window.view_menu.addAction(launch_tutorial)
 
          # Add action to view keyboard shortcuts
+        print("show_shortcuts_dialog method was called.")
         self.display_shortcuts_action = QAction("&Shortcuts", self)
         self.display_shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
         self.viewer.window.help_menu.addAction(self.display_shortcuts_action)
