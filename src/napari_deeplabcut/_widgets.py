@@ -894,11 +894,13 @@ class KeypointControls(QWidget):
             # been added and the body part names are different from the existing ones,
             # then we update store's metadata and menus.
             if layer.metadata.get("project", "") and self._stores:
+                new_metadata = layer.metadata.copy()
+
                 keypoints_menu = self._menus[0].menus["label"]
                 current_keypoint_set = set(
                     keypoints_menu.itemText(i) for i in range(keypoints_menu.count())
                 )
-                new_keypoint_set = set(layer.metadata["header"].bodyparts)
+                new_keypoint_set = set(new_metadata["header"].bodyparts)
                 diff = new_keypoint_set.difference(current_keypoint_set)
                 if diff:
                     answer = QMessageBox.question(
@@ -909,28 +911,29 @@ class KeypointControls(QWidget):
 
                     self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
                     for _layer, store in self._stores.items():
-                        _layer.metadata["header"] = layer.metadata["header"]
+                        _layer.metadata["header"] = new_metadata["header"]
                         store.layer = _layer
 
                     for menu in self._menus:
                         menu._map_individuals_to_bodyparts()
                         menu._update_items()
 
+                # Remove the unnecessary layer newly added
+                QTimer.singleShot(10, self.viewer.layers.pop)
+
                 # Always update the colormap to reflect the one in the config.yaml file
                 for _layer, store in self._stores.items():
-                    _layer.metadata["face_color_cycles"] = layer.metadata[
+                    _layer.metadata["face_color_cycles"] = new_metadata[
                         "face_color_cycles"
                     ]
                     _layer.face_color = "label"
-                    _layer.face_color_cycle = layer.metadata["face_color_cycles"][
+                    _layer.face_color_cycle = new_metadata["face_color_cycles"][
                         "label"
                     ]
                     _layer.events.face_color()
                     store.layer = _layer
                 self._update_color_scheme()
 
-                # Remove the unnecessary layer newly added
-                QTimer.singleShot(10, self.viewer.layers.pop)
                 return
 
             store = keypoints.KeypointStore(self.viewer, layer)
