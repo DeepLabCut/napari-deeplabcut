@@ -22,9 +22,9 @@ from napari.layers.utils import color_manager
 from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from PyQt5.QtWidgets import QLabel, QVBoxLayout, QDialog
-from PyQt5.QtSvg import QSvgWidget
-from PyQt5.QtGui import QPixmap
+from qtpy.QtWidgets import QLabel, QVBoxLayout, QDialog, QWidget
+from qtpy.QtSvg import QSvgWidget
+from qtpy.QtGui import QPixmap
 from qtpy.QtCore import Qt, QTimer, Signal, QPoint, QSettings, QSize
 from qtpy.QtGui import QPainter, QAction, QCursor, QIcon
 from qtpy.QtWidgets import (
@@ -62,22 +62,24 @@ from napari_deeplabcut.misc import (
 
 Tip = namedtuple("Tip", ["msg", "pos"])
 
-# using svg image
+
 class Shortcuts(QDialog):
-    def __init__(self, parent, svg_path):
+    def __init__(self, parent):
         super().__init__(parent=parent)
         self.setParent(parent)
         self.setWindowTitle("Shortcuts")
         
-        vlayout = QVBoxLayout()
+        # Get the current file's directory
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # Define the relative path to the image from the current file's directory
+        image_path = os.path.join(current_dir, 'assets', 'black', 'napari_shortcuts.svg')
         
-        # Create a QWidget to act as a white background
+        vlayout = QVBoxLayout()
         background_widget = QWidget()
         background_widget.setStyleSheet("background-color: white;")
         
-        svg_widget = QSvgWidget(svg_path)
+        svg_widget = QSvgWidget(image_path)
         
-        # Add SVG widget to the background widget
         bg_layout = QVBoxLayout(background_widget)
         bg_layout.addWidget(svg_widget)
         bg_layout.setContentsMargins(0, 0, 0, 0)  # optional, to remove margins
@@ -674,15 +676,8 @@ class KeypointControls(QWidget):
         Tutorial(self.viewer.window._qt_window.current()).show()
 
     def show_shortcuts_dialog(self):
-        # Get the current file's directory
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-
-        # Define the relative path to the image from the current file's directory
-        image_path = os.path.join(current_dir, 'assets', 'black', 'napari_shortcuts.svg')
-
-        shortcuts_dialog = Shortcuts(self, image_path)
+        shortcuts_dialog = Shortcuts(self)
         shortcuts_dialog.exec_()
-
 
     def _move_image_layer_to_bottom(self, index):
         if (ind := index) != 0:
