@@ -677,7 +677,7 @@ class KeypointControls(QWidget):
         current_dir = os.path.dirname(os.path.abspath(__file__))
 
         # Define the relative path to the image from the current file's directory
-        image_path = os.path.join(current_dir, 'assets', 'black', 'napari_shortkeys.svg')
+        image_path = os.path.join(current_dir, 'assets', 'black', 'napari_shortcuts.svg')
 
         shortcuts_dialog = Shortcuts(self, image_path)
         shortcuts_dialog.exec_()
