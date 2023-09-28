@@ -23,6 +23,7 @@ from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QDialog
+from PyQt5.QtSvg import QSvgWidget
 from PyQt5.QtGui import QPixmap
 from qtpy.QtCore import Qt, QTimer, Signal, QPoint, QSettings, QSize
 from qtpy.QtGui import QPainter, QAction, QCursor, QIcon
