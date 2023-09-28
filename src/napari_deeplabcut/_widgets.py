@@ -22,11 +22,9 @@ from napari.layers.utils import color_manager
 from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from qtpy.QtWidgets import QLabel, QVBoxLayout, QDialog, QWidget
-from qtpy.QtSvg import QSvgWidget
-from qtpy.QtGui import QPixmap
 from qtpy.QtCore import Qt, QTimer, Signal, QPoint, QSettings, QSize
 from qtpy.QtGui import QPainter, QAction, QCursor, QIcon
+from qtpy.QtSvgWidgets import QSvgWidget
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -68,23 +66,16 @@ class Shortcuts(QDialog):
         super().__init__(parent=parent)
         self.setParent(parent)
         self.setWindowTitle("Shortcuts")
-        
-        # Get the current file's directory
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        # Define the relative path to the image from the current file's directory
-        image_path = os.path.join(current_dir, 'assets', 'black', 'napari_shortcuts.svg')
-        
+
+        image_path = str(Path(__file__).parent / "assets" / "napari_shortcuts.svg")
+
         vlayout = QVBoxLayout()
         background_widget = QWidget()
         background_widget.setStyleSheet("background-color: white;")
-        
         svg_widget = QSvgWidget(image_path)
-        
-        bg_layout = QVBoxLayout(background_widget)
-        bg_layout.addWidget(svg_widget)
-        bg_layout.setContentsMargins(0, 0, 0, 0)  # optional, to remove margins
-        
         vlayout.addWidget(background_widget)
+        vlayout.addWidget(svg_widget)
+        vlayout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(vlayout)
 
 
@@ -649,11 +640,11 @@ class KeypointControls(QWidget):
         launch_tutorial = QAction("&Launch Tutorial", self)
         launch_tutorial.triggered.connect(self.start_tutorial)
         self.viewer.window.view_menu.addAction(launch_tutorial)
-      
+
         # Add action to view keyboard shortcuts
         display_shortcuts_action = QAction("&Shortcuts", self)
-        display_shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
-        self.viewer.window.window_menu.addAction(display_shortcuts_action)
+        display_shortcuts_action.triggered.connect(self.display_shortcuts)
+        self.viewer.window.help_menu.addAction(display_shortcuts_action)
 
         # Hide some unused viewer buttons
         self.viewer.window._qt_viewer.viewerButtons.gridViewButton.hide()
@@ -677,10 +668,6 @@ class KeypointControls(QWidget):
 
     def display_shortcuts(self):
         Shortcuts(self.viewer.window._qt_window.current()).show()
-
-    def show_shortcuts_dialog(self):
-        shortcuts_dialog = Shortcuts(self)
-        shortcuts_dialog.exec_()
 
     def _move_image_layer_to_bottom(self, index):
         if (ind := index) != 0:
