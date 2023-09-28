@@ -675,6 +675,9 @@ class KeypointControls(QWidget):
     def start_tutorial(self):
         Tutorial(self.viewer.window._qt_window.current()).show()
 
+    def display_shortcuts(self):
+        Shortcuts(self.viewer.window._qt_window.current()).show()
+
     def show_shortcuts_dialog(self):
         shortcuts_dialog = Shortcuts(self)
         shortcuts_dialog.exec_()
