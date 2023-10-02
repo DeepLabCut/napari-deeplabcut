@@ -1,4 +1,13 @@
 import os
+from collections import defaultdict
+from functools import partial
+import numpy as np
+import pandas as pd
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+from types import MethodType
+from typing import Optional, Sequence, Union
+from napari.layers import Image, Points
 from collections import defaultdict, namedtuple
 from copy import deepcopy
 from datetime import datetime
@@ -45,9 +54,38 @@ from qtpy.QtWidgets import (
     QStyleOption,
     QVBoxLayout,
     QWidget,
+    QPushButton,
 )
 
+from napari_deeplabcut.kmeans import cluster_data
 from napari_deeplabcut import keypoints
+from napari_deeplabcut.misc import to_os_dir_sep, find_project_name
+
+
+class Worker(QtCore.QObject):
+    started = QtCore.Signal()
+    finished = QtCore.Signal()
+    value = QtCore.Signal(object)
+
+    def __init__(self, func):
+        super().__init__()
+        self.func = func
+
+    def run(self):
+        out = self.func()
+        self.value.emit(out)
+        self.finished.emit()
+
+
+def move_to_separate_thread(func):
+    thread = QtCore.QThread()
+    worker = Worker(func)
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    worker.finished.connect(thread.quit)
+    worker.finished.connect(worker.deleteLater)
+    worker.finished.connect(thread.deleteLater)
+    return worker, thread
 from napari_deeplabcut._reader import _load_config
 from napari_deeplabcut._writer import _write_config, _write_image, _form_df
 from napari_deeplabcut.misc import (
@@ -538,7 +576,6 @@ class KeypointControls(QWidget):
         self.viewer = napari_viewer
         self.viewer.layers.events.inserted.connect(self.on_insert)
         self.viewer.layers.events.removed.connect(self.on_remove)
-
         self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
             _get_and_try_preferred_reader,
             self.viewer.window.qt_viewer,
@@ -779,6 +816,108 @@ class KeypointControls(QWidget):
                 _write_config(config_path, cfg)
                 break
 
+        self.add_clustering_buttons()
+
+        # Initialize an empty canvas onto which to draw the images
+        self.fig = Figure(tight_layout=True, dpi=100)
+        self.fig.patch.set_facecolor("None")
+        self.ax = self.fig.add_subplot(111)
+        self.ax.invert_yaxis()
+        self.ax.set_axis_off()
+        self._im = None
+        self._scatter = self.ax.scatter([], [])
+        self.canvas = FigureCanvas(self.fig)
+
+        self.show()
+
+    def add_clustering_buttons(self):
+        layout = QHBoxLayout()
+        btn_cluster = QPushButton('cluster pose', self)
+        btn_cluster.clicked.connect(self.on_click)
+        btn_show = QPushButton('show img', self)
+        btn_show.clicked.connect(self.on_click_show_img)
+        btn_close = QPushButton('close img', self)
+        btn_close.clicked.connect(self.on_click_close_img)
+        layout.addWidget(btn_cluster)
+        layout.addWidget(btn_show)
+        layout.addWidget(btn_close)
+        self._layout.addLayout(layout)
+
+    def _show_clusters(self, input_):
+        points, names = input_
+        points[:, [0, 1]] = points[:, [1, 0]]
+        colors = points[:, 2] + 1
+
+        dict_prop_points = {'colorn': colors, 'frame': names}
+        clust_layer = self.viewer.add_points(
+            points[:, :2],
+            size=8,
+            name='cluster',
+            features=dict_prop_points,
+            face_color='colorn',
+            face_colormap='plasma',
+        )
+        clust_layer.mode = 'select'
+
+        self.viewer.window.add_dock_widget(self.canvas, name='frames')
+        self.viewer.layers[0].visible = False
+
+        self._df = pd.read_hdf(self.viewer.layers[0].source.path)
+        self._df.index = ['/'.join(row) for row in list(self._df.index)]
+
+        root = self.viewer.layers[0].metadata['root']
+        filenames = list(self.viewer.layers[0].metadata['paths'])
+        project_name = find_project_name(root)
+        project_path = os.path.join(root.split(project_name)[0], project_name)
+
+        @clust_layer.mouse_drag_callbacks.append
+        def get_event(clust_layer, event):
+            inds = list(clust_layer.selected_data)
+            if not inds:
+                return
+
+            if len(inds) > 1:
+                self.viewer.status = 'Please select only one data point.'
+                return
+
+            ind = inds[0]
+            filename = clust_layer.properties['frame'][ind]
+            bpts = self._df.loc[filename].to_numpy().reshape((-1, 2))
+            self.step = filenames.index(filename)
+
+            with Image_.open(os.path.join(project_path, filename)) as img:
+                im = np.asarray(img)
+                if self._im is None:
+                    self._im = self.ax.imshow(im)
+                else:
+                    self._im.set_data(im)
+                self._scatter.set_offsets(bpts)
+                self.canvas.draw()
+
+    def on_click(self):
+        layer = self.viewer.layers.selection.active
+        if not isinstance(layer, Points):
+            print("Only Points layers can be clustered.")
+            return
+
+        func = partial(cluster_data, layer)
+        self.worker, self.thread = move_to_separate_thread(func)
+        self.worker.value.connect(self._show_clusters)
+        self.thread.start()
+
+    def on_click_show_img(self):
+        self.viewer.layers[0].visible = True
+        self.viewer.layers[1].visible = False
+        self.viewer.dims.set_current_step(0, self.step)
+        self.viewer.add_image(self._im.get_array(), name='image refine label')
+        self.viewer.layers.move_selected(0, 2)
+
+    def on_click_close_img(self):
+        self.viewer.layers.remove('image refine label')
+        self.viewer.layers.move_selected(0, 1)
+        self.viewer.layers[0].visible = False
+        self.viewer.layers[1].visible = True
+
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)
         self.viewer.dims.events.current_step.connect(
@@ -871,6 +1010,10 @@ class KeypointControls(QWidget):
 
     def on_insert(self, event):
         layer = event.source[-1]
+        # FIXME Is the following necessary?
+        if any(s in str(layer) for s in ('cluster', 'refine')):
+            return
+
         if isinstance(layer, Image):
             paths = layer.metadata.get("paths")
             if paths is None:  # Then it's a video file
@@ -1091,6 +1234,7 @@ class KeypointsDropdownMenu(QWidget):
     ):
         super().__init__(parent)
         self.store = store
+
         self.store.layer.events.current_properties.connect(self.update_menus)
         self._locked = False
 

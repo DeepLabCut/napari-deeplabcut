@@ -193,11 +193,12 @@ def read_hdf(filename: str) -> List[LayerData]:
         if isinstance(temp.index, pd.MultiIndex):
             temp.index = [os.path.join(*row) for row in temp.index]
         df = (
-            temp.stack(["individuals", "bodyparts"])
+            temp.stack(["individuals", "bodyparts"])#, dropna=False)
             .reindex(header.individuals, level="individuals")
             .reindex(header.bodyparts, level="bodyparts")
             .reset_index()
         )
+        #df.fillna(0, inplace=True)
         nrows = df.shape[0]
         data = np.empty((nrows, 3))
         image_paths = df["level_0"]

@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import os
+import re
 from enum import Enum, EnumMeta
 from itertools import cycle
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from napari.utils import colormaps
+
+
+def find_project_name(s):
+    pat = re.compile('.+-.+-\d{4}-\d{1,2}-\d{1,2}')
+    for part in Path(s).parts[::-1]:
+        if pat.search(part):
+            return part
 
 
 def unsorted_unique(array: Sequence) -> np.ndarray:

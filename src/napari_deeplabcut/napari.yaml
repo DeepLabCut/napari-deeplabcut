@@ -26,6 +26,7 @@ contributions:
     - id: napari-deeplabcut.make_keypoint_controls
       python_name: napari_deeplabcut._widgets:KeypointControls
       title: Make keypoint controls
+
   readers:
     - command: napari-deeplabcut.get_hdf_reader
       accepts_directories: false
@@ -42,6 +43,7 @@ contributions:
     - command: napari-deeplabcut.get_folder_parser
       accepts_directories: true
       filename_patterns: ['*']
+    
   writers:
     - command: napari-deeplabcut.write_hdf
       layer_types: ["points{1}"]
@@ -52,3 +54,10 @@ contributions:
   widgets:
     - command: napari-deeplabcut.make_keypoint_controls
       display_name: Keypoint controls
+  kmeans:
+    - command: napari-deeplabcut.get_hdf_reader1
+      accepts_directories: false
+      filename_patterns: ['*.h5']
+    - command: napari-deeplabcut.get_folder_parser1
+      accepts_directories: true
+      filename_patterns: ['*']
