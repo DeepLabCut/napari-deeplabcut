@@ -1,16 +1,22 @@
 import glob
 import os
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
+import cv2
+import dask.array as da
 import numpy as np
 import pandas as pd
 import yaml
+from dask import delayed
 from dask_image.imread import imread
 from napari.types import LayerData
+from natsort import natsorted
 
 from napari_deeplabcut import misc
 
-SUPPORTED_IMAGES = "jpg", "jpeg", "png"
+SUPPORTED_IMAGES = ".jpg", ".jpeg", ".png"
+SUPPORTED_VIDEOS = ".mp4", ".mov", ".avi"
 
 
 def get_hdf_reader(path):
@@ -31,6 +37,14 @@ def get_image_reader(path):
         return None
 
     return read_images
+
+
+def get_video_reader(path):
+    if isinstance(path, str) and any(
+        path.lower().endswith(ext) for ext in SUPPORTED_VIDEOS
+    ):
+        return read_video
+    return None
 
 
 def get_config_reader(path):
@@ -76,15 +90,20 @@ def read_images(path):
     # Retrieve filepaths exactly as parsed by pims
     filepaths = []
     for filepath in glob.iglob(path):
-        _, *relpath = filepath.rsplit(os.sep, 3)
+        relpath = Path(filepath).parts[-3:]
         filepaths.append(os.path.join(*relpath))
     params = {
         "name": "images",
         "metadata": {
-            "paths": sorted(filepaths),
+            "paths": natsorted(filepaths),
             "root": os.path.split(path)[0],
         },
     }
+
+    # https://github.com/soft-matter/pims/issues/452
+    if len(filepaths) == 1:
+        path = glob.glob(path)[0]
+
     return [(imread(path), params, "image")]
 
 
@@ -105,12 +124,8 @@ def _populate_metadata(
         ids = header.individuals
     if likelihood is None:
         likelihood = np.ones(len(labels))
-    label_colors = misc.build_color_cycle(len(header.bodyparts), colormap)
-    id_colors = misc.build_color_cycle(len(header.individuals), colormap)
-    face_color_cycle_maps = {
-        "label": dict(zip(header.bodyparts, label_colors)),
-        "id": dict(zip(header.individuals, id_colors)),
-    }
+    face_color_cycle_maps = misc.build_color_cycles(header, colormap)
+    face_color_prop = "id" if ids[0] else "label"
     return {
         "name": "keypoints",
         "text": "{id}–{label}" if ids[0] else "label",
@@ -120,8 +135,8 @@ def _populate_metadata(
             "likelihood": likelihood,
             "valid": likelihood > pcutoff,
         },
-        "face_color_cycle": label_colors,
-        "face_color": "label",
+        "face_color_cycle": face_color_cycle_maps[face_color_prop],
+        "face_color": face_color_prop,
         "face_colormap": colormap,
         "edge_color": "valid",
         "edge_color_cycle": ["black", "red"],
@@ -131,6 +146,7 @@ def _populate_metadata(
         "metadata": {
             "header": header,
             "face_color_cycles": face_color_cycle_maps,
+            "colormap_name": colormap,
             "paths": paths or [],
         },
     }
@@ -154,6 +170,7 @@ def read_config(configname: str) -> List[LayerData]:
     metadata["name"] = f"CollectedData_{config['scorer']}"
     metadata["ndim"] = 3
     metadata["property_choices"] = metadata.pop("properties")
+    metadata["metadata"]["project"] = os.path.dirname(configname)
     return [(None, metadata, "points")]
 
 
@@ -161,6 +178,7 @@ def read_hdf(filename: str) -> List[LayerData]:
     layers = []
     for filename in glob.iglob(filename):
         temp = pd.read_hdf(filename)
+        temp = misc.merge_multiple_scorers(temp)
         header = misc.DLCHeader(temp.columns)
         temp = temp.droplevel("scorer", axis=1)
         if "individuals" not in temp.columns.names:
@@ -169,6 +187,9 @@ def read_hdf(filename: str) -> List[LayerData]:
             old_idx = temp.columns.to_frame()
             old_idx.insert(0, "individuals", "")
             temp.columns = pd.MultiIndex.from_frame(old_idx)
+            colormap = "viridis"
+        else:
+            colormap = "Set3"
         if isinstance(temp.index, pd.MultiIndex):
             temp.index = [os.path.join(*row) for row in temp.index]
         df = (
@@ -197,12 +218,91 @@ def read_hdf(filename: str) -> List[LayerData]:
             ids=df["individuals"],
             likelihood=df.get("likelihood"),
             paths=list(paths2inds),
+            colormap=colormap,
         )
         metadata["name"] = os.path.split(filename)[1].split(".")[0]
         metadata["metadata"]["root"] = os.path.split(filename)[0]
+        # Store file name in case the layer's name is edited by the user
+        metadata["metadata"]["name"] = metadata["name"]
         layers.append((data, metadata, "points"))
     return layers
 
 
+class Video:
+    def __init__(self, video_path):
+        if not os.path.isfile(video_path):
+            raise ValueError(f'Video path "{video_path}" does not point to a file.')
+
+        self.path = video_path
+        self.stream = cv2.VideoCapture(video_path)
+        if not self.stream.isOpened():
+            raise OSError("Video could not be opened.")
+
+        self._n_frames = int(self.stream.get(cv2.CAP_PROP_FRAME_COUNT))
+        self._width = int(self.stream.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self._height = int(self.stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self._frame = cv2.UMat(self._height, self._width, cv2.CV_8UC3)
+
+    def __len__(self):
+        return self._n_frames
+
+    @property
+    def width(self):
+        return self._width
+
+    @property
+    def height(self):
+        return self._height
+
+    def set_to_frame(self, ind):
+        ind = min(ind, len(self) - 1)
+        ind += 1  # Unclear why this is needed at all
+        self.stream.set(cv2.CAP_PROP_POS_FRAMES, ind)
+
+    def read_frame(self):
+        self.stream.retrieve(self._frame)
+        cv2.cvtColor(self._frame, cv2.COLOR_BGR2RGB, self._frame, 3)
+        return self._frame.get()
+
+    def close(self):
+        self.stream.release()
 
 
+def read_video(filename: str, opencv: bool = True):
+    if opencv:
+        stream = Video(filename)
+        shape = stream.width, stream.height, 3
+
+        def _read_frame(ind):
+            stream.set_to_frame(ind)
+            return stream.read_frame()
+
+        lazy_imread = delayed(_read_frame)
+    else:  # pragma: no cover
+        from pims import PyAVReaderIndexed
+
+        try:
+            stream = PyAVReaderIndexed(filename)
+        except ImportError:
+            raise ImportError("`pip install av` to use the PyAV video reader.")
+
+        shape = stream.frame_shape
+        lazy_imread = delayed(stream.get_frame)
+
+    movie = da.stack(
+        [
+            da.from_delayed(lazy_imread(i), shape=shape, dtype=np.uint8)
+            for i in range(len(stream))
+        ]
+    )
+    elems = list(Path(filename).parts)
+    elems[-2] = "labeled-data"
+    elems[-1] = elems[-1].split(".")[0]
+    root = os.path.join(*elems)
+    params = {
+        "name": os.path.split(filename)[1],
+        "metadata": {
+            "root": root,
+        },
+    }
+    return [(movie, params)]

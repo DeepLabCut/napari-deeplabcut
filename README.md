@@ -1,7 +1,12 @@
-# napari-deeplabcut
+# napari-deeplabcut: keypoint annotation for pose estimation
 
 
-<img src="https://images.squarespace-cdn.com/content/v1/57f6d51c9f74566f55ecf271/1d409ffe-c9f4-47e1-bde2-3010c1c40455/naparidlc.png?format=750w" width="250" title="napari-deeplabcut" alt="napari+deeplabcut" align="right" vspace = "80">
+
+<img src="https://images.squarespace-cdn.com/content/v1/57f6d51c9f74566f55ecf271/1d409ffe-c9f4-47e1-bde2-3010c1c40455/naparidlc.png?format=750w" width="450" title="napari-deeplabcut" alt="napari+deeplabcut" align="right" vspace = "80">
+
+[📚Documentation](https://deeplabcut.github.io/DeepLabCut/README.html) |
+[🛠️ DeepLabCut Installation](https://deeplabcut.github.io/DeepLabCut/docs/installation.html) |
+[🌎 Home Page](https://www.deeplabcut.org) |
 
 [![License: BSD-3](https://img.shields.io/badge/License-BSD3-blue.svg)](https://www.gnu.org/licenses/bsd3)
 [![PyPI](https://img.shields.io/pypi/v/napari-deeplabcut.svg?color=green)](https://pypi.org/project/napari-deeplabcut)
@@ -10,17 +15,22 @@
 [![codecov](https://codecov.io/gh/DeepLabCut/napari-deeplabcut/branch/main/graph/badge.svg)](https://codecov.io/gh/DeepLabCut/napari-deeplabcut)
 [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-deeplabcut)](https://napari-hub.org/plugins/napari-deeplabcut)
 
-A napari plugin for keypoint annotation with DeepLabCut
+A napari plugin for keypoint annotation, also used within DeepLabCut!
 
 
 ## Installation
-In your env with deeplabcut, you can install `napari-deeplabcut` via [pip]:
+
+If you installed DeepLabCut[gui], this plugin is already installed. However, you can also use this as a stand-alone keypoint annotator without using DeepLabCut. Instructions below!
+
+Start by installing PySide6 with `pip install "pyside6<6.3.2"`; this is the library we now use to build GUIs.
+
+You can then install `napari-deeplabcut` via [pip]:
 
     pip install napari-deeplabcut
 
-and pip install PyQt5
 
-To install latest development version :
+
+Alternatively, to install the latest development version, run:
 
     pip install git+https://github.com/DeepLabCut/napari-deeplabcut.git
 
@@ -38,14 +48,18 @@ either by dropping them directly onto the canvas or via the File menu.
 
 The easiest way to get started is to drop a folder (typically a folder from within a DeepLabCut's `labeled-data` directory), and, if labeling from scratch, drop the corresponding `config.yaml` to automatically add a `Points layer` and populate the dropdown menus.
 
+[🎥 DEMO
+](https://youtu.be/hsA9IB5r73E)
+
 **Tools & shortcuts are:**
 
 - `2` and `3`, to easily switch between labeling and selection mode
 - `4`, to enable pan & zoom (which is achieved using the mouse wheel or finger scrolling on the Trackpad)
-- `M`, to cycle through regular (sequential), quick, and cycle annotation mode (see the description [here](https://github.com/DeepLabCut/DeepLabCut-label/blob/ee71b0e15018228c98db3b88769e8a8f4e2c0454/dlclabel/layers.py#L9-L19))
+- `M`, to cycle through regular (sequential), quick, and cycle annotation mode (see the description [here](https://github.com/DeepLabCut/napari-deeplabcut/blob/5a5709dd38868341568d66eab548ae8abf37cd63/src/napari_deeplabcut/keypoints.py#L25-L34))
 - `E`, to enable edge coloring (by default, if using this in refinement GUI mode, points with a confidence lower than 0.6 are marked
 in red)
 - `F`, to toggle between animal and body part color scheme.
+- `V`, to toggle visibility of the selected layer.
 - `backspace` to delete a point.
 - Check the box "display text" to show the label names on the canvas.
 - To move to another folder, be sure to save (Ctrl+S), then delete the layers, and re-drag/drop the next folder.
@@ -58,6 +72,20 @@ Only when saving segmentation masks does a save file dialog pop up to name the d
 keypoint annotations are otherwise automatically saved in the corresponding folder as `CollectedData_<ScorerName>.h5`.
 - As a reminder, DLC will only use the H5 file; so be sure if you open already labeled images you save/overwrite the H5.
 - Note, before saving a layer, make sure the points layer is selected. If the user clicked on the image(s) layer first, does `Save As`, then closes the window, any labeling work during that session will be lost!
+- Modifying and then saving points in a `machinelabels...` layer will add to or overwrite the existing `CollectedData` layer and will **not** save to the `machinelabels` file.
+
+
+### Video frame extraction and prediction refinement
+
+Since v0.0.4, videos can be viewed in the GUI.
+
+Since v0.0.5, trailing points can be visualized; e.g., helping in the identification
+of swaps or outlier, jittery predictions.
+
+Loading a video (and its corresponding output h5 file) will enable the video actions
+at the top of the dock widget: they offer the option to manually extract video
+frames from the GUI, or to define cropping coordinates.
+Note that keypoints can be displaced and saved, as when annotating individual frames.
 
 
 ## Workflow
@@ -85,18 +113,61 @@ Suggested workflows, depending on the image folder contents:
 
     Saving works as described in *1*.
 
+    ***Note that if a new body part has been added to the `config.yaml` file after having started to label, loading the config in the GUI is necessary to update the dropdown menus and other metadata.***
+
+    ***As `viridis` is `napari-deeplabcut` default colormap, loading the config in the GUI is also needed to update the color scheme.***
+
 3. **Refining labels** – the image folder contains a `machinelabels-iter<#>.h5` file.
 
     The process is analog to *2*.
+    Open *napari* and open an image folder.
+    If the video was originally labeled, *and* had outliers extracted it will contain a `CollectedData_<ScorerName>.h5` file and a `machinelabels-iter<#>.h5` file. In this case, select the `machinelabels` layer in the GUI, and type `e` to show edges. Red indicates likelihood < 0.6. As you navigate through frames, images with labels with edges will need to be refined (moved, deleted, etc). Images with labels without edges will be on the `CollectedData` (previous manual annotations) layer and shouldn't need refining. However, you can switch to that layer and fix errors. You can also right-click on the `CollectedData` layer and select `toggle visibility` to hide that layer. Select the `machinelabels` layer before saving which will append your refined annotations to `CollectedData`.
+
+    If the folder only had outliers extracted and wasn't originally labeled, it will not have a `CollectedData` layer. Work with the `machinelabels` layer selected to refine annotation positions, then save.
+
+    In this case, it is not necessary to open the DLC project's `config.yaml` file, as all necessary metadata is read from the `h5` data file.
+
+    Saving works as described in *1*.
 
 4. **Drawing segmentation masks**
 
     Drop an image folder as in *1*, manually add a *shapes layer*. Then select the *rectangle* in the layer controls (top left pane),
     and start drawing rectangles over the images. Masks and rectangle vertices are saved as described in [Save Layers](#save-layers).
-    Note that masks can be reloaded and edited at a later stage by dropping the `vertices.csv` file onto the canvas. 
+    Note that masks can be reloaded and edited at a later stage by dropping the `vertices.csv` file onto the canvas.
 
 5. **Detect Outliers to Refine Labels**
     Open napari as described in [Usage](#usage) and open the `CollectedData_<ScorerName>.h5` file. Click on the button cluster and wait a few seconds. It will show a new layer with the cluster. You can click on a point and see the image on the right with the keypoints. If you decided to refine that frame, click show img and refine them. You can go back to the cluster layer by clicking on close img and refine another image. When you're done, you need to do ctl s to save it. And now you can retrain the network!
+
+
+### Workflow flowchart
+
+```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}} }%%
+graph TD
+  id1[What stage of labeling?]
+  id2[deeplabcut.label_frames]
+  id3[deeplabcut.refine_labels]
+  id4[Add labels to, or modify in, \n `CollectedData...` layer and save that layer]
+  id5[Modify labels in `machinelabels` layer and save \n which will create a `CollectedData...` file]
+  id6[Have you refined some labels from the most recent iteration and saved already?]
+  id7["All extracted frames are already saved in `CollectedData...`.
+1. Hide or trash all `machinelabels` layers.
+2. Then modify in and save `CollectedData`"]
+  id8["
+1. hide or trash all `machinelabels` layers except for the most recent.
+2. Select most recent `machinelabels` and hit `e` to show edges.
+3. Modify only in `machinelabels` and skip frames with labels without edges shown.
+4. Save `machinelabels` layer, which will add data to `CollectedData`.
+	- If you need to revisit this video later, ignore `machinelabels` and work only in `CollectedData`"]
+
+  id1 -->|I need to manually label new frames \n or fix my labels|id2
+  id1 ---->|I need to refine outlier frames \nfrom analyzed videos|id3
+  id2 -->id4
+  id3 -->|I only have a `machinelabels...` file|id5
+  id3 ---->|I have both `machinelabels` and `CollectedData` files|id6
+  id6 -->|yes|id7
+  id6 ---->|no, I just extracted outliers|id8
+```
 
 ### Labeling multiple image folders
 
@@ -104,6 +175,13 @@ Labeling multiple image folders has to be done in sequence; i.e., only one image
 After labeling the images of a particular folder is done and the associated *Points layer* has been saved, *all* layers should be removed from the layers list (lower left pane on the GUI) by selecting them and clicking on the trashcan icon.
 Now, another image folder can be labeled, following the process described in *1*, *2*, or *3*, depending on the particular image folder.
 
+
+### Defining cropping coordinates
+
+Prior to defining cropping coordinates, two elements should be loaded in the GUI:
+a video and the DLC project's `config.yaml` file (into which the crop dimensions will be stored).
+Then it suffices to add a `Shapes layer`, draw a `rectangle` in it with the desired area,
+and hit the button `Store crop coordinates`; coordinates are automatically written to the configuration file.
 
 
 ## Contributing
@@ -128,7 +206,7 @@ If you encounter any problems, please [file an issue] along with a detailed desc
 ## Acknowledgements
 
 
-This [napari] plugin was generated with [Cookiecutter] using [@napari]'s [cookiecutter-napari-plugin] template. We thank the Chan Zuckerberg Initiative (CZI) for funding this work!
+This [napari] plugin was generated with [Cookiecutter] using [@napari]'s [cookiecutter-napari-plugin] template. We thank the Chan Zuckerberg Initiative (CZI) for funding the initial development of this work!
 
 <!--
 Don't miss the full getting started guide to set up your new package:

@@ -36,6 +36,40 @@ def encode_categories(
     return inds
 
 
+def merge_multiple_scorers(
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    n_frames = df.shape[0]
+    header = DLCHeader(df.columns)
+    n_scorers = len(header._get_unique("scorer"))
+    if n_scorers == 1:
+        return df
+
+    if "likelihood" in header.coords:
+        # Merge annotations from multiple scorers to keep
+        # detections with highest confidence
+        data = df.to_numpy().reshape((n_frames, n_scorers, -1, 3))
+        try:
+            idx = np.nanargmax(data[..., 2], axis=1)
+        except ValueError:  # All-NaN slice encountered
+            mask = np.isnan(data[..., 2]).all(axis=1, keepdims=True)
+            mask = np.broadcast_to(mask[..., None], data.shape)
+            data[mask] = -1
+            idx = np.nanargmax(data[..., 2], axis=1)
+            data[mask] = np.nan
+        data_best = data[
+            np.arange(n_frames)[:, None], idx, np.arange(data.shape[2])
+        ].reshape((n_frames, -1))
+        df = pd.DataFrame(
+            data_best,
+            index=df.index,
+            columns=header.columns[: data_best.shape[1]],
+        )
+    else:  # Arbitrarily pick data from the first scorer
+        df = df.loc(axis=1)[: header.scorer]
+    return df
+
+
 def to_os_dir_sep(path: str) -> str:
     """
     Replace all directory separators in `path` with `os.path.sep`.
@@ -74,6 +108,15 @@ def guarantee_multiindex_rows(df):
 def build_color_cycle(n_colors: int, colormap: Optional[str] = "viridis") -> np.ndarray:
     cmap = colormaps.ensure_colormap(colormap)
     return cmap.map(np.linspace(0, 1, n_colors))
+
+
+def build_color_cycles(header: DLCHeader, colormap: Optional[str] = "viridis"):
+    label_colors = build_color_cycle(len(header.bodyparts), colormap)
+    id_colors = build_color_cycle(len(header.individuals), colormap)
+    return {
+        "label": dict(zip(header.bodyparts, label_colors)),
+        "id": dict(zip(header.individuals, id_colors)),
+    }
 
 
 class DLCHeader:
@@ -164,9 +207,6 @@ class CycleEnumMeta(EnumMeta):
         if isinstance(item, str):
             item = item.upper()
         return super().__getitem__(item)
-
-    def keys(self):
-        return list(map(str, self))
 
 
 class CycleEnum(Enum, metaclass=CycleEnumMeta):

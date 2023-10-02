@@ -3,10 +3,13 @@ from enum import auto
 from typing import List, Sequence
 
 import numpy as np
-from napari.layers import Points
 from napari._qt.layer_controls.qt_points_controls import QtPointsControls
+from napari.layers import Points
+from napari.layers.points._points_constants import SYMBOL_TRANSLATION_INVERTED
+from napari.layers.points._points_utils import coerce_symbols
 
 from napari_deeplabcut.misc import CycleEnum
+
 
 # Monkeypatch the point size slider
 def _change_size(self, value):
@@ -17,7 +20,18 @@ def _change_size(self, value):
         self.layer.refresh()
         self.layer.events.size()
 
-QtPointsControls.changeSize = _change_size
+
+def _change_symbol(self, text):
+    symbol = coerce_symbols(np.array([SYMBOL_TRANSLATION_INVERTED[text]]))[0]
+    self.layer._current_symbol = symbol
+    if self.layer._update_properties:
+        self.layer.symbol = symbol
+        self.layer.events.symbol()
+    self.layer.events.current_symbol()
+
+
+QtPointsControls.changeCurrentSize = _change_size
+QtPointsControls.changeCurrentSymbol = _change_symbol
 
 
 class LabelMode(CycleEnum):
@@ -27,8 +41,8 @@ class LabelMode(CycleEnum):
         clicking to add an already annotated point has no effect.
     QUICK: similar to SEQUENTIAL, but trying to add an already
         annotated point actually moves it to the cursor location.
-    LOOP: the first point is placed frame by frame, then it wraps
-        to the next label at the end and restart from frame 1, etc.
+    LOOP: the currently selected point is placed frame after frame,
+        before wrapping at the end to frame 1, etc.
     """
 
     SEQUENTIAL = auto()
@@ -43,11 +57,11 @@ class LabelMode(CycleEnum):
 # Description tooltips for the labeling modes radio buttons.
 TOOLTIPS = {
     "SEQUENTIAL": "Points are placed in sequence, then frame after frame;\n"
-                  "clicking to add an already annotated point has no effect.",
+    "clicking to add an already annotated point has no effect.",
     "QUICK": "Similar to SEQUENTIAL, but trying to add an already\n"
-             "annotated point actually moves it to the cursor location.",
-    "LOOP": "The first point is placed frame by frame, then it wraps\n"
-            "to the next label at the end and restart from frame 1, etc.",
+    "annotated point actually moves it to the cursor location.",
+    "LOOP": "The currently selected point is placed frame after frame,\n"
+    "before wrapping at the end to frame 1, etc.",
 }
 
 
@@ -57,12 +71,21 @@ Keypoint = namedtuple("Keypoint", ["label", "id"])
 class KeypointStore:
     def __init__(self, viewer, layer: Points):
         self.viewer = viewer
+        self._keypoints = []
         self.layer = layer
+        self.viewer.dims.set_current_step(0, 0)
+
+    @property
+    def layer(self):
+        return self._layer
+
+    @layer.setter
+    def layer(self, layer):
+        self._layer = layer
         all_pairs = self.layer.metadata["header"].form_individual_bodypart_pairs()
         self._keypoints = [
             Keypoint(label, id_) for id_, label in all_pairs
         ]  # Ordered references to all possible keypoints
-        self.viewer.dims.set_current_step(0, 0)
 
     @property
     def current_step(self):
@@ -81,8 +104,7 @@ class KeypointStore:
 
     @property
     def current_mask(self) -> Sequence[bool]:
-        # return self.layer.data[:, 0] == self.current_step
-        return np.asarray(self.layer.data[:, 0] == self.layer._slice_indices[0])
+        return np.asarray(self.layer.data[:, 0] == self.current_step)
 
     @property
     def current_keypoint(self) -> Keypoint:
@@ -97,16 +119,6 @@ class KeypointStore:
             current_properties["label"] = np.asarray([keypoint.label])
             current_properties["id"] = np.asarray([keypoint.id])
             self.layer.current_properties = current_properties
-
-    def smart_reset(self, event):
-        """Set current keypoint to the first unlabeled one."""
-        unannotated = ""
-        already_annotated = self.annotated_keypoints
-        for keypoint in self._keypoints:
-            if keypoint not in already_annotated:
-                unannotated = keypoint
-                break
-        self.current_keypoint = unannotated if unannotated else self._keypoints[0]
 
     def next_keypoint(self, *args):
         ind = self._keypoints.index(self.current_keypoint) + 1
