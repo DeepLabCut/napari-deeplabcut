@@ -24,6 +24,7 @@ from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
 from qtpy.QtCore import Qt, QTimer, Signal, QPoint, QSettings, QSize
 from qtpy.QtGui import QPainter, QAction, QCursor, QIcon
+from qtpy.QtSvgWidgets import QSvgWidget
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -65,18 +66,16 @@ class Shortcuts(QDialog):
         super().__init__(parent=parent)
         self.setParent(parent)
         self.setWindowTitle("Shortcuts")
+
+        image_path = str(Path(__file__).parent / "assets" / "napari_shortcuts.svg")
+
         vlayout = QVBoxLayout()
-        shortcuts = """
-            * `2` and `3`, to switch between labeling and selection mode
-            * `4`, to enable pan & zoom
-            * `M`, to cycle through regular (sequential), quick, and loop annotation mode
-            * `E`, to enable edge coloring
-            * `F`, to toggle between animal and body part color scheme
-            * `V`, to toggle visibility of the selected layer
-            * `backspace`, to delete a point
-        """
-        message = QLabel(shortcuts)
-        vlayout.addWidget(message)
+        background_widget = QWidget()
+        background_widget.setStyleSheet("background-color: white;")
+        svg_widget = QSvgWidget(image_path)
+        vlayout.addWidget(background_widget)
+        vlayout.addWidget(svg_widget)
+        vlayout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(vlayout)
 
 
@@ -643,9 +642,9 @@ class KeypointControls(QWidget):
         self.viewer.window.view_menu.addAction(launch_tutorial)
 
         # Add action to view keyboard shortcuts
-        display_shortcuts = QAction("&Shortcuts", self)
-        display_shortcuts.triggered.connect(self.display_shortcuts)
-        self.viewer.window.help_menu.addAction(display_shortcuts)
+        display_shortcuts_action = QAction("&Shortcuts", self)
+        display_shortcuts_action.triggered.connect(self.display_shortcuts)
+        self.viewer.window.help_menu.addAction(display_shortcuts_action)
 
         # Hide some unused viewer buttons
         self.viewer.window._qt_viewer.viewerButtons.gridViewButton.hide()
