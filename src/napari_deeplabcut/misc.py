@@ -10,6 +10,18 @@ import pandas as pd
 from napari.utils import colormaps
 
 
+def is_latest_version():
+    import json
+    import urllib.request
+    from napari_deeplabcut import __version__
+
+    url = "https://pypi.org/pypi/napari-deeplabcut/json"
+    contents = urllib.request.urlopen(url).read()
+    latest_version = json.loads(contents)["info"]["version"]
+    return __version__ == latest_version, latest_version
+
+
+
 def unsorted_unique(array: Sequence) -> np.ndarray:
     """Return the unsorted unique elements of an array."""
     _, inds = np.unique(array, return_index=True)
