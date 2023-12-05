@@ -82,6 +82,7 @@ def write_hdf(filename, data, metadata):
 
 
 def _write_image(data, output_path, plugin=None):
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     imsave(
         output_path,
         img_as_ubyte(data).squeeze(),
