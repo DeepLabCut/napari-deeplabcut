@@ -682,7 +682,10 @@ class KeypointControls(QWidget):
         if state == Qt.Checked:
             if self._trails is None:
                 store = list(self._stores.values())[0]
-                inds = encode_categories(store.layer.properties["label"])
+                categories = store.layer.properties["id"]
+                if not categories[0]:  # Single animal data
+                    categories = store.layer.properties["label"]
+                inds = encode_categories(categories)
                 temp = np.c_[inds, store.layer.data]
                 cmap = "viridis"
                 for layer in self.viewer.layers:
