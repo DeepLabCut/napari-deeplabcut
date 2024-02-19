@@ -679,7 +679,7 @@ class KeypointControls(QWidget):
         self._color_scheme_display.setVisible(show)
 
     def _show_trails(self, state):
-        if state == Qt.Checked:
+        if Qt.CheckState(state) == Qt.CheckState.Checked:
             if self._trails is None:
                 store = list(self._stores.values())[0]
                 categories = store.layer.properties["id"]
@@ -704,7 +704,7 @@ class KeypointControls(QWidget):
             self._trails.visible = False
 
     def _show_matplotlib_canvas(self, state):
-        if state == Qt.Checked:
+        if Qt.CheckState(state) == Qt.CheckState.Checked:
             self._matplotlib_canvas.show()
         else:
             self._matplotlib_canvas.hide()
