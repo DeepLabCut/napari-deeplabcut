@@ -28,7 +28,6 @@ def test_show_trails(viewer, store):
     controls._stores["temp"] = store
     controls._is_saved = True
     controls._show_trails(state=2)
-    controls.deleteLater()
 
 
 def test_extract_single_frame(viewer, images):
