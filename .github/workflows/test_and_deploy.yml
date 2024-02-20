@@ -75,7 +75,7 @@ jobs:
     # github secrets (see readme for details)
     needs: [test]
     runs-on: ubuntu-latest
-    if: contains(github.ref, 'tags') || ${{ inputs.force_deploy }}
+    if: ${{ contains(github.ref, 'tags') || inputs.force_deploy }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
