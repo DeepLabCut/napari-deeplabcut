@@ -15,6 +15,11 @@ on:
       - main
       - npe2
   workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deployment even if tests fail'
+        required: true
+        type: boolean
 
 jobs:
   test:
@@ -70,7 +75,7 @@ jobs:
     # github secrets (see readme for details)
     needs: [test]
     runs-on: ubuntu-latest
-    if: contains(github.ref, 'tags')
+    if: contains(github.ref, 'tags') || ${{ inputs.force_deploy }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
