@@ -22,7 +22,7 @@ A napari plugin for keypoint annotation, also used within DeepLabCut!
 
 If you installed DeepLabCut[gui], this plugin is already installed. However, you can also use this as a stand-alone keypoint annotator without using DeepLabCut. Instructions below!
 
-Start by installing PySide6 with `pip install "pyside6<6.3.2"`; this is the library we now use to build GUIs.
+Start by installing PySide6 with `pip install "pyside6==6.4.2"`; this is the library we now use to build GUIs.
 
 You can then install `napari-deeplabcut` via [pip]:
 
