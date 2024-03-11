@@ -75,7 +75,6 @@ class Shortcuts(QDialog):
         svg_widget = QSvgWidget(image_path)
         vlayout.addWidget(background_widget)
         vlayout.addWidget(svg_widget)
-        vlayout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(vlayout)
 
 
