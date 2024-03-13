@@ -34,6 +34,22 @@ QtPointsControls.changeCurrentSize = _change_size
 QtPointsControls.changeCurrentSymbol = _change_symbol
 
 
+class ColorMode(CycleEnum):
+    """Modes in which keypoints can be colored
+
+    BODYPART: the keypoints are grouped by bodypart (all bodyparts have the same color)
+    INDIVIDUAL: the keypoints are grouped by individual (all keypoints for the same
+        individual have the same color)
+    """
+
+    BODYPART = auto()
+    INDIVIDUAL = auto()
+
+    @classmethod
+    def default(cls):
+        return cls.BODYPART
+
+
 class LabelMode(CycleEnum):
     """
     Labeling modes.
