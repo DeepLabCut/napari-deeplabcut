@@ -62,6 +62,8 @@ Tip = namedtuple("Tip", ["msg", "pos"])
 
 
 class Shortcuts(QDialog):
+    """Opens a window displaying available napari-deeplabcut shortcuts"""
+
     def __init__(self, parent):
         super().__init__(parent=parent)
         self.setParent(parent)
@@ -70,10 +72,8 @@ class Shortcuts(QDialog):
         image_path = str(Path(__file__).parent / "assets" / "napari_shortcuts.svg")
 
         vlayout = QVBoxLayout()
-        background_widget = QWidget()
-        background_widget.setStyleSheet("background-color: white;")
         svg_widget = QSvgWidget(image_path)
-        vlayout.addWidget(background_widget)
+        svg_widget.setStyleSheet("background-color: white;")
         vlayout.addWidget(svg_widget)
         self.setLayout(vlayout)
 
@@ -584,6 +584,10 @@ class KeypointControls(QWidget):
         )
         self.video_widget.setVisible(False)
 
+        # form helper display
+        help_buttons = self._form_help_buttons()
+        self._layout.addLayout(help_buttons)
+
         hlayout = QHBoxLayout()
         trail_label = QLabel("Show trails")
         self._trail_cb = QCheckBox()
@@ -610,7 +614,10 @@ class KeypointControls(QWidget):
 
         self._layout.addLayout(hlayout)
 
+        # form buttons for selection of annotation mode
         self._radio_group = self._form_mode_radio_buttons()
+
+        # form color scheme display + color mode selector
         self._color_mode_selector = self._form_color_mode_selector()
         self._display = ColorSchemeDisplay(parent=self)
         self._color_scheme_display = self._form_color_scheme_display(self.viewer)
@@ -720,6 +727,16 @@ class KeypointControls(QWidget):
         layout.addWidget(crop_button)
         group_box.setLayout(layout)
         return group_box
+
+    def _form_help_buttons(self):
+        layout = QHBoxLayout()
+        show_shortcuts = QPushButton("View shortcuts")
+        show_shortcuts.clicked.connect(self.display_shortcuts)
+        layout.addWidget(show_shortcuts)
+        tutorial = QPushButton("Start tutorial")
+        tutorial.clicked.connect(self.start_tutorial)
+        layout.addWidget(tutorial)
+        return layout
 
     def _extract_single_frame(self, *args):
         image_layer = None
