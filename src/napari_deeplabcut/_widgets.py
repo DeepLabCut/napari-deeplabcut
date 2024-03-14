@@ -577,6 +577,8 @@ class KeypointControls(QWidget):
         # Add some more controls
         self._layout = QVBoxLayout(self)
         self._menus = []
+        self._layer_to_menu = {}
+        self.viewer.layers.selection.events.active.connect(self.on_active_layer_change)
 
         self._video_group = self._form_video_action_menu()
         self.video_widget = self.viewer.window.add_dock_widget(
@@ -807,6 +809,7 @@ class KeypointControls(QWidget):
         )
         menu.smart_reset(event=None)
         self._menus.append(menu)
+        self._layer_to_menu[store.layer] = len(self._menus) - 1
         layout = QVBoxLayout()
         layout.addWidget(menu)
         self._layout.addLayout(layout)
@@ -995,8 +998,7 @@ class KeypointControls(QWidget):
             layer.bind_key("Down", store.next_keypoint, overwrite=True)
             layer.bind_key("Up", store.prev_keypoint, overwrite=True)
             layer.face_color_mode = "cycle"
-            if not self._menus and layer.name.startswith("CollectedData"):
-                self._form_dropdown_menus(store)
+            self._form_dropdown_menus(store)
 
             self._images_meta.update(
                 {
@@ -1038,6 +1040,7 @@ class KeypointControls(QWidget):
                 self._layout.removeWidget(menu)
                 menu.deleteLater()
                 menu.destroy()
+            self._layer_to_menu = {}
             self._trail_cb.setEnabled(False)
             self._matplotlib_cb.setEnabled(False)
             self.last_saved_label.hide()
@@ -1050,6 +1053,19 @@ class KeypointControls(QWidget):
             self._trail_cb.setChecked(False)
             self._matplotlib_cb.setChecked(False)
             self._trails = None
+
+    def on_active_layer_change(self, event) -> None:
+        """Hides all KeypointsDropdownMenu that aren't for the selected layer"""
+        menu_idx = -1
+        if event.value is not None and isinstance(event.value, Points):
+            menu_idx = self._layer_to_menu.get(event.value, -1)
+
+        for idx, menu in enumerate(self._menus):
+            if idx == menu_idx:
+                menu.setHidden(False)
+            else:
+                menu.setHidden(True)
+
 
     def _update_colormap(self, colormap_name):
         for layer in self.viewer.layers:
