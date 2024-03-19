@@ -1,3 +1,4 @@
+import logging
 import os
 from collections import defaultdict, namedtuple
 from copy import deepcopy
@@ -54,14 +55,15 @@ from napari_deeplabcut.misc import (
     encode_categories,
     to_os_dir_sep,
     guarantee_multiindex_rows,
-    build_color_cycles
+    build_color_cycles,
 )
-
 
 Tip = namedtuple("Tip", ["msg", "pos"])
 
 
 class Shortcuts(QDialog):
+    """Opens a window displaying available napari-deeplabcut shortcuts"""
+
     def __init__(self, parent):
         super().__init__(parent=parent)
         self.setParent(parent)
@@ -70,12 +72,9 @@ class Shortcuts(QDialog):
         image_path = str(Path(__file__).parent / "assets" / "napari_shortcuts.svg")
 
         vlayout = QVBoxLayout()
-        background_widget = QWidget()
-        background_widget.setStyleSheet("background-color: white;")
         svg_widget = QSvgWidget(image_path)
-        vlayout.addWidget(background_widget)
+        svg_widget.setStyleSheet("background-color: white;")
         vlayout.addWidget(svg_widget)
-        vlayout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(vlayout)
 
 
@@ -558,6 +557,7 @@ class KeypointControls(QWidget):
         overlay.addWidget(w)
         overlay._overlay.sig_dropped.connect(overlay.sig_dropped)
 
+        self._color_mode = keypoints.ColorMode.default()
         self._label_mode = keypoints.LabelMode.default()
 
         # Hold references to the KeypointStores
@@ -577,12 +577,18 @@ class KeypointControls(QWidget):
         # Add some more controls
         self._layout = QVBoxLayout(self)
         self._menus = []
+        self._layer_to_menu = {}
+        self.viewer.layers.selection.events.active.connect(self.on_active_layer_change)
 
         self._video_group = self._form_video_action_menu()
         self.video_widget = self.viewer.window.add_dock_widget(
             self._video_group, name="video", area="right"
         )
         self.video_widget.setVisible(False)
+
+        # form helper display
+        help_buttons = self._form_help_buttons()
+        self._layout.addLayout(help_buttons)
 
         hlayout = QHBoxLayout()
         trail_label = QLabel("Show trails")
@@ -610,8 +616,11 @@ class KeypointControls(QWidget):
 
         self._layout.addLayout(hlayout)
 
+        # form buttons for selection of annotation mode
         self._radio_group = self._form_mode_radio_buttons()
 
+        # form color scheme display + color mode selector
+        self._color_mode_selector = self._form_color_mode_selector()
         self._display = ColorSchemeDisplay(parent=self)
         self._color_scheme_display = self._form_color_scheme_display(self.viewer)
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
@@ -721,6 +730,16 @@ class KeypointControls(QWidget):
         group_box.setLayout(layout)
         return group_box
 
+    def _form_help_buttons(self):
+        layout = QHBoxLayout()
+        show_shortcuts = QPushButton("View shortcuts")
+        show_shortcuts.clicked.connect(self.display_shortcuts)
+        layout.addWidget(show_shortcuts)
+        tutorial = QPushButton("Start tutorial")
+        tutorial.clicked.connect(self.start_tutorial)
+        layout.addWidget(tutorial)
+        return layout
+
     def _extract_single_frame(self, *args):
         image_layer = None
         points_layer = None
@@ -746,7 +765,7 @@ class KeypointControls(QWidget):
                         "properties": points_layer.properties,
                     },
                 )
-                df = df.iloc[ind : ind + 1]
+                df = df.iloc[ind: ind + 1]
                 df.index = pd.MultiIndex.from_tuples([Path(output_path).parts[-3:]])
                 filepath = os.path.join(
                     image_layer.metadata["root"], "machinelabels-iter0.h5"
@@ -790,6 +809,7 @@ class KeypointControls(QWidget):
         )
         menu.smart_reset(event=None)
         self._menus.append(menu)
+        self._layer_to_menu[store.layer] = len(self._menus) - 1
         layout = QVBoxLayout()
         layout.addWidget(menu)
         self._layout.addLayout(layout)
@@ -813,6 +833,24 @@ class KeypointControls(QWidget):
         group.buttonClicked.connect(_func)
         return group
 
+    def _form_color_mode_selector(self):
+        group_box = QGroupBox("Keypoint coloring mode")
+        layout = QHBoxLayout()
+        group = QButtonGroup(self)
+        for i, mode in enumerate(keypoints.ColorMode.__members__, start=1):
+            btn = QRadioButton(mode.lower())
+            group.addButton(btn, i)
+            layout.addWidget(btn)
+        group.button(1).setChecked(True)
+        group_box.setLayout(layout)
+        self._layout.addWidget(group_box)
+
+        def _func():
+            self.color_mode = group.checkedButton().text()
+
+        group.buttonClicked.connect(_func)
+        return group
+
     def _form_color_scheme_display(self, viewer):
         self.viewer.layers.events.inserted.connect(self._update_color_scheme)
         return viewer.window.add_dock_widget(
@@ -827,14 +865,15 @@ class KeypointControls(QWidget):
             return res
 
         self._display.reset()
+        mode = "label" if self.color_mode == str(keypoints.ColorMode.BODYPART) else "id"
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata:
-                [
-                    self._display.add_entry(name, to_hex(color))
-                    for name, color in layer.metadata["face_color_cycles"][
-                        "label"
-                    ].items()
-                ]
+                self._display.update_color_scheme(
+                    {
+                        name: to_hex(color)
+                        for name, color in layer.metadata["face_color_cycles"][mode].items()
+                    }
+                )
                 break
 
     def _remap_frame_indices(self, layer):
@@ -874,6 +913,7 @@ class KeypointControls(QWidget):
 
     def on_insert(self, event):
         layer = event.source[-1]
+        logging.debug(f"Inserting Layer {layer}")
         if isinstance(layer, Image):
             paths = layer.metadata.get("paths")
             if paths is None:  # Then it's a video file
@@ -946,6 +986,7 @@ class KeypointControls(QWidget):
             layer.metadata["controls"] = self
             layer.text.visible = False
             layer.bind_key("M", self.cycle_through_label_modes)
+            layer.bind_key("F", self.cycle_through_color_modes)
             func = partial(_paste_data, store=store)
             layer._paste_data = MethodType(func, layer)
             layer.add = MethodType(keypoints._add, store)
@@ -957,8 +998,8 @@ class KeypointControls(QWidget):
             layer.bind_key("Down", store.next_keypoint, overwrite=True)
             layer.bind_key("Up", store.prev_keypoint, overwrite=True)
             layer.face_color_mode = "cycle"
-            if not self._menus:
-                self._form_dropdown_menus(store)
+            self._form_dropdown_menus(store)
+
             self._images_meta.update(
                 {
                     "project": layer.metadata.get("project"),
@@ -999,6 +1040,7 @@ class KeypointControls(QWidget):
                 self._layout.removeWidget(menu)
                 menu.deleteLater()
                 menu.destroy()
+            self._layer_to_menu = {}
             self._trail_cb.setEnabled(False)
             self._matplotlib_cb.setEnabled(False)
             self.last_saved_label.hide()
@@ -1012,6 +1054,19 @@ class KeypointControls(QWidget):
             self._matplotlib_cb.setChecked(False)
             self._trails = None
 
+    def on_active_layer_change(self, event) -> None:
+        """Hides all KeypointsDropdownMenu that aren't for the selected layer"""
+        menu_idx = -1
+        if event.value is not None and isinstance(event.value, Points):
+            menu_idx = self._layer_to_menu.get(event.value, -1)
+
+        for idx, menu in enumerate(self._menus):
+            if idx == menu_idx:
+                menu.setHidden(False)
+            else:
+                menu.setHidden(True)
+
+
     def _update_colormap(self, colormap_name):
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata:
@@ -1019,16 +1074,23 @@ class KeypointControls(QWidget):
                     layer.metadata["header"], colormap_name,
                 )
                 layer.metadata["face_color_cycles"] = face_color_cycle_maps
-                face_color_prop = layer._face.color_properties.name
+                if self.color_mode == keypoints.ColorMode.BODYPART:
+                    face_color_prop = "label"
+                else:
+                    face_color_prop = "id"
+
                 layer.face_color = face_color_prop
                 layer.face_color_cycle = face_color_cycle_maps[face_color_prop]
                 layer.events.face_color()
                 self._update_color_scheme()
-                break
 
     @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):
         self.label_mode = next(keypoints.LabelMode)
+
+    @register_points_action("Change color mode")
+    def cycle_through_color_modes(self, *args):
+        self.color_mode = next(keypoints.ColorMode)
 
     @property
     def label_mode(self):
@@ -1050,16 +1112,31 @@ class KeypointControls(QWidget):
                 btn.setChecked(True)
                 break
 
+    @property
+    def color_mode(self):
+        return str(self._color_mode)
 
-@Points.bind_key("F")
-def toggle_face_color(layer):
-    if layer._face.color_properties.name == "id":
-        layer.face_color = "label"
-        layer.face_color_cycle = layer.metadata["face_color_cycles"]["label"]
-    else:
-        layer.face_color = "id"
-        layer.face_color_cycle = layer.metadata["face_color_cycles"]["id"]
-    layer.events.face_color()
+    @color_mode.setter
+    def color_mode(self, mode: Union[str, keypoints.ColorMode]):
+        self._color_mode = keypoints.ColorMode(mode)
+        if self._color_mode == keypoints.ColorMode.BODYPART:
+            face_color_mode = "label"
+        else:
+            face_color_mode = "id"
+
+        for layer in self.viewer.layers:
+            if isinstance(layer, Points) and layer.metadata:
+                layer.face_color = face_color_mode
+                layer.face_color_cycle = layer.metadata["face_color_cycles"][
+                    face_color_mode]
+                layer.events.face_color()
+
+        for btn in self._color_mode_selector.buttons():
+            if btn.text() == str(mode):
+                btn.setChecked(True)
+                break
+
+        self._update_color_scheme()
 
 
 @Points.bind_key("E")
@@ -1414,9 +1491,38 @@ class ColorSchemeDisplay(QScrollArea):
         self._layout.addWidget(widget, alignment=Qt.AlignmentFlag.AlignLeft)
         self.added.emit(widget)
 
+    def update_color_scheme(self, new_color_scheme) -> None:
+        logging.debug(f"Updating color scheme: {self._layout.count()} widgets")
+        self.scheme_dict = {name: color for name, color in new_color_scheme.items()}
+        names = list(new_color_scheme.keys())
+        existing_widgets = self._layout.count()
+        required_widgets = len(self.scheme_dict)
+
+        # update existing widgets
+        for idx in range(min(existing_widgets, required_widgets)):
+            logging.debug(f"  updating {idx}")
+            w = self._layout.itemAt(idx).widget()
+            w.setVisible(True)
+            w.part_name = names[idx]
+            w.color = self.scheme_dict[names[idx]]
+
+        # remove extra widgets
+        for i in range(max(existing_widgets - required_widgets, 0)):
+            logging.debug(f"  hiding {required_widgets + i}")
+            if w := self._layout.itemAt(required_widgets + i).widget():
+                logging.debug(f"  done!")
+                w.setVisible(False)
+
+        # add missing widgets
+        for i in range(max(required_widgets - existing_widgets, 0)):
+            logging.debug(f"  adding {existing_widgets + i}")
+            name = names[existing_widgets + i]
+            self.add_entry(name, self.scheme_dict[name])
+        logging.debug(f"  done!")
+
     def reset(self):
         self.scheme_dict = {}
-        for i in reversed(range(self._layout.count())):
+        for i in range(self._layout.count()):
             w = self._layout.itemAt(i).widget()
-            w.setParent(None)
-            self._layout.removeWidget(w)
+            logging.debug(f"making {w} invisible")
+            w.setVisible(False)
