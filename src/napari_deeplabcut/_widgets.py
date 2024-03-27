@@ -1088,9 +1088,8 @@ class KeypointControls(QWidget):
                     layer.metadata["header"], colormap_name,
                 )
                 layer.metadata["face_color_cycles"] = face_color_cycle_maps
-                if self.color_mode == keypoints.ColorMode.BODYPART:
-                    face_color_prop = "label"
-                else:
+                face_color_prop = "label"
+                if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL):
                     face_color_prop = "id"
 
                 layer.face_color = face_color_prop
