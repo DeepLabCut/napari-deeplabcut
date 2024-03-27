@@ -1082,7 +1082,7 @@ class KeypointControls(QWidget):
                 menu.setHidden(True)
 
     def _update_colormap(self, colormap_name):
-        for layer in self.viewer.layers:
+        for layer in self.viewer.layers.selection:
             if isinstance(layer, Points) and layer.metadata:
                 face_color_cycle_maps = build_color_cycles(
                     layer.metadata["header"], colormap_name,
