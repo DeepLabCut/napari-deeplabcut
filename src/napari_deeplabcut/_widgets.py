@@ -620,7 +620,7 @@ class KeypointControls(QWidget):
         self._radio_group = self._form_mode_radio_buttons()
 
         # form color scheme display + color mode selector
-        self._color_mode_selector = self._form_color_mode_selector()
+        self._color_mode_box, self._color_mode_selector = self._form_color_mode_selector()
         self._display = ColorSchemeDisplay(parent=self)
         self._color_scheme_display = self._form_color_scheme_display(self.viewer)
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
@@ -849,7 +849,7 @@ class KeypointControls(QWidget):
             self.color_mode = group.checkedButton().text()
 
         group.buttonClicked.connect(_func)
-        return group
+        return group_box, group
 
     def _form_color_scheme_display(self, viewer):
         self.viewer.layers.events.inserted.connect(self._update_color_scheme)
@@ -1055,7 +1055,13 @@ class KeypointControls(QWidget):
             self._trails = None
 
     def on_active_layer_change(self, event) -> None:
-        """Hides all KeypointsDropdownMenu that aren't for the selected layer"""
+        """Updates the GUI when the active layer changes
+            * Hides all KeypointsDropdownMenu that aren't for the selected layer
+            * Sets the visibility of the "Color mode" box to True if the selected layer
+                is a multi-animal one, or False otherwise
+        """
+        logging.warning(f"COLOR MODE BOX VIS TO {self._is_multianimal(event.value)}")
+        self._color_mode_box.setVisible(self._is_multianimal(event.value))
         menu_idx = -1
         if event.value is not None and isinstance(event.value, Points):
             menu_idx = self._layer_to_menu.get(event.value, -1)
@@ -1065,7 +1071,6 @@ class KeypointControls(QWidget):
                 menu.setHidden(False)
             else:
                 menu.setHidden(True)
-
 
     def _update_colormap(self, colormap_name):
         for layer in self.viewer.layers:
@@ -1090,7 +1095,15 @@ class KeypointControls(QWidget):
 
     @register_points_action("Change color mode")
     def cycle_through_color_modes(self, *args):
-        self.color_mode = next(keypoints.ColorMode)
+        logging.warning("CYCLING")
+        logging.warning(f"  _active_layer_multi {self._active_layer_is_multianimal()}")
+        logging.warning(f"  color_mode {self.color_mode}")
+        if (
+            self._active_layer_is_multianimal()
+            or self.color_mode != str(keypoints.ColorMode.BODYPART)
+        ):
+            self.color_mode = next(keypoints.ColorMode)
+            logging.warning(f"  UPDATING COLOR MODE TO {self.color_mode}")
 
     @property
     def label_mode(self):
@@ -1137,6 +1150,27 @@ class KeypointControls(QWidget):
                 break
 
         self._update_color_scheme()
+
+    def _is_multianimal(self, layer) -> bool:
+        is_multi = False
+        if layer is not None and isinstance(layer, Points):
+            try:
+                header = layer.metadata.get("header")
+                if header is not None:
+                    ids = header.individuals
+                    is_multi = len(ids) > 0 and ids[0] != ""
+            except AttributeError:
+                pass
+
+        return is_multi
+
+    def _active_layer_is_multianimal(self) -> bool:
+        """Returns: whether the active layer is a multi-animal points layer"""
+        for layer in self.viewer.layers.selection:
+            if self._is_multianimal(layer):
+                return True
+
+        return False
 
 
 @Points.bind_key("E")
