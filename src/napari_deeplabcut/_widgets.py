@@ -865,7 +865,18 @@ class KeypointControls(QWidget):
             return res
 
         self._display.reset()
-        mode = "label" if self.color_mode == str(keypoints.ColorMode.BODYPART) else "id"
+        logging.warning(self.color_mode)
+        logging.warning(str(keypoints.ColorMode.BODYPART))
+        logging.warning(str(keypoints.ColorMode.INDIVIDUAL))
+        logging.warning(str(self.color_mode == str(keypoints.ColorMode.BODYPART)))
+        logging.warning(str(self.color_mode == str(keypoints.ColorMode.INDIVIDUAL)))
+        logging.warning("---")
+        mode = "label"
+        if self.color_mode == str(keypoints.ColorMode.BODYPART):
+            mode = "id"
+
+        logging.warning(f"SELECTED MODE: {mode}")
+        logging.warning("---")
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata:
                 self._display.update_color_scheme(
@@ -874,7 +885,6 @@ class KeypointControls(QWidget):
                         for name, color in layer.metadata["face_color_cycles"][mode].items()
                     }
                 )
-                break
 
     def _remap_frame_indices(self, layer):
         if not self._images_meta.get("paths"):
