@@ -1060,7 +1060,6 @@ class KeypointControls(QWidget):
             * Sets the visibility of the "Color mode" box to True if the selected layer
                 is a multi-animal one, or False otherwise
         """
-        logging.warning(f"COLOR MODE BOX VIS TO {self._is_multianimal(event.value)}")
         self._color_mode_box.setVisible(self._is_multianimal(event.value))
         menu_idx = -1
         if event.value is not None and isinstance(event.value, Points):
@@ -1095,15 +1094,11 @@ class KeypointControls(QWidget):
 
     @register_points_action("Change color mode")
     def cycle_through_color_modes(self, *args):
-        logging.warning("CYCLING")
-        logging.warning(f"  _active_layer_multi {self._active_layer_is_multianimal()}")
-        logging.warning(f"  color_mode {self.color_mode}")
         if (
             self._active_layer_is_multianimal()
             or self.color_mode != str(keypoints.ColorMode.BODYPART)
         ):
             self.color_mode = next(keypoints.ColorMode)
-            logging.warning(f"  UPDATING COLOR MODE TO {self.color_mode}")
 
     @property
     def label_mode(self):
