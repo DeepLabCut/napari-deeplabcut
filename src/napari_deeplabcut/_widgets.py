@@ -620,7 +620,7 @@ class KeypointControls(QWidget):
         self._radio_group = self._form_mode_radio_buttons()
 
         # form color scheme display + color mode selector
-        self._color_mode_box, self._color_mode_selector = self._form_color_mode_selector()
+        self._color_grp, self._color_mode_selector = self._form_color_mode_selector()
         self._display = ColorSchemeDisplay(parent=self)
         self._color_scheme_display = self._form_color_scheme_display(self.viewer)
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
@@ -1060,7 +1060,7 @@ class KeypointControls(QWidget):
             * Sets the visibility of the "Color mode" box to True if the selected layer
                 is a multi-animal one, or False otherwise
         """
-        self._color_mode_box.setVisible(self._is_multianimal(event.value))
+        self._color_grp.setVisible(self._is_multianimal(event.value))
         menu_idx = -1
         if event.value is not None and isinstance(event.value, Points):
             menu_idx = self._layer_to_menu.get(event.value, -1)
