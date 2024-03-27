@@ -872,7 +872,7 @@ class KeypointControls(QWidget):
         logging.warning(str(self.color_mode == str(keypoints.ColorMode.INDIVIDUAL)))
         logging.warning("---")
         mode = "label"
-        if self.color_mode == str(keypoints.ColorMode.BODYPART):
+        if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL):
             mode = "id"
 
         logging.warning(f"SELECTED MODE: {mode}")
