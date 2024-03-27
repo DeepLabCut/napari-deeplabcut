@@ -865,18 +865,10 @@ class KeypointControls(QWidget):
             return res
 
         self._display.reset()
-        logging.warning(self.color_mode)
-        logging.warning(str(keypoints.ColorMode.BODYPART))
-        logging.warning(str(keypoints.ColorMode.INDIVIDUAL))
-        logging.warning(str(self.color_mode == str(keypoints.ColorMode.BODYPART)))
-        logging.warning(str(self.color_mode == str(keypoints.ColorMode.INDIVIDUAL)))
-        logging.warning("---")
         mode = "label"
         if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL):
             mode = "id"
 
-        logging.warning(f"SELECTED MODE: {mode}")
-        logging.warning("---")
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata:
                 self._display.update_color_scheme(
