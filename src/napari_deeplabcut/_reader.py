@@ -1,4 +1,5 @@
 import glob
+import json
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
@@ -150,6 +151,17 @@ def _populate_metadata(
             "paths": paths or [],
         },
     }
+
+
+def _load_superkeypoints_diagram():
+    path = str(Path(__file__).parent / "assets" / "topviewmouse.jpg")
+    return imread(path), {"root": ""}, "images"
+
+
+def _load_superkeypoints():
+    path = str(Path(__file__).parent / "assets" / "topviewmouse.json")
+    with open(path) as f:
+        return json.load(f)
 
 
 def _load_config(config_path: str):

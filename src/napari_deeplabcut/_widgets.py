@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from collections import defaultdict, namedtuple
@@ -49,7 +50,11 @@ from qtpy.QtWidgets import (
 )
 
 from napari_deeplabcut import keypoints
-from napari_deeplabcut._reader import _load_config
+from napari_deeplabcut._reader import (
+    _load_config,
+    _load_superkeypoints_diagram,
+    _load_superkeypoints,
+)
 from napari_deeplabcut._writer import _write_config, _write_image, _form_df
 from napari_deeplabcut.misc import (
     encode_categories,
@@ -349,18 +354,14 @@ class NapariNavigationToolbar(NavigationToolbar2QT):
                     QIcon(os.path.join(icon_dir, "Pan_checked.png"))
                 )
             else:
-                self._actions["pan"].setIcon(
-                    QIcon(os.path.join(icon_dir, "Pan.png"))
-                )
+                self._actions["pan"].setIcon(QIcon(os.path.join(icon_dir, "Pan.png")))
         if "zoom" in self._actions:
             if self._actions["zoom"].isChecked():
                 self._actions["zoom"].setIcon(
                     QIcon(os.path.join(icon_dir, "Zoom_checked.png"))
                 )
             else:
-                self._actions["zoom"].setIcon(
-                    QIcon(os.path.join(icon_dir, "Zoom.png"))
-                )
+                self._actions["zoom"].setIcon(QIcon(os.path.join(icon_dir, "Zoom.png")))
 
 
 class KeypointMatplotlibCanvas(QWidget):
@@ -602,6 +603,8 @@ class KeypointControls(QWidget):
         self.video_widget.setVisible(False)
 
         # form helper display
+        self._keypoint_mapping_button = None
+        self._func_id = None
         help_buttons = self._form_help_buttons()
         self._layout.addLayout(help_buttons)
 
@@ -687,6 +690,44 @@ class KeypointControls(QWidget):
     def settings(self):
         return QSettings()
 
+    def load_superkeypoints_diagram(self):
+        layer_data = _load_superkeypoints_diagram()
+        self.viewer.add_image(layer_data[0], metadata=layer_data[1])
+        self._keypoint_mapping_button.setText("Map keypoints")
+        self._keypoint_mapping_button.clicked.disconnect(self._func_id)
+        self._keypoint_mapping_button.clicked.connect(self._map_keypoints)
+
+    def _map_keypoints(self):
+        points_layer = None
+        for layer in self.viewer.layers:
+            if isinstance(layer, Points):
+                points_layer = layer
+                break
+
+        if points_layer is None or ~np.any(points_layer.data):
+            return
+
+        xy = points_layer.data[:, 1:3]
+        superkpts_dict = _load_superkeypoints()
+        xy_ref = np.c_[[val for val in superkpts_dict.values()]]
+        neighbors = keypoints._find_nearest_neighbors(xy, xy_ref)
+        found = neighbors != -1
+        if ~np.any(found):
+            return
+
+        project_path = points_layer.metadata["project"]
+        with open(os.path.join(project_path, "mapping.json"), "w") as f:
+            json.dump(
+                dict(
+                    zip(
+                        points_layer.metadata["header"].bodyparts,
+                        np.array(list(superkpts_dict.keys()))[neighbors[found]],
+                    )
+                ),
+                f,
+            )
+        self.viewer.status = "Mapping to superkeypoint set successfully saved"
+
     def start_tutorial(self):
         Tutorial(self.viewer.window._qt_window.current()).show()
 
@@ -753,6 +794,11 @@ class KeypointControls(QWidget):
         tutorial = QPushButton("Start tutorial")
         tutorial.clicked.connect(self.start_tutorial)
         layout.addWidget(tutorial)
+        self._keypoint_mapping_button = QPushButton("Load superkeypoints diagram")
+        self._func_id = self._keypoint_mapping_button.clicked.connect(
+            self.load_superkeypoints_diagram
+        )
+        layout.addWidget(self._keypoint_mapping_button)
         return layout
 
     def _extract_single_frame(self, *args):
@@ -780,7 +826,7 @@ class KeypointControls(QWidget):
                         "properties": points_layer.properties,
                     },
                 )
-                df = df.iloc[ind: ind + 1]
+                df = df.iloc[ind : ind + 1]
                 df.index = pd.MultiIndex.from_tuples([Path(output_path).parts[-3:]])
                 filepath = os.path.join(
                     image_layer.metadata["root"], "machinelabels-iter0.h5"
@@ -889,7 +935,9 @@ class KeypointControls(QWidget):
                 self._display.update_color_scheme(
                     {
                         name: to_hex(color)
-                        for name, color in layer.metadata["face_color_cycles"][mode].items()
+                        for name, color in layer.metadata["face_color_cycles"][
+                            mode
+                        ].items()
                     }
                 )
 
@@ -986,9 +1034,7 @@ class KeypointControls(QWidget):
                         "face_color_cycles"
                     ]
                     _layer.face_color = "label"
-                    _layer.face_color_cycle = new_metadata["face_color_cycles"][
-                        "label"
-                    ]
+                    _layer.face_color_cycle = new_metadata["face_color_cycles"]["label"]
                     _layer.events.face_color()
                     store.layer = _layer
                 self._update_color_scheme()
@@ -1073,9 +1119,9 @@ class KeypointControls(QWidget):
 
     def on_active_layer_change(self, event) -> None:
         """Updates the GUI when the active layer changes
-            * Hides all KeypointsDropdownMenu that aren't for the selected layer
-            * Sets the visibility of the "Color mode" box to True if the selected layer
-                is a multi-animal one, or False otherwise
+        * Hides all KeypointsDropdownMenu that aren't for the selected layer
+        * Sets the visibility of the "Color mode" box to True if the selected layer
+            is a multi-animal one, or False otherwise
         """
         self._color_grp.setVisible(self._is_multianimal(event.value))
         menu_idx = -1
@@ -1092,7 +1138,8 @@ class KeypointControls(QWidget):
         for layer in self.viewer.layers.selection:
             if isinstance(layer, Points) and layer.metadata:
                 face_color_cycle_maps = build_color_cycles(
-                    layer.metadata["header"], colormap_name,
+                    layer.metadata["header"],
+                    colormap_name,
                 )
                 layer.metadata["face_color_cycles"] = face_color_cycle_maps
                 face_color_prop = "label"
@@ -1110,9 +1157,8 @@ class KeypointControls(QWidget):
 
     @register_points_action("Change color mode")
     def cycle_through_color_modes(self, *args):
-        if (
-            self._active_layer_is_multianimal()
-            or self.color_mode != str(keypoints.ColorMode.BODYPART)
+        if self._active_layer_is_multianimal() or self.color_mode != str(
+            keypoints.ColorMode.BODYPART
         ):
             self.color_mode = next(keypoints.ColorMode)
 
@@ -1152,7 +1198,8 @@ class KeypointControls(QWidget):
             if isinstance(layer, Points) and layer.metadata:
                 layer.face_color = face_color_mode
                 layer.face_color_cycle = layer.metadata["face_color_cycles"][
-                    face_color_mode]
+                    face_color_mode
+                ]
                 layer.events.face_color()
 
         for btn in self._color_mode_selector.buttons():
