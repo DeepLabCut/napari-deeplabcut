@@ -2,6 +2,7 @@
 # - Implement the tracking worker with multithreading
 # - Implement a Log widget to display the tracking progress + a progress bar
 # - Prepare I/O with the actual tracking backend
+from functools import partial
 from pathlib import Path
 
 import napari
@@ -23,6 +24,7 @@ from napari_deeplabcut._tracking_utils import (
     Log,
     QWidgetSingleton,
     add_widgets,
+    get_time,
 )
 
 
@@ -113,7 +115,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         # TODO : implement the tracking process
         print("Started tracking")
         print(f"Is ready : {self._check_ready()}")
-        return
+        # TODO : setup worker
         ### Below is code to start the worker and update the button for the use to start/stop the tracking process
         if not self.check_ready():
             err = "Aborting, please choose valid inputs"
@@ -146,10 +148,48 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
             self.btn_start.setText("Running...  Click to stop")
 
     def _setup_worker(self):
-        pass  # TODO : Implement the worker setup
+        self.worker.started.connect(self.on_start)
+
+        self.worker.log_signal.connect(self.log.print_and_log)
+        self.worker.log_w_replace_signal.connect(self.log.replace_last_line)
+        self.worker.warn_signal.connect(self.log.warn)
+        self.worker.error_signal.connect(self.log.error)
+
+        self.worker.yielded.connect(partial(self.on_yield))
+        self.worker.errored.connect(partial(self.on_error))
+        self.worker.finished.connect(self.on_finish)
 
     def _on_yield(self, results):
+        # TODO : display the results in the viewer
         pass
+
+    def _on_start(self):
+        """Catches start signal from worker to call :py:func:`~display_status_report`."""
+        self.display_status_report()
+        self._set_self_config()
+        self.log.print_and_log(f"Worker started at {get_time()}")
+        self.log.print_and_log(f"Saving results to : {self.results_path}")
+        self.log.print_and_log("Worker is running...")
+
+    def _on_error(self, error):
+        """Catches errors and tries to clean up."""
+        self.log.print_and_log("!" * 20)
+        self.log.print_and_log("Worker errored...")
+        self.log.error(error)
+        self.worker.quit()
+        self.on_finish()
+
+    def _on_finish(self):
+        """Catches finished signal from worker, resets workspace for next run."""
+        self.log.print_and_log(f"\nWorker finished at {get_time()}")
+        self.log.print_and_log("*" * 20)
+        self.btn_start.setText("Start")
+        self.btn_close.setVisible(True)
+
+        self.worker = None
+        self.worker_config = None
+        self.empty_cuda_cache()
+        return True  # signal clean exit
 
 
 ### -------- Tracking worker -------- ###

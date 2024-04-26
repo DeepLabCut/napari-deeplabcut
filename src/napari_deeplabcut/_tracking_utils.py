@@ -1,4 +1,5 @@
 ### ------------- Custom widgets for tracking module -------------- ###
+import datetime
 import logging
 import threading
 from functools import partial
@@ -51,6 +52,11 @@ class ContainerWidget(QWidget):
         self.layout.setContentsMargins(l, t, r, b)
         if fixed:
             self.layout.setSizeConstraint(QLayout.SetFixedSize)
+
+
+def get_time():
+    """Get time in the following format : hour:minute:second. NOT COMPATIBLE with file paths (saving with ":" is invalid)."""
+    return f"{datetime.now():%H:%M:%S}"
 
 
 def add_widgets(layout, widgets):
