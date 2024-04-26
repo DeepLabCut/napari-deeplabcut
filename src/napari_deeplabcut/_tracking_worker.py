@@ -26,14 +26,15 @@ from napari_deeplabcut._tracking_utils import (
     add_widgets,
     get_time,
 )
+from napari_deeplabcut.keypoints import KeypointStore
 
 
 class TrackingModule(QWidget, metaclass=QWidgetSingleton):
     """Plugin for tracking."""
 
-    def __init__(self, napari_viewer: "napari.viewer.Viewer"):
+    def __init__(self, napari_viewer: "napari.viewer.Viewer", parent=None):
         """Creates a widget with links to documentation and about page."""
-        super().__init__()
+        super().__init__(parent=parent)
         self._viewer = napari_viewer
         self._worker = None
         self._keypoint_layer = None
@@ -102,7 +103,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         add_widgets(layout, widgets)
         self.setLayout(layout)
 
-    def check_ready(self):
+    def _check_ready(self):
         """Check if the inputs are ready for tracking."""
         if self.video_layer_dropdown.layer is None:
             return False
@@ -149,10 +150,10 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         print("Started tracking")
 
         ### Below is code to start the worker and update the button for the use to start/stop the tracking process
-        # if not self._check_ready():
-        #     err = "Aborting, please choose valid inputs"
-        #     self.log.print_and_log(err)
-        #     raise ValueError(err)
+        if not self._check_ready():
+            err = "Aborting, please choose valid inputs"
+            self.log.print_and_log(err)
+            raise ValueError(err)
 
         if self._worker is not None:
             if self._worker.is_running:
@@ -196,10 +197,29 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         self.log.print_and_log(f"keypoint started at {keypoint_cord}")
         self.log.print_and_log(f"frames started at {frames}")
 
+    def _display_results(self, results):
+        """Display the results in the viewer, using the method already implemented in the viewer."""
+        path_test = "C:/Users/Cyril/Desktop/Code/DeepLabCut/examples/openfield-Pranav-2018-10-30/labeled-data/m4s1/CollectedData_Pranav.h5"
+        from napari_deeplabcut._reader import read_config, read_hdf
+
+        keypoint_data, metadata, _ = read_hdf(path_test)[0]
+        # hdf data contains : keypoint data, metadata, and "points"
+        # we want to create a points layer from the keypoint data
+        # layer properties (dict) should be populated with metadata
+        print(metadata)
+        layer = self._viewer.add_points(
+            keypoint_data,
+            name="keypoints_hdf_test",
+            metadata=metadata["metadata"],
+            features=metadata["properties"],
+            properties=metadata["properties"],
+        )
+        self.parent().parent().update_layer(layer)
 
     def _on_yield(self, results):
         # TODO : display the results in the viewer
         # Testing version where an int i is yielded
+        self._display_results(results)
         ############################
         self.log.print_and_log(f"Yielded {results}")
         self._update_progress_bar(results, 10)
@@ -295,10 +315,9 @@ class TrackingWorker(GeneratorWorker):
 
     def fake_tracking(self):
         """Fake tracking for testing purposes."""
-        for i in range(10):
+        for i in range(1):
             self.log(f"Tracking frame {i}")
             yield i + 1
-
 
 
 def track_mock(

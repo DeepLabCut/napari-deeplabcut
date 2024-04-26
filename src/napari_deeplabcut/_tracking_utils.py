@@ -4,8 +4,6 @@ import threading
 from datetime import datetime
 from functools import partial
 from typing import Optional
-from datetime import datetime
-
 
 import napari
 from qtpy import QtCore
@@ -306,7 +304,7 @@ class LayerSelecter(ContainerWidget):
             return None
         try:
             if self.layer_type == napari.layers.Points:
-                return self.layer().features
+                return self.layer().data
             else:
                 return self.layer().data
         except (KeyError, ValueError):
