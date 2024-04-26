@@ -26,8 +26,7 @@ from napari_deeplabcut._tracking_utils import (
     add_widgets,
     get_time,
 )
-from napari_deeplabcut.keypoints import KeypointStore
-
+from napari.layers.utils.layer_utils import _features_to_properties
 
 class TrackingModule(QWidget, metaclass=QWidgetSingleton):
     """Plugin for tracking."""
@@ -194,8 +193,6 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         keypoint_cord = self.keypoint_layer_dropdown.layer_data()
         frames = self.video_layer_dropdown.layer_data()
 
-        self.log.print_and_log(f"keypoint started at {keypoint_cord}")
-        self.log.print_and_log(f"frames started at {frames}")
 
     def _display_results(self, results):
         """Display the results in the viewer, using the method already implemented in the viewer."""
@@ -208,13 +205,22 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         # layer properties (dict) should be populated with metadata
         print(metadata)
         layer = self._viewer.add_points(
+            ### data ###
             keypoint_data,
             name="keypoints_hdf_test",
             metadata=metadata["metadata"],
-            features=metadata["properties"],
+            # features=metadata["properties"],
             properties=metadata["properties"],
+            ### display properties ###
+            face_color=metadata["face_color"],
+            face_color_cycle=metadata["face_color_cycle"],
+            face_colormap=metadata["face_colormap"],
+            edge_color=metadata["edge_color"],
+            edge_color_cycle=metadata["edge_color_cycle"],
+            edge_width=metadata["edge_width"],
+            edge_width_is_relative=metadata["edge_width_is_relative"],
+            size=metadata["size"],
         )
-        self.parent().parent().update_layer(layer)
 
     def _on_yield(self, results):
         # TODO : display the results in the viewer

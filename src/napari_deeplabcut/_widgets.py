@@ -63,6 +63,8 @@ from napari_deeplabcut.misc import (
 
 Tip = namedtuple("Tip", ["msg", "pos"])
 
+# enable debug logging
+logging.basicConfig(level=logging.DEBUG)
 
 class Shortcuts(QDialog):
     """Opens a window displaying available napari-deeplabcut shortcuts"""
@@ -985,7 +987,7 @@ class KeypointControls(QWidget):
 
     def on_insert(self, event):
         layer = event.source[-1]
-        self.update_layer(layer, event)
+        self.update_layer(layer, event) # this was changed while trying to update the colors of the results layer, might be changed back
 
     def update_layer(self, layer, event=None):
         logging.debug(f"Inserting Layer {layer}")
