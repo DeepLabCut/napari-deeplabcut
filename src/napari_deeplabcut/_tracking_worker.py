@@ -102,7 +102,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         add_widgets(layout, widgets)
         self.setLayout(layout)
 
-    def _check_ready(self):
+    def check_ready(self):
         """Check if the inputs are ready for tracking."""
         if self.video_layer_dropdown.layer is None:
             return False
@@ -187,6 +187,12 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         self._worker.yielded.connect(partial(self._on_yield))
         self._worker.errored.connect(partial(self._on_error))
         self._worker.finished.connect(self._on_finish)
+
+        keypoint_cord = self.keypoint_layer_dropdown.layer_data()
+        frames = self.video_layer_dropdown.layer_data()
+
+        self.log.print_and_log(f"keypoint started at {keypoint_cord}")
+        self.log.print_and_log(f"frames started at {frames}")
 
     def _on_yield(self, results):
         # TODO : display the results in the viewer
@@ -282,7 +288,7 @@ class TrackingWorker(GeneratorWorker):
 
         # This must yield the tracking results for each frame to be displayed in the viewer
         # yield ... ideally a class that contains data that can readily be used by napari
-        return
+        yield
 
     def fake_tracking(self):
         """Fake tracking for testing purposes."""
