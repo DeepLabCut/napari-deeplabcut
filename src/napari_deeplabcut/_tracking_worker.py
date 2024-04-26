@@ -145,6 +145,15 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
             self.worker.start()
             self.btn_start.setText("Running...  Click to stop")
 
+    def _setup_worker(self):
+        pass  # TODO : Implement the worker setup
+
+    def _on_yield(self, results):
+        pass
+
+
+### -------- Tracking worker -------- ###
+
 
 class LogSignal(WorkerBaseSignals):
     """Signal to send messages to be logged from another thread.
@@ -169,9 +178,6 @@ class LogSignal(WorkerBaseSignals):
     def __init__(self, parent=None):
         """Creates a LogSignal."""
         super().__init__(parent=parent)
-
-
-### -------- Tracking code -------- ###
 
 
 class TrackingWorker(GeneratorWorker):
@@ -204,6 +210,9 @@ class TrackingWorker(GeneratorWorker):
         """Run the tracking."""
         # TODO : Implement the tracking process
         self.log("Started tracking")
+
+        # This must yield the tracking results for each frame to be displayed in the viewer
+        # yield ... ideally a class that contains data that can readily be used by napari
         return
 
 
