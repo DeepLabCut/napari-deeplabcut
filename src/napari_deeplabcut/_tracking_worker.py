@@ -338,9 +338,11 @@ class TrackingWorker(GeneratorWorker):
     ):
         """Run the tracking."""
         self.log("Started tracking")
-        self.log(self._video)
-        self.log(self._keypoints)
-        tracks = cotrack_online(self, self._video, self._keypoints)
+        with open("log.txt", "w") as f:
+            f.write(f"{self._video.shape}")
+            f.write(f"{self._keypoints.shape}")
+
+        tracks = cotrack_online(self, np.array(self._video), np.array(self._keypoints))
         self.log("Finished tracking")
         track_path = Path(self._root) / "TrackedData.h5"
         self.save_tracking_data(track_path, tracks, "CoTracker")
@@ -388,6 +390,15 @@ def cotrack_online(
     w.log("COTRACKING")
     w.log(video.shape)
     w.log(keypoints.shape)
+    k = keypoints[keypoints[:, 0] == 0][:, 1:]
+    with open("log_cotrack.txt", "w") as f:
+        f.write(f"video={video.shape}\n")
+        f.write(f"keypoints={keypoints.shape}\n")
+        f.write(f"{keypoints}\n")
+        f.write(f"k={k.shape}\n")
+        f.write(f"{k}\n")
+    keypoints = k.reshape((2, 4, 2))
+
     def _process_step(window_frames, is_first_step, queries):
         video_chunk = (
             torch.tensor(np.stack(window_frames[-model.step * 2:]), device=device)
