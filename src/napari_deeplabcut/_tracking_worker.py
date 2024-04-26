@@ -7,6 +7,9 @@ from pathlib import Path
 
 import napari
 import numpy as np
+import pandas as pd
+import torch
+from cotracker.predictor import CoTrackerOnlinePredictor
 from napari._qt.qthreading import GeneratorWorker
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import (
@@ -177,7 +180,21 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
             self.start_button.setText("Running...  Click to stop")
 
     def _setup_worker(self):
-        self._worker = TrackingWorker()
+        metadata = self.keypoint_layer_dropdown.layer().metadata
+        properties = self.keypoint_layer_dropdown.layer().properties
+        keypoint_cord = self.keypoint_layer_dropdown.layer_data()
+        frames = self.video_layer_dropdown.layer_data()
+
+        self._worker = TrackingWorker(
+            # metadata["metadata"]["root"],
+            # metadata["metadata"]["images"],
+            metadata["root"],
+            metadata["paths"],
+            properties["label"],
+            properties["id"],
+            frames,
+            keypoint_cord,
+        )
 
         self._worker.started.connect(self._on_start)
 
@@ -190,15 +207,12 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         self._worker.errored.connect(partial(self._on_error))
         self._worker.finished.connect(self._on_finish)
 
-        keypoint_cord = self.keypoint_layer_dropdown.layer_data()
-        frames = self.video_layer_dropdown.layer_data()
-
-
     def _display_results(self, results):
         """Display the results in the viewer, using the method already implemented in the viewer."""
-        path_test = "C:/Users/Cyril/Desktop/Code/DeepLabCut/examples/openfield-Pranav-2018-10-30/labeled-data/m4s1/CollectedData_Pranav.h5"
+        # path_test = "C:/Users/Cyril/Desktop/Code/DeepLabCut/examples/openfield-Pranav-2018-10-30/labeled-data/m4s1/CollectedData_Pranav.h5"
         from napari_deeplabcut._reader import read_hdf
 
+        path_test = results
         keypoint_data, metadata, _ = read_hdf(path_test)[0]
         # hdf data contains : keypoint data, metadata, and "points"
         # we want to create a points layer from the keypoint data
@@ -287,17 +301,23 @@ class LogSignal(WorkerBaseSignals):
 class TrackingWorker(GeneratorWorker):
     """A custom worker to run tracking in."""
 
-    def __init__(self, config=None):
+    def __init__(self, root, image_paths, bodyparts, individuals, video, keypoints):
         """Creates a TrackingWorker."""
-        # super().__init__(self.run_tracking) #### TODO MUST BE CHANGED WHEN REAL TRACKING IS IMPLEMENTED
-        super().__init__(self.fake_tracking)
+        super().__init__(self.run_tracking)  # TODO MUST BE CHANGED WHEN REAL TRACKING IS IMPLEMENTED
+        # super().__init__(self.fake_tracking)
+        self._root = root
+        self._image_paths = image_paths
+        self._bodyparts = bodyparts
+        self._individuals = individuals
+        self._video = video
+        self._keypoints = keypoints
         self._signals = LogSignal()
         self.log_signal = self._signals.log_signal
         self.log_w_replace_signal = self._signals.log_w_replace_signal
         self.warn_signal = self._signals.warn_signal
         self.error_signal = self._signals.error_signal
 
-        self.config = config  # use if needed
+        self.config = None  # config  # use if needed
 
     def log(self, msg):
         """Log a message."""
@@ -313,17 +333,110 @@ class TrackingWorker(GeneratorWorker):
 
     def run_tracking(
         self,
-        video: np.ndarray,
-        keypoints: np.ndarray,
+        # video: np.ndarray,
+        # keypoints: np.ndarray,
     ):
         """Run the tracking."""
         self.log("Started tracking")
+        self.log(self._video)
+        self.log(self._keypoints)
+        tracks = cotrack_online(self, self._video, self._keypoints)
+        self.log("Finished tracking")
+        track_path = Path(self._root) / "TrackedData.h5"
+        self.save_tracking_data(track_path, tracks, "CoTracker")
+        self.log("Finished saving")
+        yield track_path
+
+    def save_tracking_data(self, path: Path, tracks: np.ndarray, scorer: str) -> None:
+        levels = ["scorer", "individuals", "bodyparts", "coords"]
+        kpt_entries = ["x", "y"]
+        columns = []
+        for i in self._individuals:
+            for b in self._bodyparts:
+                columns += [(scorer, i, b, entry) for entry in kpt_entries]
+
+        index = []
+        for img_path in self._image_paths:
+            if isinstance(img_path, str):
+                index.append(tuple(Path(img_path).parts))
+            elif isinstance(img_path, tuple):
+                index.append(img_path)
+            else:
+                raise ValueError(f"Incorrect image path format: {img_path}")
+
+        dataframe = pd.DataFrame(
+            data=tracks.reshape((len(tracks), -1)),
+            index=pd.MultiIndex.from_tuples(index),
+            columns=pd.MultiIndex.from_tuples(columns, names=levels),
+        )
+        dataframe.to_hdf(path, key="df_with_missing")
 
     def fake_tracking(self):
         """Fake tracking for testing purposes."""
         for i in range(1):
             self.log(f"Tracking frame {i}")
             yield i + 1
+
+
+# TODO: REQUIRES TO RUN pip install src/co-tracker
+def cotrack_online(
+    w,
+    video,
+    keypoints,
+    device: str = "cpu",
+) -> np.ndarray:
+    w.log("COTRACKING")
+    w.log(video.shape)
+    w.log(keypoints.shape)
+    def _process_step(window_frames, is_first_step, queries):
+        video_chunk = (
+            torch.tensor(np.stack(window_frames[-model.step * 2:]), device=device)
+            .float()
+            .permute(0, 3, 1, 2)[None]
+        )  # (1, T, 3, H, W)
+        return model(video_chunk, is_first_step=is_first_step, queries=queries[None])
+
+    # model = CoTrackerOnlinePredictor(
+    #     checkpoint=Path(
+    #       "/home/lucas/Projects/deeplabcut-tracking/models/cotracker2.pth"
+    #     )
+    # )
+    n_frames = len(video)
+    n_animals, n_keypoints = keypoints.shape[:2]
+
+    model = torch.hub.load("facebookresearch/co-tracker", "cotracker2_online")
+    model = model.to(device)
+    video = torch.from_numpy(video).permute(0, 3, 1, 2).unsqueeze(0).float()
+    window_frames = []
+
+    queries = np.zeros((n_animals * n_keypoints, 3))
+    queries[:, 1:] = keypoints.reshape((-1, 2))
+    queries = torch.from_numpy(queries).to(device).float()
+
+    # Iterating over video frames, processing one window at a time:
+    is_first_step = True
+    i = 0
+    for i, frame in enumerate(video[0]):
+        frame = frame.permute(1, 2, 0)
+        if i % model.step == 0 and i != 0:
+            pred_tracks, pred_visibility = _process_step(
+                window_frames,
+                is_first_step,
+                queries=queries,
+            )
+            is_first_step = False
+            window_frames.append(frame)
+            w.log("DONE WITH FRAME")
+
+    # Processing final frames in case video length is not a multiple of model.step
+    # TODO: Use visibility
+    pred_tracks, pred_visibility = _process_step(
+        window_frames[-(i % model.step) - model.step - 1:],
+        is_first_step,
+        queries=queries,
+    )
+    tracks = pred_tracks.squeeze().cpu().numpy()
+    return tracks.reshape((n_frames, n_animals, n_keypoints, 2))
 
 
 def track_mock(
