@@ -248,18 +248,20 @@ class TrackingWorker(GeneratorWorker):
         """Log a warning."""
         self.warn_signal.emit(msg)
 
-    def run_tracking(self):
+    def run_tracking(
+        self,
+        video: np.ndarray,
+        keypoints: np.ndarray,
+    ):
         """Run the tracking."""
-        # TODO : Implement the tracking process
         self.log("Started tracking")
-
-        # This must yield the tracking results for each frame to be displayed in the viewer
-        # yield ... ideally a class that contains data that can readily be used by napari
-        yield
+        tracks = track_mock(video, keypoints)
+        self.log("Finished tracking")
+        yield tracks
 
 
 def track_mock(
-    video: Path,
+    video: np.ndarray,
     keypoints: np.ndarray,
 ) -> np.ndarray:
     """Mocks what a tracker would do.
@@ -278,11 +280,7 @@ def track_mock(
         an array of shape (num_frames, n_animals, n_keypoints, 2) corresponding to the
         position of each keypoint in each frame of the video
     """
-
-    def get_num_frames(video: Path) -> int:
-        return 0
-
-    return np.repeat(keypoints, (get_num_frames(video), 1, 1, 1))
+    return np.repeat(keypoints, (len(video), 1, 1, 1))
 
 
 def track_cotracker(
