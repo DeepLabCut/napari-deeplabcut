@@ -212,7 +212,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         # path_test = "C:/Users/Cyril/Desktop/Code/DeepLabCut/examples/openfield-Pranav-2018-10-30/labeled-data/m4s1/CollectedData_Pranav.h5"
         from napari_deeplabcut._reader import read_hdf
 
-        path_test = results
+        path_test = str(results)
         keypoint_data, metadata, _ = read_hdf(path_test)[0]
         # hdf data contains : keypoint data, metadata, and "points"
         # we want to create a points layer from the keypoint data
@@ -242,7 +242,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         self._display_results(results)
         ############################
         self.log.print_and_log(f"Yielded {results}")
-        self._update_progress_bar(results, 10)
+        # self._update_progress_bar(results, 10)
         ############################
 
     def _on_start(self):
@@ -343,6 +343,8 @@ class TrackingWorker(GeneratorWorker):
             f.write(f"{self._keypoints.shape}")
 
         tracks = cotrack_online(self, np.array(self._video), np.array(self._keypoints))
+        with open("log_finished_tracking.txt", "w") as f:
+            f.write(f"Done! {tracks.shape}")
         self.log("Finished tracking")
         track_path = Path(self._root) / "TrackedData.h5"
         self.save_tracking_data(track_path, tracks, "CoTracker")
@@ -353,9 +355,11 @@ class TrackingWorker(GeneratorWorker):
         levels = ["scorer", "individuals", "bodyparts", "coords"]
         kpt_entries = ["x", "y"]
         columns = []
-        for i in self._individuals:
-            for b in self._bodyparts:
-                columns += [(scorer, i, b, entry) for entry in kpt_entries]
+        # for i in self._individuals:
+        #     for b in self._bodyparts:
+        #         columns += [(scorer, i, b, entry) for entry in kpt_entries]
+        for i, b in zip(self._individuals[:8], self._bodyparts[:8]):
+            columns += [(scorer, i, b, entry) for entry in kpt_entries]
 
         index = []
         for img_path in self._image_paths:
@@ -365,6 +369,13 @@ class TrackingWorker(GeneratorWorker):
                 index.append(img_path)
             else:
                 raise ValueError(f"Incorrect image path format: {img_path}")
+
+        with open("log_df.txt", "w") as f:
+            f.write(f"{tracks.reshape((len(tracks), -1)).shape}\n")
+            f.write(f"{len(index)}\n")
+            f.write(f"{len(columns)}\n")
+            f.write(f"{self._individuals}\n")
+            f.write(f"{self._bodyparts}\n")
 
         dataframe = pd.DataFrame(
             data=tracks.reshape((len(tracks), -1)),
@@ -398,8 +409,18 @@ def cotrack_online(
         f.write(f"k={k.shape}\n")
         f.write(f"{k}\n")
     keypoints = k.reshape((2, 4, 2))
+    k = np.zeros(keypoints.shape)
+    k[..., 0] = keypoints[..., 1]
+    k[..., 1] = keypoints[..., 0]
+    keypoints = k
 
     def _process_step(window_frames, is_first_step, queries):
+        with open("log_window_frames.txt", "w") as f:
+            f.write(f"{len(window_frames)}\n")
+            f.write(f"{model.step}\n")
+            f.write(f"{-model.step * 2}\n")
+            f.write(f"is_first_step={is_first_step}\n")
+
         video_chunk = (
             torch.tensor(np.stack(window_frames[-model.step * 2:]), device=device)
             .float()
@@ -436,8 +457,8 @@ def cotrack_online(
                 queries=queries,
             )
             is_first_step = False
-            window_frames.append(frame)
-            w.log("DONE WITH FRAME")
+        window_frames.append(frame)
+        w.log("DONE WITH FRAME")
 
     # Processing final frames in case video length is not a multiple of model.step
     # TODO: Use visibility
@@ -446,7 +467,17 @@ def cotrack_online(
         is_first_step,
         queries=queries,
     )
+
+    with open("log_pred_tracks.txt", "w") as f:
+        f.write(f"{len(pred_tracks)}\n")
+        f.write(f"{pred_tracks.shape}\n")
+
     tracks = pred_tracks.squeeze().cpu().numpy()
+    with open("log_pred_tracks_2.txt", "w") as f:
+        f.write(f"{len(tracks)}\n")
+        f.write(f"{tracks.shape}\n")
+        f.write(f"{(n_frames, n_animals, n_keypoints, 2)}\n")
+
     return tracks.reshape((n_frames, n_animals, n_keypoints, 2))
 
 
