@@ -1,7 +1,7 @@
 ### ------------- Custom widgets for tracking module -------------- ###
-import datetime
 import logging
 import threading
+from datetime import datetime
 from functools import partial
 from typing import Optional
 
