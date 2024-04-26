@@ -200,7 +200,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
     def _display_results(self, results):
         """Display the results in the viewer, using the method already implemented in the viewer."""
         path_test = "C:/Users/Cyril/Desktop/Code/DeepLabCut/examples/openfield-Pranav-2018-10-30/labeled-data/m4s1/CollectedData_Pranav.h5"
-        from napari_deeplabcut._reader import read_config, read_hdf
+        from napari_deeplabcut._reader import read_hdf
 
         keypoint_data, metadata, _ = read_hdf(path_test)[0]
         # hdf data contains : keypoint data, metadata, and "points"
