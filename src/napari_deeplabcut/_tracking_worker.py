@@ -102,7 +102,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         add_widgets(layout, widgets)
         self.setLayout(layout)
 
-    def _check_ready(self):
+    def check_ready(self):
         """Check if the inputs are ready for tracking."""
         if self.video_layer_dropdown.layer is None:
             return False
@@ -114,7 +114,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         """Start the tracking process."""
         # TODO : implement the tracking process
         print("Started tracking")
-        print(f"Is ready : {self._check_ready()}")
+        print(f"Is ready : {self.check_ready()}")
         # TODO : setup worker
         ### Below is code to start the worker and update the button for the use to start/stop the tracking process
         if not self.check_ready():
@@ -122,42 +122,46 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
             self.log.print_and_log(err)
             raise ValueError(err)
 
-        if self.worker is not None:
-            if self.worker.is_running:
+        if self._worker is not None:
+            if self._worker.is_running:
                 pass
             else:
-                self.worker.start()
-                self.btn_start.setText("Running... Click to stop")
+                self._worker.start()
         else:
             self.log.print_and_log("Starting...")
             self.log.print_and_log("*" * 20)
-            # self._set_worker_config()
-            # if self.worker_config is None:
-            # raise RuntimeError("Worker config was not set correctly")
-            # self._setup_worker()
-            self.btn_close.setVisible(False)
+            self._setup_worker()
 
-        if self.worker.is_running:  # if worker is running, tries to stop
+        if self._worker.is_running:  # if worker is running, tries to stop
             self.log.print_and_log(
                 "Stop request, waiting for next inference..."
             )
-            self.btn_start.setText("Stopping...")
-            self.worker.quit()
+            self._worker.quit()
         else:  # once worker is started, update buttons
-            self.worker.start()
-            self.btn_start.setText("Running...  Click to stop")
+            self._worker.start()
 
     def _setup_worker(self):
-        self.worker.started.connect(self.on_start)
 
-        self.worker.log_signal.connect(self.log.print_and_log)
-        self.worker.log_w_replace_signal.connect(self.log.replace_last_line)
-        self.worker.warn_signal.connect(self.log.warn)
-        self.worker.error_signal.connect(self.log.error)
+        self._worker = TrackingWorker()
+        self._worker.started.connect(self._on_start)
 
-        self.worker.yielded.connect(partial(self.on_yield))
-        self.worker.errored.connect(partial(self.on_error))
-        self.worker.finished.connect(self.on_finish)
+        self._worker.log_signal.connect(self.log.print_and_log)
+        self._worker.log_w_replace_signal.connect(self.log.replace_last_line)
+        self._worker.warn_signal.connect(self.log.warn)
+        self._worker.error_signal.connect(self.log.error)
+
+        self._worker.yielded.connect(partial(self._on_yield))
+        self._worker.errored.connect(partial(self._on_error))
+        self._worker.finished.connect(self._on_finish)
+
+        keypoint_cord = self.keypoint_layer_dropdown.layer_data()
+        frames = self.video_layer_dropdown.layer_data()
+
+        self.log.print_and_log(f"keypoint started at {keypoint_cord}")
+        self.log.print_and_log(f"frames started at {frames}")
+
+
+        
 
     def _on_yield(self, results):
         # TODO : display the results in the viewer
@@ -165,10 +169,10 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
 
     def _on_start(self):
         """Catches start signal from worker to call :py:func:`~display_status_report`."""
-        self.display_status_report()
-        self._set_self_config()
+        # self.display_status_report()
+        # self._set_self_config()
         self.log.print_and_log(f"Worker started at {get_time()}")
-        self.log.print_and_log(f"Saving results to : {self.results_path}")
+        #self.log.print_and_log(f"Saving results to : {self.results_path}")
         self.log.print_and_log("Worker is running...")
 
     def _on_error(self, error):
@@ -176,19 +180,17 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         self.log.print_and_log("!" * 20)
         self.log.print_and_log("Worker errored...")
         self.log.error(error)
-        self.worker.quit()
+        self._worker.quit()
         self.on_finish()
 
     def _on_finish(self):
         """Catches finished signal from worker, resets workspace for next run."""
         self.log.print_and_log(f"\nWorker finished at {get_time()}")
         self.log.print_and_log("*" * 20)
-        self.btn_start.setText("Start")
-        self.btn_close.setVisible(True)
 
-        self.worker = None
-        self.worker_config = None
-        self.empty_cuda_cache()
+        self._worker = None
+        self._worker_config = None
+        # self.empty_cuda_cache()
         return True  # signal clean exit
 
 
@@ -253,7 +255,7 @@ class TrackingWorker(GeneratorWorker):
 
         # This must yield the tracking results for each frame to be displayed in the viewer
         # yield ... ideally a class that contains data that can readily be used by napari
-        return
+        yield
 
 
 def track_mock(

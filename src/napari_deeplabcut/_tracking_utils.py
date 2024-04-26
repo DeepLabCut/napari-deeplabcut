@@ -4,6 +4,8 @@ import logging
 import threading
 from functools import partial
 from typing import Optional
+from datetime import datetime
+
 
 import napari
 from qtpy import QtCore
