@@ -147,6 +147,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
     def _start(self):
         """Start the tracking process."""
         print("Started tracking")
+
         ### Below is code to start the worker and update the button for the use to start/stop the tracking process
         # if not self._check_ready():
         #     err = "Aborting, please choose valid inputs"
@@ -159,6 +160,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
             else:
                 self._worker.start()
                 self.start_button.setText("Running... Click to stop")
+
         else:
             self.log.print_and_log("Starting...")
             self.log.print_and_log("*" * 20)
@@ -194,6 +196,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         self.log.print_and_log(f"keypoint started at {keypoint_cord}")
         self.log.print_and_log(f"frames started at {frames}")
 
+
     def _on_yield(self, results):
         # TODO : display the results in the viewer
         # Testing version where an int i is yielded
@@ -223,6 +226,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         self.start_button.setText("Start")
 
         self._worker = None
+
         return True  # signal clean exit
 
 
@@ -281,14 +285,13 @@ class TrackingWorker(GeneratorWorker):
         """Log a warning."""
         self.warn_signal.emit(msg)
 
-    def run_tracking(self):
+    def run_tracking(
+        self,
+        video: np.ndarray,
+        keypoints: np.ndarray,
+    ):
         """Run the tracking."""
-        # TODO : Implement the tracking process
         self.log("Started tracking")
-
-        # This must yield the tracking results for each frame to be displayed in the viewer
-        # yield ... ideally a class that contains data that can readily be used by napari
-        yield
 
     def fake_tracking(self):
         """Fake tracking for testing purposes."""
@@ -297,8 +300,9 @@ class TrackingWorker(GeneratorWorker):
             yield i + 1
 
 
+
 def track_mock(
-    video: Path,
+    video: np.ndarray,
     keypoints: np.ndarray,
 ) -> np.ndarray:
     """Mocks what a tracker would do.
@@ -317,11 +321,7 @@ def track_mock(
         an array of shape (num_frames, n_animals, n_keypoints, 2) corresponding to the
         position of each keypoint in each frame of the video
     """
-
-    def get_num_frames(video: Path) -> int:
-        return 0
-
-    return np.repeat(keypoints, (get_num_frames(video), 1, 1, 1))
+    return np.repeat(keypoints, (len(video), 1, 1, 1))
 
 
 def track_cotracker(

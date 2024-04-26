@@ -4,6 +4,8 @@ import threading
 from datetime import datetime
 from functools import partial
 from typing import Optional
+from datetime import datetime
+
 
 import napari
 from qtpy import QtCore
