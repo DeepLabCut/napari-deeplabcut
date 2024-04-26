@@ -2,6 +2,58 @@
 requires = ["setuptools", "wheel", "setuptools_scm"]
 build-backend = "setuptools.build_meta"
 
+[tool.ruff]
+target-version = "py38"
+select = [
+    "E", "F", "W",
+    "A",
+    "B",
+    "G",
+    "I",
+    "PT",
+    "SIM",
+    "NPY",
+]
+# Never enforce `E501` (line length violations) and 'E741' (ambiguous variable names)
+# and 'G004' (do not use f-strings in logging)
+# and 'A003' (Shadowing python builtins)
+# and 'F401' (imported but unused)
+ignore = ["E501", "E741", "G004", "A003", "F401"]
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    "docs/conf.py",
+    "napari_cellseg3d/_tests/conftest.py",
+]
+
+[tool.ruff.pydocstyle]
+convention = "google"
+
+[tool.black]
+line-length = 79
+
+[tool.isort]
+profile = "black"
+line_length = 79
 
 [tool.setuptools_scm]
 write_to = "src/napari_deeplabcut/_version.py"
