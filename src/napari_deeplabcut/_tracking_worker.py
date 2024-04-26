@@ -114,6 +114,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         print("Started tracking")
         print(f"Is ready : {self._check_ready()}")
         return
+        ### Below is code to start the worker and update the button for the use to start/stop the tracking process
         if not self.check_ready():
             err = "Aborting, please choose valid inputs"
             self.log.print_and_log(err)
@@ -198,6 +199,12 @@ class TrackingWorker(GeneratorWorker):
     def warn(self, msg):
         """Log a warning."""
         self.warn_signal.emit(msg)
+
+    def run_tracking(self):
+        """Run the tracking."""
+        # TODO : Implement the tracking process
+        self.log("Started tracking")
+        return
 
 
 def track_mock(
