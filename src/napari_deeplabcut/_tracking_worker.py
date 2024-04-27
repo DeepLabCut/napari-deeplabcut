@@ -46,7 +46,7 @@ class TrackingConfig:
     n_animals: int
     n_keypoints: int
     ### User config ###
-    retrack_frame: int = None
+    retrack_frame_id: int = None
     method : str = "CoTracker" # change when adding PIPS++
     device: str = "cpu"
 
@@ -66,7 +66,9 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         super().__init__(parent=parent)
         self._viewer = napari_viewer
         self._worker = None
-        self._keypoint_layer = None
+        self._video_layer : napari.layers.Image = None
+        self._keypoint_layer : napari.layers.Points = None
+        self.result_layer : napari.layers.Points = None
         ### Widgets ###
         self.video_layer_dropdown = LayerSelecter(
             self._viewer,
@@ -99,6 +101,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         self.log.setVisible(False)
         """Read-only display for process-related info. Use only for info destined to user."""
         self._build()
+        self._viewer.dims.events.current_step.connect(self._update_start_button_display)
 
     # Use @property to get/set the keypoint layer
     @property
@@ -165,6 +168,21 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         self.log.setVisible(True)
         # self.progress.setVisible(True)
         # self.progress.setValue(0)
+        
+    def _update_start_button_display(self):
+        """Update the start button display."""
+        if self._worker is None:
+            return
+        if self._worker.is_running:
+            return
+        if not self._worker.is_running and self.result_layer is not None:
+            current_frame = self._viewer.dims.current_step[0]
+            if current_frame == 0:
+                self.start_button.setText("Start")
+                return
+            self.start_button.setText(f"Retrack from frame {current_frame}")
+        else:
+            self.start_button.setText("Start")
 
     def _update_progress_bar(self, current_frame, total_frame):
         """Update the progress bar."""
@@ -214,6 +232,8 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         header = metadata["header"]
         bodyparts = header.bodyparts
         individuals_ids = header.individuals
+        
+        current_frame = self._viewer.dims.current_step[0]
 
         self.worker_config = TrackingConfig(
             video=frames,
@@ -225,6 +245,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
             n_frames=len(frames),
             n_animals=len(individuals_ids),
             n_keypoints=len(bodyparts),
+            retrack_frame_id=current_frame if self.result_layer is not None else None,
         )
         self._worker = TrackingWorker(self.worker_config)
             
@@ -262,7 +283,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         # we want to create a points layer from the keypoint data
         # layer properties (dict) should be populated with metadata
         print(metadata)
-        layer = self._viewer.add_points(
+        return self._viewer.add_points(
             ### data ###
             keypoint_data,
             name="keypoints_hdf_test",
@@ -279,11 +300,12 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
             edge_width_is_relative=metadata["edge_width_is_relative"],
             size=metadata["size"],
         )
+        
 
     def _on_yield(self, results):
         # TODO : display the results in the viewer
         # Testing version where an int i is yielded
-        self._display_results(results)
+        self.result_layer = self._display_results(results)
         ############################
         self.log.print_and_log(f"Yielded {results}")
         # self._update_progress_bar(results, 10)
@@ -377,12 +399,12 @@ class TrackingWorker(GeneratorWorker):
 
     def run_tracking(self):
         """Run the tracking."""
-        self.log("Started tracking")
         with open("log.txt", "w") as f:
             f.write(f"{self._video.shape}")
             f.write(f"{self._keypoints.shape}")
 
-        init_frame = 0
+        init_frame = self.config.retrack_frame_id if self.config.retrack_frame_id is not None else 0
+        self.log(f"Started tracking from frame {init_frame}")
 
         video_frames = np.array(self._video)
         video_frames = video_frames[init_frame:]
@@ -399,7 +421,7 @@ class TrackingWorker(GeneratorWorker):
         with open("log_finished_tracking.txt", "w") as f:
             f.write(f"Done! {tracks.shape}")
         self.log("Finished tracking")
-        track_path = Path(self._root) / f"TrackedData_start{init_frame}.h5"
+        track_path = Path(self._root) / f"TrackedData_frame_{init_frame}.h5"
         self.save_tracking_data(track_path, tracks, "CoTracker")
         self.log("Finished saving")
         yield track_path
