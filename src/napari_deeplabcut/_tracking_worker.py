@@ -178,8 +178,8 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
                 return
     
         if  self.result_layer is not None:
-            if self.worker is not None:
-                if self.worker.is_running:
+            if self._worker is not None:
+                if self._worker.is_running:
                     return
             current_frame = self._viewer.dims.current_step[0]
             if current_frame == 0:
