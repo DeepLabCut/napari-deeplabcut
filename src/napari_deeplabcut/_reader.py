@@ -69,7 +69,7 @@ def get_folder_parser(path):
             images = os.path.join(path, f"*{os.path.splitext(file)[1]}")
             break
     if not images:
-        raise OSError("No supported images were found.")
+        raise OSError(f"No supported images were found in {path}.")
 
     layers.extend(read_images(images))
     datafile = ""
