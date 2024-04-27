@@ -4,7 +4,7 @@
 # - Prepare I/O with the actual tracking backend
 from functools import partial
 from pathlib import Path
-
+from dataclasses import dataclass
 import napari
 import numpy as np
 import pandas as pd
@@ -29,7 +29,34 @@ from napari_deeplabcut._tracking_utils import (
     add_widgets,
     get_time,
 )
-from napari.layers.utils.layer_utils import _features_to_properties
+
+@dataclass
+class TrackingConfig:
+    ### Data ###
+    video: np.ndarray
+    keypoints: np.ndarray 
+    # result_layer: napari.layers.Points 
+    ### Metadata ###
+    root: str  # path to the video
+    paths: list # list of paths to the video frames
+    bodyparts: list # list of bodyparts
+    individuals_ids: list # list of individuals
+    ### Config from data ###
+    n_frames: int
+    n_animals: int
+    n_keypoints: int
+    ### User config ###
+    retrack_frame: int = None
+    method : str = "CoTracker" # change when adding PIPS++
+    device: str = "cpu"
+
+@dataclass
+class TrackingResults: # Add anything relevant to be yielded by the worker here
+    """Used to update the results and progress bar. Is yielded by the worker."""
+    result_keypoints: np.ndarray = None
+    layer_metadata: dict = None
+    hdf_path : str = None
+    pbar_update : tuple = None
 
 class TrackingModule(QWidget, metaclass=QWidgetSingleton):
     """Plugin for tracking."""
@@ -136,8 +163,8 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
             self.container_docked = True
 
         self.log.setVisible(True)
-        self.progress.setVisible(True)
-        self.progress.setValue(0)
+        # self.progress.setVisible(True)
+        # self.progress.setValue(0)
 
     def _update_progress_bar(self, current_frame, total_frame):
         """Update the progress bar."""
@@ -188,16 +215,30 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         bodyparts = header.bodyparts
         individuals_ids = header.individuals
 
-        self._worker = TrackingWorker(
-            # metadata["metadata"]["root"],
-            # metadata["metadata"]["images"],
-            metadata["root"],
-            metadata["paths"],
-            bodyparts,
-            individuals_ids,
-            frames,
-            keypoint_cord,
+        self.worker_config = TrackingConfig(
+            video=frames,
+            keypoints=keypoint_cord,
+            root=metadata["root"],
+            paths=metadata["paths"],
+            bodyparts=bodyparts,
+            individuals_ids=individuals_ids,
+            n_frames=len(frames),
+            n_animals=len(individuals_ids),
+            n_keypoints=len(bodyparts),
         )
+        self._worker = TrackingWorker(self.worker_config)
+            
+        
+        # self._worker = TrackingWorker(
+        #     # metadata["metadata"]["root"],
+        #     # metadata["metadata"]["images"],
+        #     metadata["root"],
+        #     metadata["paths"],
+        #     bodyparts,
+        #     individuals_ids,
+        #     frames,
+        #     keypoint_cord,
+        # )
 
         self._worker.started.connect(self._on_start)
 
@@ -304,23 +345,23 @@ class LogSignal(WorkerBaseSignals):
 class TrackingWorker(GeneratorWorker):
     """A custom worker to run tracking in."""
 
-    def __init__(self, root, image_paths, bodyparts, individuals, video, keypoints):
+    def __init__(self, config: TrackingConfig):
         """Creates a TrackingWorker."""
-        super().__init__(self.run_tracking)  # TODO MUST BE CHANGED WHEN REAL TRACKING IS IMPLEMENTED
-        # super().__init__(self.fake_tracking)
-        self._root = root
-        self._image_paths = image_paths
-        self._bodyparts = bodyparts
-        self._individuals = individuals
-        self._video = video
-        self._keypoints = keypoints
+        super().__init__(self.run_tracking) 
+        
+        self.config = config
+        
+        self._root = config.root
+        self._image_paths = config.paths
+        self._bodyparts = config.bodyparts
+        self._individuals = config.individuals_ids
+        self._video = config.video
+        self._keypoints = config.keypoints
         self._signals = LogSignal()
         self.log_signal = self._signals.log_signal
         self.log_w_replace_signal = self._signals.log_w_replace_signal
         self.warn_signal = self._signals.warn_signal
         self.error_signal = self._signals.error_signal
-
-        self.config = None  # config  # use if needed
 
     def log(self, msg):
         """Log a message."""
@@ -463,7 +504,7 @@ def cotrack_online(
             )
             is_first_step = False
         window_frames.append(frame)
-        log(f"Finished batch {i}")
+        log(f"Finished frame {i}")
 
     # Processing final frames in case video length is not a multiple of model.step
     # TODO: Use visibility
