@@ -85,6 +85,8 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         self.start_button = QPushButton("Start tracking")
         self.start_button.clicked.connect(self._start)
         self.enable_retracking = False
+        self._check_for_retracking_availability()
+        self._viewer.layers.events.inserted.connect(self._check_for_retracking_availability)
         
         #############################
         # status report docked widget
@@ -177,7 +179,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
             if self._worker.is_running:
                 return
     
-        if  self.result_layer is not None:
+        if  self.result_layer is not None and self.enable_retracking:
             if self._worker is not None:
                 if self._worker.is_running:
                     return
@@ -189,6 +191,13 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         else:
             self.start_button.setText("Start")
 
+    def _check_for_retracking_availability(self):
+        for layer in self._viewer.layers:
+            if "Tracked keypoints - frame 0" in layer.name:
+                self.enable_retracking = True
+                self.result_layer = layer
+                self._update_start_button_display()
+    
     def _update_progress_bar(self, current_frame, total_frame):
         """Update the progress bar."""
         pbar_value = (current_frame / total_frame) * 100
@@ -435,7 +444,7 @@ class TrackingWorker(GeneratorWorker):
             f.write(f"Done! {tracks.shape}")
         self.log("Finished tracking")
         retrack_frame = 0 if retrack_frame is None else retrack_frame
-        track_path = Path(self._root) / f"TrackedData_frame_{retrack_frame}.h5"
+        track_path = Path(self._root) / f"Tracked keypoints - frame {retrack_frame}.h5"
         self.save_tracking_data(track_path, tracks, "CoTracker", frame=retrack_frame)
         self.log("Finished saving")
         yield track_path
