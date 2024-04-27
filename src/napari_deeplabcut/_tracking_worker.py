@@ -181,17 +181,20 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
 
     def _setup_worker(self):
         metadata = self.keypoint_layer_dropdown.layer().metadata
-        properties = self.keypoint_layer_dropdown.layer().properties
         keypoint_cord = self.keypoint_layer_dropdown.layer_data()
         frames = self.video_layer_dropdown.layer_data()
+
+        header = metadata["header"]
+        bodyparts = header.bodyparts
+        individuals_ids = header.individuals
 
         self._worker = TrackingWorker(
             # metadata["metadata"]["root"],
             # metadata["metadata"]["images"],
             metadata["root"],
             metadata["paths"],
-            properties["label"],
-            properties["id"],
+            bodyparts,
+            individuals_ids,
             frames,
             keypoint_cord,
         )
@@ -331,18 +334,20 @@ class TrackingWorker(GeneratorWorker):
         """Log a warning."""
         self.warn_signal.emit(msg)
 
-    def run_tracking(
-        self,
-        # video: np.ndarray,
-        # keypoints: np.ndarray,
-    ):
+    def run_tracking(self):
         """Run the tracking."""
         self.log("Started tracking")
         with open("log.txt", "w") as f:
             f.write(f"{self._video.shape}")
             f.write(f"{self._keypoints.shape}")
 
-        tracks = cotrack_online(self, np.array(self._video), np.array(self._keypoints))
+        tracks = cotrack_online(
+            self.log,
+            np.array(self._video),
+            np.array(self._keypoints),
+            len(self._individuals),
+            len(self._bodyparts),
+        )
         with open("log_finished_tracking.txt", "w") as f:
             f.write(f"Done! {tracks.shape}")
         self.log("Finished tracking")
@@ -355,11 +360,11 @@ class TrackingWorker(GeneratorWorker):
         levels = ["scorer", "individuals", "bodyparts", "coords"]
         kpt_entries = ["x", "y"]
         columns = []
-        # for i in self._individuals:
-        #     for b in self._bodyparts:
-        #         columns += [(scorer, i, b, entry) for entry in kpt_entries]
-        for i, b in zip(self._individuals[:8], self._bodyparts[:8]):
-            columns += [(scorer, i, b, entry) for entry in kpt_entries]
+        for i in self._individuals:
+            for b in self._bodyparts:
+                columns += [(scorer, i, b, entry) for entry in kpt_entries]
+        # for i, b in zip(self._individuals[:8], self._bodyparts[:8]):
+        #     columns += [(scorer, i, b, entry) for entry in kpt_entries]
 
         index = []
         for img_path in self._image_paths:
@@ -393,14 +398,14 @@ class TrackingWorker(GeneratorWorker):
 
 # TODO: REQUIRES TO RUN pip install src/co-tracker
 def cotrack_online(
-    w,
+    log,
     video,
     keypoints,
+    n_animals,
+    n_bodyparts,
     device: str = "cpu",
 ) -> np.ndarray:
-    w.log("COTRACKING")
-    w.log(video.shape)
-    w.log(keypoints.shape)
+    log("COTRACKING")
     k = keypoints[keypoints[:, 0] == 0][:, 1:]
     with open("log_cotrack.txt", "w") as f:
         f.write(f"video={video.shape}\n")
@@ -408,7 +413,7 @@ def cotrack_online(
         f.write(f"{keypoints}\n")
         f.write(f"k={k.shape}\n")
         f.write(f"{k}\n")
-    keypoints = k.reshape((2, 4, 2))
+    keypoints = k.reshape((n_animals, n_bodyparts, 2))
     k = np.zeros(keypoints.shape)
     k[..., 0] = keypoints[..., 1]
     k[..., 1] = keypoints[..., 0]
@@ -458,7 +463,7 @@ def cotrack_online(
             )
             is_first_step = False
         window_frames.append(frame)
-        w.log("DONE WITH FRAME")
+        log(f"Finished batch {i}")
 
     # Processing final frames in case video length is not a multiple of model.step
     # TODO: Use visibility
