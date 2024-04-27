@@ -173,10 +173,14 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         
     def _update_start_button_display(self):
         """Update the start button display."""
-        if self._worker.is_running:
-            return
+        if self._worker is not None:
+            if self._worker.is_running:
+                return
     
-        if not self._worker.is_running and self.result_layer is not None:
+        if  self.result_layer is not None:
+            if self.worker is not None:
+                if self.worker.is_running:
+                    return
             current_frame = self._viewer.dims.current_step[0]
             if current_frame == 0:
                 self.start_button.setText("Start")
@@ -408,14 +412,14 @@ class TrackingWorker(GeneratorWorker):
             f.write(f"{self._video.shape}")
             f.write(f"{self._keypoints.shape}")
 
-        init_frame = self.config.retrack_frame_id if self.config.retrack_frame_id is not None else 0
-        self.log(f"Started tracking from frame {init_frame}")
+        retrack_frame = self.config.retrack_frame_id if self.config.retrack_frame_id is not None else 0
+        self.log(f"Started tracking from frame {retrack_frame}")
 
 
-        video_frames = self._video[init_frame:]
+        video_frames = self._video[retrack_frame:]
 
         keypoints = np.array(self._keypoints)
-        keypoints = keypoints[keypoints[:, 0] == init_frame][:, [2, 1]]
+        keypoints = keypoints[keypoints[:, 0] == retrack_frame][:, [2, 1]]
         keypoints = keypoints.reshape((len(self._individuals), len(self._bodyparts), 2))
 
         tracks = cotrack_online(
@@ -427,8 +431,8 @@ class TrackingWorker(GeneratorWorker):
         with open("log_finished_tracking.txt", "w") as f:
             f.write(f"Done! {tracks.shape}")
         self.log("Finished tracking")
-        track_path = Path(self._root) / f"TrackedData_frame_{init_frame}.h5"
-        self.save_tracking_data(track_path, tracks, "CoTracker", frame=init_frame)
+        track_path = Path(self._root) / f"TrackedData_frame_{retrack_frame}.h5"
+        self.save_tracking_data(track_path, tracks, "CoTracker", frame=retrack_frame)
         self.log("Finished saving")
         yield track_path
 
