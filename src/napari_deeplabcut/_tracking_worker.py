@@ -422,7 +422,7 @@ class TrackingWorker(GeneratorWorker):
             f.write(f"Done! {tracks.shape}")
         self.log("Finished tracking")
         track_path = Path(self._root) / f"TrackedData_frame_{init_frame}.h5"
-        self.save_tracking_data(track_path, tracks, "CoTracker")
+        self.save_tracking_data(track_path, tracks, "CoTracker", frame=init_frame)
         self.log("Finished saving")
         yield track_path
 
