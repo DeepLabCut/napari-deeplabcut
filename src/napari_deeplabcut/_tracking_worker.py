@@ -339,6 +339,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         self.log.print_and_log(f"\nWorker finished at {get_time()}")
         self.log.print_and_log("*" * 20)
         self.start_button.setText("Start")
+        self._update_start_button_display()
 
         self._worker = None
         self.enable_retracking = True
