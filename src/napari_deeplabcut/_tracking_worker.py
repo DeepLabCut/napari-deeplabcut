@@ -446,7 +446,7 @@ def cotrack_online(
     n_bodyparts,
     device: str = "cpu",
 ) -> np.ndarray:
-    log("COTRACKING")
+    log("Running CoTracker")
     k = keypoints[keypoints[:, 0] == 0][:, 1:]
     with open("log_cotrack.txt", "w") as f:
         f.write(f"video={video.shape}\n")
@@ -454,6 +454,7 @@ def cotrack_online(
         f.write(f"{keypoints}\n")
         f.write(f"k={k.shape}\n")
         f.write(f"{k}\n")
+
     keypoints = k.reshape((n_animals, n_bodyparts, 2))
     k = np.zeros(keypoints.shape)
     k[..., 0] = keypoints[..., 1]
@@ -474,11 +475,6 @@ def cotrack_online(
         )  # (1, T, 3, H, W)
         return model(video_chunk, is_first_step=is_first_step, queries=queries[None])
 
-    # model = CoTrackerOnlinePredictor(
-    #     checkpoint=Path(
-    #       "/home/lucas/Projects/deeplabcut-tracking/models/cotracker2.pth"
-    #     )
-    # )
     n_frames = len(video)
     n_animals, n_keypoints = keypoints.shape[:2]
 
