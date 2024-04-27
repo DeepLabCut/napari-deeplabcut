@@ -382,12 +382,19 @@ class TrackingWorker(GeneratorWorker):
             f.write(f"{self._video.shape}")
             f.write(f"{self._keypoints.shape}")
 
+        init_frame = 0
+
+        video_frames = np.array(self._video)
+        video_frames = video_frames[init_frame:]
+
+        keypoints = np.array(self._keypoints)
+        keypoints = keypoints[keypoints[:, 0] == init_frame][:, [2, 1]]
+        keypoints = keypoints.reshape((len(self._individuals), len(self._bodyparts), 2))
+
         tracks = cotrack_online(
             self.log,
-            np.array(self._video),
-            np.array(self._keypoints),
-            len(self._individuals),
-            len(self._bodyparts),
+            video_frames,
+            keypoints,
         )
         with open("log_finished_tracking.txt", "w") as f:
             f.write(f"Done! {tracks.shape}")
@@ -442,24 +449,13 @@ def cotrack_online(
     log,
     video,
     keypoints,
-    n_animals,
-    n_bodyparts,
     device: str = "cpu",
 ) -> np.ndarray:
     log("Running CoTracker")
-    k = keypoints[keypoints[:, 0] == 0][:, 1:]
     with open("log_cotrack.txt", "w") as f:
         f.write(f"video={video.shape}\n")
         f.write(f"keypoints={keypoints.shape}\n")
         f.write(f"{keypoints}\n")
-        f.write(f"k={k.shape}\n")
-        f.write(f"{k}\n")
-
-    keypoints = k.reshape((n_animals, n_bodyparts, 2))
-    k = np.zeros(keypoints.shape)
-    k[..., 0] = keypoints[..., 1]
-    k[..., 1] = keypoints[..., 0]
-    keypoints = k
 
     def _process_step(window_frames, is_first_step, queries):
         with open("log_window_frames.txt", "w") as f:
