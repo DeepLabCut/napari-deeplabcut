@@ -426,7 +426,7 @@ class TrackingWorker(GeneratorWorker):
         self.log("Finished saving")
         yield track_path
 
-    def save_tracking_data(self, path: Path, tracks: np.ndarray, scorer: str) -> None:
+    def save_tracking_data(self, path: Path, tracks: np.ndarray, scorer: str, frame: int = 0) -> None:
         levels = ["scorer", "individuals", "bodyparts", "coords"]
         kpt_entries = ["x", "y"]
         columns = []
@@ -436,9 +436,8 @@ class TrackingWorker(GeneratorWorker):
         # for i, b in zip(self._individuals[:8], self._bodyparts[:8]):
         #     columns += [(scorer, i, b, entry) for entry in kpt_entries]
 
-        init_frame = 0
         index = []
-        for img_path in self._image_paths[init_frame:]:
+        for img_path in self._image_paths[frame:]:
             if isinstance(img_path, str):
                 index.append(tuple(Path(img_path).parts))
             elif isinstance(img_path, tuple):
