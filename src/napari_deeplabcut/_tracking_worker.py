@@ -48,7 +48,7 @@ class TrackingConfig:
     ### User config ###
     retrack_frame_id: int = None
     method : str = "CoTracker" # change when adding PIPS++
-    device: str = "cpu"
+    device: str = "cpu" if not torch.cuda.is_available() else "cuda"
 
 @dataclass
 class TrackingResults: # Add anything relevant to be yielded by the worker here
@@ -84,6 +84,8 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         )
         self.start_button = QPushButton("Start tracking")
         self.start_button.clicked.connect(self._start)
+        self.enable_retracking = False
+        
         #############################
         # status report docked widget
         self.container_docked = False  # check if already docked
@@ -171,10 +173,9 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         
     def _update_start_button_display(self):
         """Update the start button display."""
-        if self._worker is None:
-            return
         if self._worker.is_running:
             return
+    
         if not self._worker.is_running and self.result_layer is not None:
             current_frame = self._viewer.dims.current_step[0]
             if current_frame == 0:
@@ -234,6 +235,9 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         individuals_ids = header.individuals
         
         current_frame = self._viewer.dims.current_step[0]
+        retrack_frame_id = None
+        if current_frame != 0 and self.enable_retracking:
+            retrack_frame_id = current_frame
 
         self.worker_config = TrackingConfig(
             video=frames,
@@ -245,7 +249,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
             n_frames=len(frames),
             n_animals=len(individuals_ids),
             n_keypoints=len(bodyparts),
-            retrack_frame_id=current_frame if self.result_layer is not None else None,
+            retrack_frame_id=retrack_frame_id,
         )
         self._worker = TrackingWorker(self.worker_config)
             
@@ -286,7 +290,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         return self._viewer.add_points(
             ### data ###
             keypoint_data,
-            name="keypoints_hdf_test",
+            name=f"Tracked keypoints - frame {self._worker.config.retrack_frame_id}",
             metadata=metadata["metadata"],
             # features=metadata["properties"],
             properties=metadata["properties"],
@@ -332,6 +336,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         self.start_button.setText("Start")
 
         self._worker = None
+        self.enable_retracking = True
 
         return True  # signal clean exit
 
@@ -417,6 +422,7 @@ class TrackingWorker(GeneratorWorker):
             self.log,
             video_frames,
             keypoints,
+            device=self.config.device,
         )
         with open("log_finished_tracking.txt", "w") as f:
             f.write(f"Done! {tracks.shape}")
