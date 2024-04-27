@@ -416,7 +416,7 @@ class TrackingWorker(GeneratorWorker):
         self.log(f"Started tracking from frame {retrack_frame}")
 
 
-        video_frames = self._video[retrack_frame:]
+        video_frames = np.array(self._video[retrack_frame:])
 
         keypoints = np.array(self._keypoints)
         keypoints = keypoints[keypoints[:, 0] == retrack_frame][:, [2, 1]]
