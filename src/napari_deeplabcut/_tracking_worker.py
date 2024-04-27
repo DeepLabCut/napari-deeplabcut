@@ -30,6 +30,11 @@ from napari_deeplabcut._tracking_utils import (
     get_time,
 )
 
+
+def get_track_filename(start_frame: int) -> str:
+    return f"TrackedKeypoints_start_{start_frame}.h5"
+
+
 @dataclass
 class TrackingConfig:
     ### Data ###
@@ -192,8 +197,13 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
             self.start_button.setText("Start")
 
     def _check_for_retracking_availability(self):
+        base_track_filename = get_track_filename(start_frame=0)
+        print(base_track_filename)
+        base_track_stem = base_track_filename.split(".h5")[0]
+        print("stem", base_track_stem)
         for layer in self._viewer.layers:
-            if "Tracked keypoints - frame 0" in layer.name:
+            print(f"Layer: '{layer.name}'")
+            if base_track_stem in layer.name:
                 self.enable_retracking = True
                 self.result_layer = layer
                 self._update_start_button_display()
@@ -304,7 +314,7 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         return self._viewer.add_points(
             ### data ###
             keypoint_data,
-            name=f"Tracked keypoints - frame {frame_id}",
+            name=results.stem,
             metadata=metadata["metadata"],
             # features=metadata["properties"],
             properties=metadata["properties"],
@@ -431,6 +441,10 @@ class TrackingWorker(GeneratorWorker):
         video_frames = np.array(self._video[retrack_frame:])
 
         keypoints = np.array(self._keypoints)
+        with open("log_frame_indices.txt", "w") as f:
+            f.write(f"{keypoints[:, 0]}\n\n")
+            f.write(f"{keypoints}")
+
         keypoints = keypoints[keypoints[:, 0] == retrack_frame][:, [2, 1]]
         keypoints = keypoints.reshape((len(self._individuals), len(self._bodyparts), 2))
 
@@ -444,7 +458,7 @@ class TrackingWorker(GeneratorWorker):
             f.write(f"Done! {tracks.shape}")
         self.log("Finished tracking")
         retrack_frame = 0 if retrack_frame is None else retrack_frame
-        track_path = Path(self._root) / f"Tracked keypoints - frame {retrack_frame}.h5"
+        track_path = Path(self._root) / get_track_filename(start_frame=retrack_frame)
         self.save_tracking_data(track_path, tracks, "CoTracker", frame=retrack_frame)
         self.log("Finished saving")
         yield track_path
