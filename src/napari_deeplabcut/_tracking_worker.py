@@ -291,10 +291,11 @@ class TrackingModule(QWidget, metaclass=QWidgetSingleton):
         # we want to create a points layer from the keypoint data
         # layer properties (dict) should be populated with metadata
         print(metadata)
+        frame_id = self._worker.config.retrack_frame_id if self._worker.config.retrack_frame_id is not None else 0
         return self._viewer.add_points(
             ### data ###
             keypoint_data,
-            name=f"Tracked keypoints - frame {self._worker.config.retrack_frame_id}",
+            name=f"Tracked keypoints - frame {frame_id}",
             metadata=metadata["metadata"],
             # features=metadata["properties"],
             properties=metadata["properties"],
@@ -388,6 +389,7 @@ class TrackingWorker(GeneratorWorker):
         self._individuals = config.individuals_ids
         self._video = config.video
         self._keypoints = config.keypoints
+        
         self._signals = LogSignal()
         self.log_signal = self._signals.log_signal
         self.log_w_replace_signal = self._signals.log_w_replace_signal
@@ -431,6 +433,7 @@ class TrackingWorker(GeneratorWorker):
         with open("log_finished_tracking.txt", "w") as f:
             f.write(f"Done! {tracks.shape}")
         self.log("Finished tracking")
+        retrack_frame = 0 if retrack_frame is None else retrack_frame
         track_path = Path(self._root) / f"TrackedData_frame_{retrack_frame}.h5"
         self.save_tracking_data(track_path, tracks, "CoTracker", frame=retrack_frame)
         self.log("Finished saving")
