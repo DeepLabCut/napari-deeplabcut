@@ -399,7 +399,7 @@ class TrackingWorker(GeneratorWorker):
         with open("log_finished_tracking.txt", "w") as f:
             f.write(f"Done! {tracks.shape}")
         self.log("Finished tracking")
-        track_path = Path(self._root) / "TrackedData.h5"
+        track_path = Path(self._root) / f"TrackedData_start{init_frame}.h5"
         self.save_tracking_data(track_path, tracks, "CoTracker")
         self.log("Finished saving")
         yield track_path
@@ -414,8 +414,9 @@ class TrackingWorker(GeneratorWorker):
         # for i, b in zip(self._individuals[:8], self._bodyparts[:8]):
         #     columns += [(scorer, i, b, entry) for entry in kpt_entries]
 
+        init_frame = 0
         index = []
-        for img_path in self._image_paths:
+        for img_path in self._image_paths[init_frame:]:
             if isinstance(img_path, str):
                 index.append(tuple(Path(img_path).parts))
             elif isinstance(img_path, tuple):
