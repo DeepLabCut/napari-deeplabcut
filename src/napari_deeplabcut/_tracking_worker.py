@@ -460,6 +460,7 @@ class TrackingWorker(GeneratorWorker):
         retrack_frame = 0 if retrack_frame is None else retrack_frame
         track_path = Path(self._root) / get_track_filename(start_frame=retrack_frame)
         self.save_tracking_data(track_path, tracks, "CoTracker", frame=retrack_frame)
+        # self.create_combined_tracking_data()
         self.log("Finished saving")
         yield track_path
 
@@ -495,6 +496,27 @@ class TrackingWorker(GeneratorWorker):
             columns=pd.MultiIndex.from_tuples(columns, names=levels),
         )
         dataframe.to_hdf(path, key="df_with_missing")
+
+    def create_combined_tracking_data(self):
+        track_files = [
+            p for p in Path(self._root).iterdir()
+            if p.is_file() and p.stem.startswith("TrackedKeypoints")
+        ]
+        if len(track_files) <= 1:
+            return
+
+        df_tracks = {
+            int(p.stem.split("_")[-1]): pd.read_hdf(p, key="df_with_missing")
+            for p in track_files
+        }
+        df = df_tracks[0]
+        indices = [i for i in sorted(df_tracks.keys()) if i > 0]
+        for idx in indices:
+            new_data = df_tracks[idx]
+            df.iloc[idx:] = new_data.iloc[idx:]
+
+        path = Path(self._root) / "CombinedTracks.h5"
+        df.to_hdf(path, key="df_with_missing")
 
     def fake_tracking(self):
         """Fake tracking for testing purposes."""
