@@ -153,13 +153,13 @@ def _populate_metadata(
     }
 
 
-def _load_superkeypoints_diagram():
-    path = str(Path(__file__).parent / "assets" / "topviewmouse.jpg")
+def _load_superkeypoints_diagram(super_animal: str):
+    path = str(Path(__file__).parent / "assets" / f"{super_animal}.jpg")
     return imread(path), {"root": ""}, "images"
 
 
-def _load_superkeypoints():
-    path = str(Path(__file__).parent / "assets" / "topviewmouse.json")
+def _load_superkeypoints(super_animal: str):
+    path = str(Path(__file__).parent / "assets" / f"{super_animal}.json")
     with open(path) as f:
         return json.load(f)
 

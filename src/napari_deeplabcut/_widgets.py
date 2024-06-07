@@ -691,13 +691,16 @@ class KeypointControls(QWidget):
         return QSettings()
 
     def load_superkeypoints_diagram(self):
-        layer_data = _load_superkeypoints_diagram()
+        super_animal = "topviewmouse"
+        layer_data = _load_superkeypoints_diagram(super_animal)
         self.viewer.add_image(layer_data[0], metadata=layer_data[1])
         self._keypoint_mapping_button.setText("Map keypoints")
         self._keypoint_mapping_button.clicked.disconnect(self._func_id)
-        self._keypoint_mapping_button.clicked.connect(self._map_keypoints)
+        self._keypoint_mapping_button.clicked.connect(
+            lambda: self._map_keypoints(super_animal)
+        )
 
-    def _map_keypoints(self):
+    def _map_keypoints(self, super_animal: str):
         points_layer = None
         for layer in self.viewer.layers:
             if isinstance(layer, Points):
@@ -708,7 +711,7 @@ class KeypointControls(QWidget):
             return
 
         xy = points_layer.data[:, 1:3]
-        superkpts_dict = _load_superkeypoints()
+        superkpts_dict = _load_superkeypoints(super_animal)
         xy_ref = np.c_[[val for val in superkpts_dict.values()]]
         neighbors = keypoints._find_nearest_neighbors(xy, xy_ref)
         found = neighbors != -1
@@ -716,16 +719,16 @@ class KeypointControls(QWidget):
             return
 
         project_path = points_layer.metadata["project"]
-        with open(os.path.join(project_path, "mapping.json"), "w") as f:
-            json.dump(
-                dict(
-                    zip(
-                        points_layer.metadata["header"].bodyparts,
-                        np.array(list(superkpts_dict.keys()))[neighbors[found]],
-                    )
-                ),
-                f,
+        config_path = str(Path(project_path) / "config.yaml")
+        cfg = _load_config(config_path)
+        conversion_tables = cfg.get("SuperAnimalConversionTables", {})
+        conversion_tables[super_animal] = dict(
+            zip(
+                points_layer.metadata["header"].bodyparts,
+                np.array(list(superkpts_dict.keys()))[neighbors[found]],
             )
+        )
+        _write_config(config_path, cfg)
         self.viewer.status = "Mapping to superkeypoint set successfully saved"
 
     def start_tutorial(self):
