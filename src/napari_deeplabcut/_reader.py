@@ -20,6 +20,10 @@ SUPPORTED_IMAGES = ".jpg", ".jpeg", ".png"
 SUPPORTED_VIDEOS = ".mp4", ".mov", ".avi"
 
 
+def is_video(filename: str):
+    return any(filename.lower().endswith(ext) for ext in SUPPORTED_VIDEOS)
+
+
 def get_hdf_reader(path):
     if isinstance(path, list):
         path = path[0]
@@ -315,7 +319,7 @@ def read_video(filename: str, opencv: bool = True):
     elems[-1] = elems[-1].split(".")[0]
     root = os.path.join(*elems)
     params = {
-        "name": os.path.split(filename)[1],
+        "name": filename,
         "metadata": {
             "root": root,
         },

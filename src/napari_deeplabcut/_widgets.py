@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 from collections import defaultdict, namedtuple
@@ -32,7 +31,6 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -54,6 +52,7 @@ from napari_deeplabcut._reader import (
     _load_config,
     _load_superkeypoints_diagram,
     _load_superkeypoints,
+    is_video,
 )
 from napari_deeplabcut._writer import _write_config, _write_image, _form_df
 from napari_deeplabcut.misc import (
@@ -826,6 +825,7 @@ class KeypointControls(QWidget):
         self._func_id = self._keypoint_mapping_button.clicked.connect(
             self.load_superkeypoints_diagram
         )
+        self._keypoint_mapping_button.hide()
         layout.addWidget(self._keypoint_mapping_button)
         return layout
 
@@ -1009,7 +1009,7 @@ class KeypointControls(QWidget):
         logging.debug(f"Inserting Layer {layer}")
         if isinstance(layer, Image):
             paths = layer.metadata.get("paths")
-            if paths is None:  # Then it's a video file
+            if paths is None and is_video(layer.name):
                 self.video_widget.setVisible(True)
             # Store the metadata and pass them on to the other layers
             self._images_meta.update(
@@ -1068,6 +1068,9 @@ class KeypointControls(QWidget):
                 self._update_color_scheme()
 
                 return
+
+            if layer.metadata.get("tables", ""):
+                self._keypoint_mapping_button.show()
 
             store = keypoints.KeypointStore(self.viewer, layer)
             self._stores[layer] = store
