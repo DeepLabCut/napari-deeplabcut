@@ -691,9 +691,32 @@ class KeypointControls(QWidget):
         return QSettings()
 
     def load_superkeypoints_diagram(self):
-        super_animal = "topviewmouse"
+        points_layer = None
+        for layer in self.viewer.layers:
+            if isinstance(layer, Points):
+                points_layer = layer
+                break
+
+        if points_layer is None:
+            return
+
+        tables = deepcopy(points_layer.metadata.get("tables", {}))
+        if not tables:
+            return
+
+        super_animal, table = tables.popitem()
         layer_data = _load_superkeypoints_diagram(super_animal)
         self.viewer.add_image(layer_data[0], metadata=layer_data[1])
+        superkpts_dict = _load_superkeypoints(super_animal)
+        xy = []
+        labels = []
+        for kpt_ref, kpt_super in table.items():
+            xy.append([0.0, *superkpts_dict[kpt_super]])
+            labels.append(kpt_ref)
+        points_layer.data = np.array(xy)
+        properties = deepcopy(points_layer.properties)
+        properties["label"] = np.array(labels)
+        points_layer.properties = properties
         self._keypoint_mapping_button.setText("Map keypoints")
         self._keypoint_mapping_button.clicked.disconnect(self._func_id)
         self._keypoint_mapping_button.clicked.connect(
@@ -703,7 +726,7 @@ class KeypointControls(QWidget):
     def _map_keypoints(self, super_animal: str):
         points_layer = None
         for layer in self.viewer.layers:
-            if isinstance(layer, Points):
+            if isinstance(layer, Points) and layer.metadata.get("tables"):
                 points_layer = layer
                 break
 
@@ -724,8 +747,10 @@ class KeypointControls(QWidget):
         conversion_tables = cfg.get("SuperAnimalConversionTables", {})
         conversion_tables[super_animal] = dict(
             zip(
-                points_layer.metadata["header"].bodyparts,
-                np.array(list(superkpts_dict.keys()))[neighbors[found]],
+                map(
+                    str, points_layer.metadata["header"].bodyparts
+                ),  # Needed to fix an ugly yaml RepresenterError
+                map(str, list(np.array(list(superkpts_dict))[neighbors[found]])),
             )
         )
         _write_config(config_path, cfg)

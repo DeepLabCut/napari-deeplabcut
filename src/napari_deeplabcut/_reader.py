@@ -183,6 +183,10 @@ def read_config(configname: str) -> List[LayerData]:
     metadata["ndim"] = 3
     metadata["property_choices"] = metadata.pop("properties")
     metadata["metadata"]["project"] = os.path.dirname(configname)
+    conversion_tables = config.get("SuperAnimalConversionTables")
+    if conversion_tables is not None:
+        super_animal, table = conversion_tables.popitem()
+        metadata["metadata"]["tables"] = {super_animal: table}
     return [(None, metadata, "points")]
 
 
