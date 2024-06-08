@@ -2,6 +2,10 @@ include LICENSE
 include README.md
 include src/napari_deeplabcut/styles/*.mplstyle
 include src/napari_deeplabcut/assets/napari_shortcuts.svg
+include src/napari_deeplabcut/assets/superanimal_topviewmouse.jpg
+include src/napari_deeplabcut/assets/superanimal_topviewmouse.json
+include src/napari_deeplabcut/assets/superanimal_quadruped.jpg
+include src/napari_deeplabcut/assets/superanimal_quadruped.json
 
 recursive-exclude * __pycache__
 recursive-exclude * *.py[co]

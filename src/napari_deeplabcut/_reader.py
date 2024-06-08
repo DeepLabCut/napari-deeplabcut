@@ -1,4 +1,5 @@
 import glob
+import json
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
@@ -17,6 +18,10 @@ from napari_deeplabcut import misc
 
 SUPPORTED_IMAGES = ".jpg", ".jpeg", ".png"
 SUPPORTED_VIDEOS = ".mp4", ".mov", ".avi"
+
+
+def is_video(filename: str):
+    return any(filename.lower().endswith(ext) for ext in SUPPORTED_VIDEOS)
 
 
 def get_hdf_reader(path):
@@ -152,6 +157,17 @@ def _populate_metadata(
     }
 
 
+def _load_superkeypoints_diagram(super_animal: str):
+    path = str(Path(__file__).parent / "assets" / f"{super_animal}.jpg")
+    return imread(path), {"root": ""}, "images"
+
+
+def _load_superkeypoints(super_animal: str):
+    path = str(Path(__file__).parent / "assets" / f"{super_animal}.json")
+    with open(path) as f:
+        return json.load(f)
+
+
 def _load_config(config_path: str):
     with open(config_path) as file:
         return yaml.safe_load(file)
@@ -171,6 +187,10 @@ def read_config(configname: str) -> List[LayerData]:
     metadata["ndim"] = 3
     metadata["property_choices"] = metadata.pop("properties")
     metadata["metadata"]["project"] = os.path.dirname(configname)
+    conversion_tables = config.get("SuperAnimalConversionTables")
+    if conversion_tables is not None:
+        super_animal, table = conversion_tables.popitem()
+        metadata["metadata"]["tables"] = {super_animal: table}
     return [(None, metadata, "points")]
 
 
@@ -299,7 +319,7 @@ def read_video(filename: str, opencv: bool = True):
     elems[-1] = elems[-1].split(".")[0]
     root = os.path.join(*elems)
     params = {
-        "name": os.path.split(filename)[1],
+        "name": filename,
         "metadata": {
             "root": root,
         },
