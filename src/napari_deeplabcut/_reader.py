@@ -195,6 +195,7 @@ def read_config(configname: str) -> List[LayerData]:
 
 
 def read_hdf(filename: str) -> List[LayerData]:
+    config_path = misc.find_project_config_path(filename)
     layers = []
     for filename in glob.iglob(filename):
         temp = pd.read_hdf(filename)
@@ -207,7 +208,11 @@ def read_hdf(filename: str) -> List[LayerData]:
             old_idx = temp.columns.to_frame()
             old_idx.insert(0, "individuals", "")
             temp.columns = pd.MultiIndex.from_frame(old_idx)
-            colormap = "viridis"
+            try:
+                cfg = _load_config(config_path)
+                colormap = cfg["colormap"]
+            except FileNotFoundError:
+                colormap = "rainbow"
         else:
             colormap = "Set3"
         if isinstance(temp.index, pd.MultiIndex):
