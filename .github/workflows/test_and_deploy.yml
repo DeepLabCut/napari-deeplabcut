@@ -1,4 +1,4 @@
-# This workflow will upload a Python Package using Twine when a release is created
+# This workflows will upload a Python Package using Twine when a release is created
 # For more information see: https://help.github.com/en/actions/language-and-framework-guides/using-python-with-github-actions#publishing-to-package-registries
 
 name: tests
@@ -57,21 +57,36 @@ jobs:
           auto-update-conda: true
           python-version: ${{ matrix.python-version }}
 
+      # Initialize Conda on Linux/macOS
+      - name: Initialize Conda (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash -l {0}
+        run: |
+          conda init bash
+
       - name: Create and activate environment (Linux/macOS)
         if: runner.os != 'Windows'
+        shell: bash -l {0}
         run: |
-          source $HOME/miniconda/etc/profile.d/conda.sh
           conda create --name test-env python=${{ matrix.python-version }} -y
           source activate test-env
           conda install -c conda-forge pytables==3.8.0 -y
           python -m pip install --upgrade pip
           python -m pip install setuptools tox tox-gh-actions
 
+      # Initialize Conda on Windows
+      - name: Initialize Conda (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          C:\Miniconda\Scripts\conda.exe init powershell
+
       - name: Create and activate environment (Windows)
         if: runner.os == 'Windows'
+        shell: powershell
         run: |
           C:\Miniconda\Scripts\conda.exe create --name test-env python=${{ matrix.python-version }} -y
-          C:\Miniconda\Scripts\activate test-env
+          conda activate test-env
           C:\Miniconda\Scripts\conda.exe install -c conda-forge pytables==3.8.0 -y
           python -m pip install --upgrade pip
           python -m pip install setuptools tox tox-gh-actions
@@ -79,17 +94,18 @@ jobs:
       # This runs the platform-specific tests declared in tox.ini
       - name: Test with tox (Linux/macOS)
         if: runner.os != 'Windows'
+        shell: bash -l {0}
         run: |
-          source $HOME/miniconda/etc/profile.d/conda.sh
-          conda activate test-env
+          source activate test-env
           python -m tox
         env:
           PLATFORM: ${{ matrix.platform }}
 
       - name: Test with tox (Windows)
         if: runner.os == 'Windows'
+        shell: powershell
         run: |
-          C:\Miniconda\Scripts\activate test-env
+          conda activate test-env
           python -m tox
         env:
           PLATFORM: ${{ matrix.platform }}
