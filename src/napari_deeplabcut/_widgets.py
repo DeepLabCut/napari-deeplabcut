@@ -33,6 +33,7 @@ from qtpy.QtWidgets import (
     QDialog,
     QFileDialog,
     QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -607,31 +608,27 @@ class KeypointControls(QWidget):
         help_buttons = self._form_help_buttons()
         self._layout.addLayout(help_buttons)
 
-        hlayout = QHBoxLayout()
-        trail_label = QLabel("Show trails")
-        self._trail_cb = QCheckBox()
+        grid = QGridLayout()
+        self._trail_cb = QCheckBox("Show trails", parent=self)
         self._trail_cb.setToolTip("toggle trails visibility")
         self._trail_cb.setChecked(False)
         self._trail_cb.setEnabled(False)
         self._trail_cb.stateChanged.connect(self._show_trails)
         self._trails = None
 
-        matplotlib_label = QLabel("Show matplotlib canvas")
         self._matplotlib_canvas = KeypointMatplotlibCanvas(self.viewer)
-        self._matplotlib_cb = QCheckBox()
+        self._matplotlib_cb = QCheckBox("Show matplotlib canvas", parent=self)
         self._matplotlib_cb.setToolTip("toggle matplotlib canvas visibility")
         self._matplotlib_cb.stateChanged.connect(self._show_matplotlib_canvas)
         self._matplotlib_cb.setChecked(False)
         self._matplotlib_cb.setEnabled(False)
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
 
-        hlayout.addWidget(self._matplotlib_cb)
-        hlayout.addWidget(matplotlib_label)
-        hlayout.addWidget(self._trail_cb)
-        hlayout.addWidget(trail_label)
-        hlayout.addWidget(self._view_scheme_cb)
+        grid.addWidget(self._matplotlib_cb, 0, 0)
+        grid.addWidget(self._trail_cb, 1, 0)
+        grid.addWidget(self._view_scheme_cb, 2, 0)
 
-        self._layout.addLayout(hlayout)
+        self._layout.addLayout(grid)
 
         # form buttons for selection of annotation mode
         self._radio_group = self._form_mode_radio_buttons()
@@ -814,7 +811,7 @@ class KeypointControls(QWidget):
         return group_box
 
     def _form_help_buttons(self):
-        layout = QHBoxLayout()
+        layout = QVBoxLayout()
         show_shortcuts = QPushButton("View shortcuts")
         show_shortcuts.clicked.connect(self.display_shortcuts)
         layout.addWidget(show_shortcuts)
