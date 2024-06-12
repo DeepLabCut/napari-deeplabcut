@@ -1,4 +1,4 @@
-# This workflows will upload a Python Package using Twine when a release is created
+# This workflow will upload a Python Package using Twine when a release is created
 # For more information see: https://help.github.com/en/actions/language-and-framework-guides/using-python-with-github-actions#publishing-to-package-registries
 
 name: tests
@@ -38,10 +38,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # these libraries enable testing on Qt on linux
+      # These libraries enable testing on Qt on linux
       - uses: tlambert03/setup-qt-libs@v1
 
-      # strategy borrowed from vispy for installing opengl libs on windows
+      # Strategy borrowed from vispy for installing opengl libs on Windows
       - name: Install Windows OpenGL
         if: runner.os == 'Windows'
         run: |
@@ -57,18 +57,28 @@ jobs:
           auto-update-conda: true
           python-version: ${{ matrix.python-version }}
 
-      - name: Create and activate environment
+      - name: Initialize Conda
+        shell: bash
         run: |
+          eval "$(conda shell.bash hook)"
+          conda init bash
+
+      - name: Create and activate environment
+        shell: bash
+        run: |
+          eval "$(conda shell.bash hook)"
           conda create --name test-env python=${{ matrix.python-version }} -y
-          conda activate test-env
+          source activate test-env
           conda install -c conda-forge pytables==3.8.0 -y
           python -m pip install --upgrade pip
           python -m pip install setuptools tox tox-gh-actions
 
-      # this runs the platform-specific tests declared in tox.ini
+      # This runs the platform-specific tests declared in tox.ini
       - name: Test with tox
+        shell: bash
         run: |
-          conda activate test-env
+          eval "$(conda shell.bash hook)"
+          source activate test-env
           python -m tox
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -77,7 +87,7 @@ jobs:
         uses: codecov/codecov-action@v4
 
   deploy:
-    # this will run when you have tagged a commit, starting with "v*"
+    # This will run when you have tagged a commit, starting with "v*"
     # and requires that you have put your twine API key in your
     # github secrets (see readme for details)
     needs: [test]
