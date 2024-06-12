@@ -498,7 +498,7 @@ class KeypointMatplotlibCanvas(QWidget):
         if points_layer is None or ~np.any(points_layer.data):
             return
 
-        self.viewer.window.add_dock_widget(self, name="Trajectory plot", area="right")
+        self.show()  # Silly hack so the window does not hang the first time it is shown
         self.hide()
 
         self.df = _form_df(
@@ -684,6 +684,13 @@ class KeypointControls(QWidget):
             QTimer.singleShot(10, self.start_tutorial)
             self.settings.setValue("first_launch", False)
 
+        # Slightly delay docking so it is shown underneath the KeypointsControls widget
+        QTimer.singleShot(10, self.silently_dock_matplotlib_canvas)
+
+    def silently_dock_matplotlib_canvas(self):
+        self.viewer.window.add_dock_widget(self._matplotlib_canvas, name="Trajectory plot", area="right")
+        self._matplotlib_canvas.hide()
+
     @cached_property
     def settings(self):
         return QSettings()
@@ -797,6 +804,7 @@ class KeypointControls(QWidget):
     def _show_matplotlib_canvas(self, state):
         if Qt.CheckState(state) == Qt.CheckState.Checked:
             self._matplotlib_canvas.show()
+            self.viewer.window._qt_window.update()
         else:
             self._matplotlib_canvas.hide()
 
