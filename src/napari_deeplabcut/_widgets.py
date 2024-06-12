@@ -527,7 +527,7 @@ class KeypointMatplotlibCanvas(QWidget):
         end = min(value + self._window // 2, len(self.df))
 
         self.ax.set_xlim(start, end)
-        self.vline.set_xdata(value)
+        self.vline.set_xdata([value])
         self.canvas.draw()
 
     def set_window(self, value):
