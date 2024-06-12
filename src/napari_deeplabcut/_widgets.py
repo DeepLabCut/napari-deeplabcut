@@ -631,10 +631,12 @@ class KeypointControls(QWidget):
         self._layout.addLayout(grid)
 
         # form buttons for selection of annotation mode
-        self._radio_group = self._form_mode_radio_buttons()
+        self._radio_box, self._radio_group = self._form_mode_radio_buttons()
+        self._radio_box.setEnabled(False)
 
         # form color scheme display + color mode selector
         self._color_grp, self._color_mode_selector = self._form_color_mode_selector()
+        self._color_grp.setEnabled(False)
         self._display = ColorSchemeDisplay(parent=self)
         self._color_scheme_display = self._form_color_scheme_display(self.viewer)
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
@@ -917,7 +919,7 @@ class KeypointControls(QWidget):
             self.label_mode = group.checkedButton().text()
 
         group.buttonClicked.connect(_func)
-        return group
+        return group_box, group
 
     def _form_color_mode_selector(self):
         group_box = QGroupBox("Keypoint coloring mode")
@@ -1096,6 +1098,8 @@ class KeypointControls(QWidget):
                     "project": layer.metadata.get("project"),
                 }
             )
+            self._radio_box.setEnabled(True)
+            self._color_grp.setEnabled(True)
             self._trail_cb.setEnabled(True)
             self._matplotlib_cb.setEnabled(True)
 
