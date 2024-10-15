@@ -44,6 +44,10 @@ class TrackingControls(QWidget):
         self._forward_spinbox_relative.valueChanged.connect(lambda x : (self._forward_slider.setValue(x), self._forward_spinbox_absolute.setValue(self._reference_spinbox.value() + x)))
         self._forward_spinbox_absolute.valueChanged.connect(lambda x : self._forward_spinbox_relative.setValue(x - self._reference_spinbox.value() if x - self._reference_spinbox.value() > 0 else 0))
 
+        self._backward_slider.valueChanged.connect(self._backward_spinbox_relative.setValue)
+        self._backward_spinbox_relative.valueChanged.connect(lambda x : (self._backward_slider.setValue(x), self._backward_spinbox_absolute.setValue(self._reference_spinbox.value() + x)))
+        self._backward_spinbox_absolute.valueChanged.connect(lambda x : self._backward_spinbox_relative.setValue(x - self._reference_spinbox.value() if x - self._reference_spinbox.value() < 0 else 0))
+
         self._viewer.dims.events.current_step.connect(lambda e: self._reference_spinbox.setValue(e.value[0]))
         self._reference_spinbox.valueChanged.connect(self._update_controls)
 
@@ -64,6 +68,11 @@ class TrackingControls(QWidget):
         self._forward_spinbox_relative.setRange(0, self.video_layer.data.shape[0] - 1 - new_val)
         self._forward_spinbox_absolute.setRange(new_val, self.video_layer.data.shape[0] - 1)
         self._forward_spinbox_absolute.setValue(new_val+self._forward_spinbox_relative.value())
+
+        self._backward_slider.setRange(-new_val, 0)
+        self._backward_spinbox_relative.setRange(-new_val, 0)
+        self._backward_spinbox_absolute.setRange(0, new_val)
+        self._backward_spinbox_absolute.setValue(new_val+self._backward_spinbox_relative.value())
 
         self._viewer.dims.current_step = (new_val, *self._viewer.dims.current_step[1:])
         
@@ -122,9 +131,8 @@ class TrackingControls(QWidget):
         self.layout().addLayout(_keypoint_layer_method_layout)
         self.layout().addLayout(_video_layer_method_layout)
         range_controls_layout = QGridLayout() # 3 by 5
-        self._backward_slider.setRange(0, 100)
-        self._backward_slider.setInvertedAppearance(True)
-        self._backward_slider.setInvertedControls(True)
+        self._backward_slider.setRange(-100, 0)
+        # self._backward_slider.setInvertedAppearance(True)
         range_controls_layout.addWidget(self._backward_slider, 0, 0, 1, 2)
         self._backward_spinbox_absolute.setRange(0, 100)
         self._backward_spinbox_absolute.setAlignment(Qt.AlignCenter)
