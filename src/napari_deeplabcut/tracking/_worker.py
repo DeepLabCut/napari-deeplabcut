@@ -40,21 +40,23 @@ class TrackingWorker(QObject):
         import torch
         debugpy.debug_this_thread()
         if self.model is None:
-            self.model = torch.hub.load("facebookresearch/co-tracker", "cotracker2v1_online").to(self.device)
+            self.model = torch.hub.load("facebookresearch/co-tracker", "cotracker3_online").to(self.device)
         def _process_step(window_frames, is_first_step, queries):
             video_chunk = (
                 torch.tensor(np.stack(window_frames[-self.model.step * 2:]), device=self.device)
                 .float()
                 .permute(0, 3, 1, 2)[None]
             )  # (1, T, 3, H, W)
-            return self.model(video_chunk, is_first_step=is_first_step, queries=queries[None], add_support_grid=False)
+            return self.model(video_chunk, is_first_step=is_first_step, queries=queries[None], add_support_grid=True)
         # video is originally of shape (num_frames, height, width, channels)
-        # video = torch.from_numpy(np.array(cfg.video)).permute(0, 3, 1, 2).unsqueeze(0).float() # cotracker expects video in shape [1, num_frames, num_channels, height, width]
         video = np.array(cfg.video)
         window_frames = []
 
-        queries = torch.from_numpy(cfg.keypoints).to(self.device).float()
+        # We need to swap x, y so that it matches what cotracker expects 
+        cfg.keypoints[:, [1, 2]] = cfg.keypoints[:, [2, 1]]
 
+        queries = torch.from_numpy(cfg.keypoints).to(self.device).float()
+        
         # Iterating over video frames, processing one window at a time:
         is_first_step = True
         for i, frame in enumerate(video):
@@ -75,12 +77,13 @@ class TrackingWorker(QObject):
         )
 
         tracks = pred_tracks.squeeze().cpu().numpy()
-        tracks = tracks[:, :cfg.keypoints.shape[0], :] # drop the support grid
+        tracks = tracks[:, :cfg.keypoints.shape[0], :] # drop the support grid (necessary only for cotracker version < 3)
         tracks = tracks.reshape(-1, 2)
         frame_ids = np.repeat(np.arange(cfg.keypoint_range[0], cfg.keypoint_range[1]), cfg.keypoints.shape[0])
         tracks = np.column_stack((frame_ids, tracks))
-        cfg.keypoint_features = pd.concat([cfg.keypoint_features] * cfg.keypoints.shape[0], ignore_index=True)
+        cfg.keypoint_features = pd.concat([cfg.keypoint_features] * len(np.unique(tracks[:, 0])), ignore_index=True)
         cfg.keypoints = tracks
+        cfg.keypoints[:, [1, 2]] = cfg.keypoints[:, [2, 1]]
         self.trackingFinished.emit(cfg)
 
     def run(self):
