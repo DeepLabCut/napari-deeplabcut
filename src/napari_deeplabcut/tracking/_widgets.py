@@ -6,15 +6,16 @@ from napari.types import PointsData, ImageData
 from napari.layers import Points, Image
 from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget, QProgressBar
 from qtpy.QtWidgets import QApplication, QWidget, QHBoxLayout, QVBoxLayout, QSpinBox, QSlider, QLabel, QComboBox, QSizePolicy, QGridLayout
-from qtpy.QtCore import Qt, Slot
+from qtpy.QtCore import Qt, Slot, Signal
 from skimage.util import img_as_float
-from napari_deeplabcut.tracking.tracking_worker import TrackingWorker, TrackingWorkerData
+from napari_deeplabcut.tracking._worker import TrackingWorker, TrackingWorkerData
 import napari
 from napari.viewer import Viewer
 from napari.utils.events.event import Event
 
 
 class TrackingControls(QWidget):
+    trackingRequested = Signal(TrackingWorkerData)
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
         self._viewer: Viewer = viewer
@@ -53,10 +54,8 @@ class TrackingControls(QWidget):
 
         # Worker
         self.is_tracking = False
-        self.worker: TrackingWorker = TrackingWorker()
-        self.worker.started.connect(self.tracking_started)
-        self.worker.progress.connect(self._tracking_progress_bar.setValue)
-        self.worker.finished.connect(self.tracking_finished)
+        self.worker_started = False
+        self.worker: TrackingWorker | None
 
         self._build_layout()
 
@@ -75,10 +74,23 @@ class TrackingControls(QWidget):
         self._backward_spinbox_absolute.setValue(new_val+self._backward_spinbox_relative.value())
 
         self._viewer.dims.current_step = (new_val, *self._viewer.dims.current_step[1:])
+
+    def _start_worker(self):
+        self.is_tracking = False
+        self.worker_started = False
+        self.worker = TrackingWorker()
+        self.worker.trackingStarted.connect(self.tracking_started)
+        self.worker.started.connect(partial(setattr, self, 'worker_started', True))
+        self.worker.finished.connect(partial(setattr, self, 'worker_started', False))
+        self.worker.progress.connect(lambda x: (self._tracking_progress_bar.setMaximum(x[1]), self._tracking_progress_bar.setValue(x[0])) if self._tracking_progress_bar.maximum() != x[1] else self._tracking_progress_bar.setValue(x[0]))
+        self.worker.trackingFinished.connect(self.tracking_finished)
+        self.trackingRequested.connect(self.worker.track)
+
+        self.worker.start()
         
 
     @property
-    def keypoint_layer(self) -> Points:
+    def keypoint_layer(self) -> Points | None:
         return self._keypoint_layer_combo.value
 
     @property
@@ -94,17 +106,34 @@ class TrackingControls(QWidget):
         self.is_tracking = True
         self._tracking_progress_bar.setValue(0)
 
-    @Slot()
-    def tracking_finished(self):
+    @Slot(TrackingWorkerData)
+    def tracking_finished(self, cfg):
         self.is_tracking = False
+        self._viewer.add_points(cfg.keypoints, features=cfg.keypoint_features)
         self._tracking_progress_bar.setValue(100)
 
     @Slot()
     def track_forward(self):
+        if not self.worker_started:
+            self._start_worker()
         if self.is_tracking:
             return
 
-        tracking_data = TrackingWorkerData()
+        ref_frame_idx: int = self._reference_spinbox.value()
+        forward_frame_idx: int = self._forward_spinbox_absolute.value()
+        keypoint_range = (ref_frame_idx, forward_frame_idx+1)
+        video_slice = self.video_layer.data[ref_frame_idx:forward_frame_idx+1]
+        keypoints = self.keypoint_layer.data[self.keypoint_layer.data[:, 0] == ref_frame_idx]
+        keypoints[:, 0] = 0
+        keypoint_features = self.keypoint_layer.features[self.keypoint_layer.data[:, 0] == ref_frame_idx]
+        tracking_data = TrackingWorkerData(
+            tracker=self._tracking_method_combo.currentText(),
+            video=video_slice,
+            keypoints=keypoints,
+            keypoint_features=keypoint_features,
+            keypoint_range=keypoint_range
+        )
+        self.trackingRequested.emit(tracking_data)
         
 
     def _build_layout(self):
