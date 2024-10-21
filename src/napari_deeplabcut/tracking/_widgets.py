@@ -1,4 +1,6 @@
 from magicgui import magic_factory
+import pandas as pd
+import numpy as np
 import debugpy
 from functools import partial
 from magicgui.widgets import CheckBox, Container, create_widget, ComboBox, Slider, SpinBox
@@ -13,11 +15,15 @@ import napari
 from napari.viewer import Viewer
 from napari.utils.events.event import Event
 
+from napari_deeplabcut.tracking._worker import TrackingWorker, TrackingWorkerData
+from napari_deeplabcut.keypoints import KeypointStore
+
 
 class TrackingControls(QWidget):
     trackingRequested = Signal(TrackingWorkerData)
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
+        from napari_deeplabcut._widgets import KeypointControls
         self._viewer: Viewer = viewer
 
         # Layout
@@ -55,7 +61,11 @@ class TrackingControls(QWidget):
         # Worker
         self.is_tracking = False
         self.worker_started = False
-        self.worker: TrackingWorker | None
+        self.worker: TrackingWorker | None = None
+
+        # Reference to the keypoint control widget.
+        # this gets assigned after the user requests tracking for the first time.
+        self.keypoint_widget: KeypointControls | None = None
 
         self._build_layout()
 
@@ -94,6 +104,10 @@ class TrackingControls(QWidget):
         return self._keypoint_layer_combo.value
 
     @property
+    def keypoint_store(self) -> KeypointStore | None:
+        return self.keypoint_widget._stores[self.keypoint_layer] if self.keypoint_widget else None
+
+    @property
     def video_layer(self) -> Image | None:
         return self._video_layer_combo.value
 
@@ -116,6 +130,11 @@ class TrackingControls(QWidget):
     def track_forward(self):
         if not self.worker_started:
             self._start_worker()
+        if not self.keypoint_widget:
+            for k,v in self._viewer.window._dock_widgets.items():
+                if 'Keypoint controls' in k and 'napari-deeplabcut' in k:
+                    self.keypoint_widget = v.widget()
+                    break
         if self.is_tracking:
             return
 
