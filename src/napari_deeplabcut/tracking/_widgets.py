@@ -10,7 +10,6 @@ from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget, QProgressBar
 from qtpy.QtWidgets import QApplication, QWidget, QHBoxLayout, QVBoxLayout, QSpinBox, QSlider, QLabel, QComboBox, QSizePolicy, QGridLayout
 from qtpy.QtCore import Qt, Slot, Signal
 from skimage.util import img_as_float
-from napari_deeplabcut.tracking._worker import TrackingWorker, TrackingWorkerData
 import napari
 from napari.viewer import Viewer
 from napari.utils.events.event import Event
@@ -121,10 +120,47 @@ class TrackingControls(QWidget):
         self._tracking_progress_bar.setValue(0)
 
     @Slot(TrackingWorkerData)
-    def tracking_finished(self, cfg):
+    def tracking_finished(self, trackingdata: TrackingWorkerData):
         self.is_tracking = False
-        self._viewer.add_points(cfg.keypoints, features=cfg.keypoint_features)
-        self._tracking_progress_bar.setValue(100)
+        try:
+            self.add_keypoints_to_layer(trackingdata.keypoints, trackingdata.keypoint_features)
+        except Exception as e:
+            print(e)
+        self._tracking_progress_bar.setValue(self._tracking_progress_bar.maximum())
+
+    def add_keypoints_to_layer(self, new_keypoints: np.ndarray, new_features: pd.DataFrame):
+        current_keypoints = self.keypoint_layer.data
+        current_features: pd.DataFrame = self.keypoint_layer.features
+
+        # Extract unique frame indices
+        unique_frames = np.sort(np.unique(np.concatenate((current_keypoints[:, 0], new_keypoints[:, 0]))))
+
+        merged_keypoints = []
+        merged_features = []
+
+        for frame in unique_frames:
+            # Select keypoints and features for the current frame
+            frame_old_keypoints = current_keypoints[current_keypoints[:, 0] == frame]
+            frame_old_features = current_features[current_keypoints[:, 0] == frame]
+
+            frame_new_keypoints = new_keypoints[new_keypoints[:, 0] == frame]
+            frame_new_features = new_features[new_keypoints[:, 0] == frame]
+
+            # Here we can add custom logic when merging. Right now we overwrite any previous keypoints.
+            if len(frame_new_keypoints) > 0:
+                # If there are keypoints in new, take those
+                merged_keypoints.append(frame_new_keypoints)
+                merged_features.append(frame_new_features)
+            else:
+                merged_keypoints.append(frame_old_keypoints)
+                merged_features.append(frame_old_features)
+
+        merged_keypoints = np.vstack(merged_keypoints) if merged_keypoints else np.empty((0, current_keypoints.shape[1]))
+        merged_feature_df = pd.concat(merged_features, ignore_index=True)
+
+        self.keypoint_layer.data = merged_keypoints
+        self.keypoint_layer.features = merged_feature_df
+
 
     @Slot()
     def track_forward(self):
