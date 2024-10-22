@@ -130,6 +130,7 @@ class TrackingControls(QWidget):
         except Exception as e:
             print(e)
         self._tracking_progress_bar.setValue(self._tracking_progress_bar.maximum())
+        self._tracking_progress_bar.setFormat("%p% Done")
         self.trackedKeypointsAdded.emit()
 
     def add_keypoints_to_layer(self, new_keypoints: np.ndarray, new_features: pd.DataFrame):
@@ -194,6 +195,7 @@ class TrackingControls(QWidget):
                     break
         if self.is_tracking:
             return
+        self._tracking_progress_bar.setFormat("%p%")
 
         if backward_tracking:
             video_slice = self.video_layer.data[keypoint_range[0]:keypoint_range[1]][::-1]

@@ -65,7 +65,7 @@ class TrackingWorker(QObject):
                 pred_tracks, _pred_visibility = _process_step(window_frames, is_first_step, queries=queries)
                 is_first_step = False
             window_frames.append(frame)
-            self.progress.emit((i, len(frame)))
+            self.progress.emit((i, len(video)))
 
         # Processing final frames in case video length is not a multiple of model.step
         # TODO: Use visibility
@@ -74,6 +74,7 @@ class TrackingWorker(QObject):
             is_first_step,
             queries=queries,
         )
+        self.progress.emit((len(video), len(video)))
 
         tracks = pred_tracks.squeeze().cpu().numpy()
         tracks = tracks[:, :cfg.keypoints.shape[0], :] # drop the support grid (necessary only for cotracker version < 3)
