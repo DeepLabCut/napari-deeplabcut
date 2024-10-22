@@ -17,6 +17,7 @@ class TrackingWorkerData:
     keypoints: np.ndarray # (num_keypoint, 3) first col is frame numbe in `video` and the second and third are x, y
     keypoint_features: dict
     keypoint_range: tuple[int, int]
+    backward_tracking: bool
 
 
 class TrackingWorker(QObject):
@@ -60,11 +61,9 @@ class TrackingWorker(QObject):
         # Iterating over video frames, processing one window at a time:
         is_first_step = True
         for i, frame in enumerate(video):
-            # frame = frame.permute(1, 2, 0)
             if i % self.model.step == 0 and i != 0:
                 pred_tracks, _pred_visibility = _process_step(window_frames, is_first_step, queries=queries)
                 is_first_step = False
-                
             window_frames.append(frame)
             self.progress.emit((i, len(frame)))
 
@@ -79,6 +78,8 @@ class TrackingWorker(QObject):
         tracks = pred_tracks.squeeze().cpu().numpy()
         tracks = tracks[:, :cfg.keypoints.shape[0], :] # drop the support grid (necessary only for cotracker version < 3)
         tracks = tracks.reshape(-1, 2)
+        if cfg.backward_tracking:
+            tracks = tracks[::-1]
         frame_ids = np.repeat(np.arange(cfg.keypoint_range[0], cfg.keypoint_range[1]), cfg.keypoints.shape[0])
         tracks = np.column_stack((frame_ids, tracks))
         cfg.keypoint_features = pd.concat([cfg.keypoint_features] * len(np.unique(tracks[:, 0])), ignore_index=True)

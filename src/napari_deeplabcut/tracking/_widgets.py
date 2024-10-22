@@ -42,7 +42,9 @@ class TrackingControls(QWidget):
         self._tracking_forward_button = QPushButton()
         self._tracking_forward_button.clicked.connect(self.track_forward)
         self._tracking_backward_button = QPushButton()
+        self._tracking_backward_button.clicked.connect(self.track_backward)
         self._tracking_bothway_button = QPushButton()
+        self._tracking_bothway_button.clicked.connect(self.track_bothway)
         self._tracking_progress_bar = QProgressBar()
 
         # Controls
@@ -164,6 +166,22 @@ class TrackingControls(QWidget):
 
     @Slot()
     def track_forward(self):
+        ref_frame_idx: int = self._reference_spinbox.value()
+        forward_frame_idx: int = self._forward_spinbox_absolute.value()
+        self.track((ref_frame_idx, forward_frame_idx+1), ref_frame_idx, backward_tracking=False)
+
+    @Slot()
+    def track_backward(self):
+        ref_frame_idx: int = self._reference_spinbox.value()
+        backward_frame_idx: int = self._backward_spinbox_absolute.value()
+        self.track((backward_frame_idx, ref_frame_idx+1), ref_frame_idx, backward_tracking=True)
+
+    @Slot()
+    def track_bothway(self):
+        pass
+
+
+    def track(self, keypoint_range: tuple[int, int], ref_frame_idx, backward_tracking=False):
         if not self.worker_started:
             self._start_worker()
         if not self.keypoint_widget:
@@ -174,10 +192,10 @@ class TrackingControls(QWidget):
         if self.is_tracking:
             return
 
-        ref_frame_idx: int = self._reference_spinbox.value()
-        forward_frame_idx: int = self._forward_spinbox_absolute.value()
-        keypoint_range = (ref_frame_idx, forward_frame_idx+1)
-        video_slice = self.video_layer.data[ref_frame_idx:forward_frame_idx+1]
+        if backward_tracking:
+            video_slice = self.video_layer.data[keypoint_range[0]:keypoint_range[1]][::-1]
+        else:
+            video_slice = self.video_layer.data[keypoint_range[0]:keypoint_range[1]]
         keypoints = self.keypoint_layer.data[self.keypoint_layer.data[:, 0] == ref_frame_idx]
         keypoints[:, 0] = 0
         keypoint_features = self.keypoint_layer.features[self.keypoint_layer.data[:, 0] == ref_frame_idx]
@@ -186,7 +204,8 @@ class TrackingControls(QWidget):
             video=video_slice,
             keypoints=keypoints,
             keypoint_features=keypoint_features,
-            keypoint_range=keypoint_range
+            keypoint_range=keypoint_range,
+            backward_tracking=backward_tracking
         )
         self.trackingRequested.emit(tracking_data)
         
