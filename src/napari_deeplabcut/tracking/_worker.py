@@ -88,11 +88,9 @@ class TrackingWorker(QObject):
         self.trackingFinished.emit(cfg)
 
     def run(self):
-        print(f"Started tracking worker on thread: {QThread.currentThread()}.")
         self.started.emit()
 
     def start(self):
-        print(f"Request to start tracking worker on thread: {QThread.currentThread()}.")
         self.thread = QThread()
         self.moveToThread(self.thread)
 

@@ -20,6 +20,7 @@ from napari_deeplabcut.keypoints import KeypointStore
 
 class TrackingControls(QWidget):
     trackingRequested = Signal(TrackingWorkerData)
+    trackedKeypointsAdded = Signal()
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
         from napari_deeplabcut._widgets import KeypointControls
@@ -129,6 +130,7 @@ class TrackingControls(QWidget):
         except Exception as e:
             print(e)
         self._tracking_progress_bar.setValue(self._tracking_progress_bar.maximum())
+        self.trackedKeypointsAdded.emit()
 
     def add_keypoints_to_layer(self, new_keypoints: np.ndarray, new_features: pd.DataFrame):
         current_keypoints = self.keypoint_layer.data
@@ -178,7 +180,8 @@ class TrackingControls(QWidget):
 
     @Slot()
     def track_bothway(self):
-        pass
+        self.track_forward()
+        self.trackedKeypointsAdded.connect(self.track_backward, type=Qt.ConnectionType.SingleShotConnection)
 
 
     def track(self, keypoint_range: tuple[int, int], ref_frame_idx, backward_tracking=False):
