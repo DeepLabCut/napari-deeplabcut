@@ -42,7 +42,11 @@ class TrackingControls(QWidget):
         self._tracking_stop_button = QPushButton()
         self._tracking_forward_button = QPushButton()
         self._tracking_forward_button.clicked.connect(self.track_forward)
+        self._tracking_forward_end_button = QPushButton()
+        self._tracking_forward_end_button.clicked.connect(self.track_forward_end)
         self._tracking_backward_button = QPushButton()
+        self._tracking_backward_end_button = QPushButton()
+        self._tracking_backward_end_button.clicked.connect(self.track_backward_end)
         self._tracking_backward_button.clicked.connect(self.track_backward)
         self._tracking_bothway_button = QPushButton()
         self._tracking_bothway_button.clicked.connect(self.track_bothway)
@@ -171,12 +175,33 @@ class TrackingControls(QWidget):
     def track_forward(self):
         ref_frame_idx: int = self._reference_spinbox.value()
         forward_frame_idx: int = self._forward_spinbox_absolute.value()
+        if forward_frame_idx <= ref_frame_idx:
+            return
+        self.track((ref_frame_idx, forward_frame_idx+1), ref_frame_idx, backward_tracking=False)
+
+    @Slot()
+    def track_forward_end(self):
+        ref_frame_idx: int = self._reference_spinbox.value()
+        forward_frame_idx: int = self.image_layer.data.shape[0]
+        if forward_frame_idx <= ref_frame_idx:
+            return
         self.track((ref_frame_idx, forward_frame_idx+1), ref_frame_idx, backward_tracking=False)
 
     @Slot()
     def track_backward(self):
         ref_frame_idx: int = self._reference_spinbox.value()
         backward_frame_idx: int = self._backward_spinbox_absolute.value()
+        if backward_frame_idx >= ref_frame_idx:
+            return
+        print(backward_frame_idx, ref_frame_idx)
+        self.track((backward_frame_idx, ref_frame_idx+1), ref_frame_idx, backward_tracking=True)
+
+    @Slot()
+    def track_backward_end(self):
+        ref_frame_idx: int = self._reference_spinbox.value()
+        backward_frame_idx: int = 0
+        if backward_frame_idx >= ref_frame_idx:
+            return
         self.track((backward_frame_idx, ref_frame_idx+1), ref_frame_idx, backward_tracking=True)
 
     @Slot()
@@ -271,8 +296,8 @@ class TrackingControls(QWidget):
         range_controls_layout.addWidget(self._reference_spinbox, 1, 2)
         _ref_label.setAlignment(Qt.AlignCenter)
         range_controls_layout.addWidget(_ref_label, 0, 2)
-        self._set_ref_button.setText("Set")
-        range_controls_layout.addWidget(self._set_ref_button, 2, 2)
+        # self._set_ref_button.setText("Set")
+        # range_controls_layout.addWidget(self._set_ref_button, 2, 2)
         self._forward_slider.setRange(0, 100)
         range_controls_layout.addWidget(self._forward_slider, 0, 3, 1, 2)
         self._forward_spinbox_absolute.setRange(0, 100)
@@ -295,15 +320,23 @@ class TrackingControls(QWidget):
         range_controls_layout.addWidget(self._forward_spinbox_relative, 2, 3)
 
         self.layout().addLayout(range_controls_layout)
-        tracking_controls_layout = QGridLayout() # 2 by 5
-        self._tracking_stop_button.setText("□")
-        tracking_controls_layout.addWidget(self._tracking_stop_button, 0, 2)
-        self._tracking_forward_button.setText("⇥")
-        tracking_controls_layout.addWidget(self._tracking_forward_button, 0, 3)
-        self._tracking_bothway_button.setText("↹")
+
+        tracking_controls_layout = QGridLayout() # 2 by 3
         self._tracking_backward_button.setText("⇤")
-        tracking_controls_layout.addWidget(self._tracking_backward_button, 0, 1)
-        tracking_controls_layout.addWidget(self._tracking_bothway_button, 1, 2)
+        tracking_controls_layout.addWidget(self._tracking_backward_button, 0, 0)
+        self._tracking_backward_end_button.setText("⇤⇤")
+        tracking_controls_layout.addWidget(self._tracking_backward_end_button, 1, 0)
+
+        self._tracking_stop_button.setText("□")
+        tracking_controls_layout.addWidget(self._tracking_stop_button, 0, 1)
+
+        self._tracking_forward_button.setText("⇥")
+        tracking_controls_layout.addWidget(self._tracking_forward_button, 0, 2)
+        self._tracking_forward_end_button.setText("⇥⇥")
+        tracking_controls_layout.addWidget(self._tracking_forward_end_button, 1, 2)
+
+        self._tracking_bothway_button.setText("↹")
+        tracking_controls_layout.addWidget(self._tracking_bothway_button, 1, 1)
 
         self._tracking_progress_bar.setRange(0, 100)
         self.layout().addLayout(tracking_controls_layout)
