@@ -73,7 +73,34 @@ class TrackingControls(QWidget):
         # this gets assigned after the user requests tracking for the first time.
         self.keypoint_widget: KeypointControls | None = None
 
+        self._setup_keybindings(viewer=viewer)
+
         self._build_layout()
+
+    def _setup_keybindings(self, viewer: "napari.viewer.Viewer"):
+        @Points.bind_key("l")
+        def track_forward(event):
+            self.track_forward()
+
+        @Points.bind_key("k")
+        def track_forward_end(event):
+            self.track_forward_end()
+
+        @Points.bind_key("h")
+        def track_backward(event):
+            self.track_backward()
+
+        @Points.bind_key("j")
+        def track_backward_end(event):
+            self.track_backward_end()
+
+        @Points.bind_key("i")
+        def move_forward_frame(event):
+            viewer.dims.current_step = (viewer.dims.current_step[0] + 1, *viewer.dims.current_step[1:])
+
+        @Points.bind_key("u")
+        def move_backward_frame(event):
+            viewer.dims.current_step = (viewer.dims.current_step[0] - 1, *viewer.dims.current_step[1:])
 
     @Slot(int)
     def _update_controls(self, new_val: int):
