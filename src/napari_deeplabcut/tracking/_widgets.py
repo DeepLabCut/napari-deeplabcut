@@ -127,7 +127,9 @@ class TrackingControls(QWidget):
         self.worker.finished.connect(partial(setattr, self, 'worker_started', False))
         self.worker.progress.connect(lambda x: (self._tracking_progress_bar.setMaximum(x[1]), self._tracking_progress_bar.setValue(x[0])) if self._tracking_progress_bar.maximum() != x[1] else self._tracking_progress_bar.setValue(x[0]))
         self.worker.trackingFinished.connect(self.tracking_finished)
+        self.worker.trackingStopped.connect(self.tracking_stopped)
         self.trackingRequested.connect(self.worker.track)
+        self._tracking_stop_button.clicked.connect(self.worker.stop_tracking)
 
         self.worker.start()
         
@@ -163,6 +165,12 @@ class TrackingControls(QWidget):
         self._tracking_progress_bar.setValue(self._tracking_progress_bar.maximum())
         self._tracking_progress_bar.setFormat("%p% Done")
         self.trackedKeypointsAdded.emit()
+
+    @Slot()
+    def tracking_stopped(self):
+        self.is_tracking = False
+        self._tracking_progress_bar.setValue(self._tracking_progress_bar.maximum())
+        self._tracking_progress_bar.setFormat("%p% Stopped")
 
     def add_keypoints_to_layer(self, new_keypoints: np.ndarray, new_features: pd.DataFrame):
         current_keypoints = self.keypoint_layer.data
@@ -209,7 +217,7 @@ class TrackingControls(QWidget):
     @Slot()
     def track_forward_end(self):
         ref_frame_idx: int = self._reference_spinbox.value()
-        forward_frame_idx: int = self.image_layer.data.shape[0]
+        forward_frame_idx: int = self.video_layer.data.shape[0] - 1
         if forward_frame_idx <= ref_frame_idx:
             return
         self.track((ref_frame_idx, forward_frame_idx+1), ref_frame_idx, backward_tracking=False)

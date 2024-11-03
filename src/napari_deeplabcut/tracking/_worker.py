@@ -3,7 +3,7 @@ import pandas as pd
 import debugpy
 import logging
 import time
-from qtpy.QtCore import QObject, QThread, Signal, Slot
+from qtpy.QtCore import QObject, QThread, Signal, Slot, QCoreApplication
 from qtpy.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel, QVBoxLayout, QWidget
 import numpy as np
 
@@ -26,12 +26,12 @@ class TrackingWorker(QObject):
     progress = Signal(tuple)
     trackingStarted = Signal()
     trackingFinished = Signal(TrackingWorkerData)
+    trackingStopped = Signal()
 
     def __init__(self):
         super().__init__()
         import torch
-        self.is_paused = False
-        self.is_aborted = False
+        self.is_stopped = False
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model: object | None = None
 
@@ -66,6 +66,8 @@ class TrackingWorker(QObject):
                 is_first_step = False
             window_frames.append(frame)
             self.progress.emit((i, len(video)))
+            if self._should_stop():
+                return
 
         # Processing final frames in case video length is not a multiple of model.step
         # TODO: Use visibility
@@ -101,11 +103,14 @@ class TrackingWorker(QObject):
         
         self.thread.start()
 
-    def pause(self):
-        self.is_paused = True
+    @Slot()
+    def stop_tracking(self):
+        self.is_stopped = True
 
-    def resume(self):
-        self.is_paused = False
-
-    def abort(self):
-        self.is_aborted = True
+    def _should_stop(self) -> bool:
+        QCoreApplication.processEvents()
+        if self.is_stopped:
+            self.trackingStopped.emit()
+            self.is_stopped = False
+            return True
+        return False
