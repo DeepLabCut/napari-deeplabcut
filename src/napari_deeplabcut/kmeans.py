@@ -24,7 +24,10 @@ def _cluster(data):
 
 
 def cluster_data(points_layer):
-    df = _form_df(points_layer.data, points_layer.metadata)
+    df = _form_df(
+        points_layer.data,
+        dict(metadata=points_layer.metadata, properties=points_layer.properties),
+    )
 
     try:
         df = df.drop('single', axis=1, level='individuals')
@@ -36,9 +39,18 @@ def cluster_data(points_layer):
         df = df.stack('individuals').droplevel('individuals')
     except KeyError:
         pass
-    df.index = ['/'.join(row) for row in df.index]
-    xy = df.to_numpy().reshape((-1, len(header.bodyparts), 2))
+
+    images = []
+    for img in df.index:
+        if isinstance(img, (str, int)):
+            images.append(img)
+        else:
+            images.append("/".join(img))
+
+    df_xy = df.iloc[:, df.columns.get_level_values("coords").isin(["x", "y"])]
+
+    xy = df_xy.to_numpy().reshape((-1, len(header.bodyparts), 2))
     # TODO Normalize dists by longest length?
     dists = np.vstack([pdist(data, "euclidean") for data in xy])
     points = np.c_[_cluster(dists)]  # x, y, label
-    return points, list(df.index)
+    return points, images

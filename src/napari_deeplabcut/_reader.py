@@ -235,6 +235,7 @@ def read_hdf(filename: str) -> List[LayerData]:
                 image_paths,
                 return_map=True,
             )
+
         data[:, 0] = image_inds
         data[:, 1:] = df[["y", "x"]].to_numpy()
         metadata = _populate_metadata(

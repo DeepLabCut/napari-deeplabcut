@@ -662,6 +662,19 @@ class KeypointControls(QWidget):
 
         self._layout.addLayout(grid)
 
+        # Add the clustering buttons
+        self.add_clustering_buttons()
+        # Initialize an empty canvas onto which to draw the images
+        self.fig = Figure(tight_layout=True, dpi=100)
+        self.fig.patch.set_facecolor("None")
+        self.ax = self.fig.add_subplot(111)
+        self.ax.invert_yaxis()
+        self.ax.set_axis_off()
+        self._im = None
+        self._scatter = self.ax.scatter([], [])
+        self.canvas = FigureCanvas(self.fig)
+        self.show()
+
         # form buttons for selection of annotation mode
         self._radio_box, self._radio_group = self._form_mode_radio_buttons()
         self._radio_box.setEnabled(False)
@@ -929,20 +942,6 @@ class KeypointControls(QWidget):
                 _write_config(config_path, cfg)
                 break
 
-        self.add_clustering_buttons()
-
-        # Initialize an empty canvas onto which to draw the images
-        self.fig = Figure(tight_layout=True, dpi=100)
-        self.fig.patch.set_facecolor("None")
-        self.ax = self.fig.add_subplot(111)
-        self.ax.invert_yaxis()
-        self.ax.set_axis_off()
-        self._im = None
-        self._scatter = self.ax.scatter([], [])
-        self.canvas = FigureCanvas(self.fig)
-
-        self.show()
-
     def add_clustering_buttons(self):
         layout = QHBoxLayout()
         btn_cluster = QPushButton('cluster pose', self)
@@ -972,7 +971,7 @@ class KeypointControls(QWidget):
         )
         clust_layer.mode = 'select'
 
-        self.viewer.window.add_dock_widget(self.canvas, name='frames')
+        # self.viewer.window.add_dock_widget(self._matplotlib_canvas, name='frames')
         self.viewer.layers[0].visible = False
 
         self._df = pd.read_hdf(self.viewer.layers[0].source.path)
