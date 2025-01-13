@@ -975,12 +975,22 @@ class KeypointControls(QWidget):
         self.viewer.layers[0].visible = False
 
         self._df = pd.read_hdf(self.viewer.layers[0].source.path)
-        self._df.index = ['/'.join(row) for row in list(self._df.index)]
+
+        index = []
+        for img in self._df.index:
+            if isinstance(img, (str, int)):
+                index.append(img)
+            else:
+                index.append("/".join(img))
+        self._df.index = index
 
         root = self.viewer.layers[0].metadata['root']
         filenames = list(self.viewer.layers[0].metadata['paths'])
         project_name = find_project_name(root)
-        project_path = os.path.join(root.split(project_name)[0], project_name)
+        if project_name is None:
+            project_path = Path(".")
+        else:
+            project_path = Path(root.split(project_name)[0]) / project_name
 
         @clust_layer.mouse_drag_callbacks.append
         def get_event(clust_layer, event):
@@ -997,14 +1007,17 @@ class KeypointControls(QWidget):
             bpts = self._df.loc[filename].to_numpy().reshape((-1, 2))
             self.step = filenames.index(filename)
 
-            with Image_.open(os.path.join(project_path, filename)) as img:
-                im = np.asarray(img)
+            filepath = project_path / filename
+            if filepath.exists():
+                img = np.asarray(Image_.open(filepath))
                 if self._im is None:
-                    self._im = self.ax.imshow(im)
+                    self._im = self.ax.imshow(img)
                 else:
-                    self._im.set_data(im)
+                    self._im.set_data(img)
                 self._scatter.set_offsets(bpts)
                 self.canvas.draw()
+            else:
+                print(f"Could not find {filepath} - cannot open.")
 
     def on_click(self):
         layer = self.viewer.layers.selection.active
@@ -1018,6 +1031,10 @@ class KeypointControls(QWidget):
         self.thread.start()
 
     def on_click_show_img(self):
+        if self._im is None:
+            print("Cannot show the image - select an image first!")
+            return
+
         self.viewer.layers[0].visible = True
         self.viewer.layers[1].visible = False
         self.viewer.dims.set_current_step(0, self.step)
