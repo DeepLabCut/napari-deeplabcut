@@ -24,6 +24,7 @@ from typing import Optional, Sequence, Union
 from matplotlib.backends.backend_qtagg import FigureCanvas, NavigationToolbar2QT
 
 import numpy as np
+import qtpy.QtCore as QtCore
 from napari._qt.widgets.qt_welcome import QtWelcomeLabel
 from napari.layers import Image, Points, Shapes, Tracks
 from napari.layers.points._points_key_bindings import register_points_action

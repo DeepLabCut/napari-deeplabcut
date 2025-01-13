@@ -3,7 +3,7 @@ import pandas as pd
 from scipy.spatial.distance import pdist
 from sklearn.cluster import DBSCAN
 from sklearn.decomposition import PCA
-from napari_deeplabcut._writer import _conv_layer_to_df
+from napari_deeplabcut._writer import _form_df
 from napari_deeplabcut.misc import DLCHeader
 
 
@@ -24,9 +24,8 @@ def _cluster(data):
 
 
 def cluster_data(points_layer):
-    df = _conv_layer_to_df(
-        points_layer.data, points_layer.metadata, points_layer.properties
-    )
+    df = _form_df(points_layer.data, points_layer.metadata)
+
     try:
         df = df.drop('single', axis=1, level='individuals')
     except KeyError:
