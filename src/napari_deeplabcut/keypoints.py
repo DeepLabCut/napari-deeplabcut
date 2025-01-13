@@ -7,6 +7,7 @@ from napari._qt.layer_controls.qt_points_controls import QtPointsControls
 from napari.layers import Points
 from napari.layers.points._points_constants import SYMBOL_TRANSLATION_INVERTED
 from napari.layers.points._points_utils import coerce_symbols
+from scipy.spatial import cKDTree
 
 from napari_deeplabcut.misc import CycleEnum
 
@@ -32,6 +33,22 @@ def _change_symbol(self, text):
 
 QtPointsControls.changeCurrentSize = _change_size
 QtPointsControls.changeCurrentSymbol = _change_symbol
+
+
+class ColorMode(CycleEnum):
+    """Modes in which keypoints can be colored
+
+    BODYPART: the keypoints are grouped by bodypart (all bodyparts have the same color)
+    INDIVIDUAL: the keypoints are grouped by individual (all keypoints for the same
+        individual have the same color)
+    """
+
+    BODYPART = auto()
+    INDIVIDUAL = auto()
+
+    @classmethod
+    def default(cls):
+        return cls.BODYPART
 
 
 class LabelMode(CycleEnum):
@@ -190,3 +207,21 @@ def _add(store, coord):
         store.layer.events.query_next_frame()
     else:
         store.next_keypoint()
+
+
+def _find_nearest_neighbors(xy_true, xy_pred, k=5):
+    n_preds = xy_pred.shape[0]
+    tree = cKDTree(xy_pred)
+    dist, inds = tree.query(xy_true, k=k)
+    idx = np.argsort(dist[:, 0])
+    neighbors = np.full(len(xy_true), -1, dtype=int)
+    picked = set()
+    for i, ind in enumerate(inds[idx]):
+        for j in ind:
+            if j not in picked:
+                picked.add(j)
+                neighbors[idx[i]] = j
+                break
+        if len(picked) == n_preds:
+            break
+    return neighbors

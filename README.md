@@ -22,7 +22,7 @@ A napari plugin for keypoint annotation, also used within DeepLabCut!
 
 If you installed DeepLabCut[gui], this plugin is already installed. However, you can also use this as a stand-alone keypoint annotator without using DeepLabCut. Instructions below!
 
-Start by installing PySide6 with `pip install "pyside6<6.3.2"`; this is the library we now use to build GUIs.
+Start by installing PySide6 with `pip install "pyside6==6.4.2"`; this is the library we now use to build GUIs.
 
 You can then install `napari-deeplabcut` via [pip]:
 
@@ -62,7 +62,9 @@ in red)
 - `V`, to toggle visibility of the selected layer.
 - `backspace` to delete a point.
 - Check the box "display text" to show the label names on the canvas.
-- To move to another folder, be sure to save (Ctrl+S), then delete the layers, and re-drag/drop the next folder.
+- To move to another folder, be sure to save (`Ctrl+S`), then delete the layers, and re-drag/drop the next folder.
+- One can jump to a specific image by double-clicking and editing the current frame number (located to the right of the slider).
+- Selected points can be copied with `Ctrl+C`, and pasted onto other images with `Ctrl+V`.
 
 
 ### Save Layers

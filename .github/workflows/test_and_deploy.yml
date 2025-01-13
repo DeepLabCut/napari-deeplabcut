@@ -15,6 +15,11 @@ on:
       - main
       - npe2
   workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deployment even if tests fail'
+        required: true
+        type: boolean
 
 jobs:
   test:
@@ -29,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -55,14 +60,14 @@ jobs:
 
       # this runs the platform-specific tests declared in tox.ini
       - name: Test with tox
-        uses: aganders3/headless-gui@v1
+        uses: aganders3/headless-gui@v2
         with:
           run: python -m tox
         env:
           PLATFORM: ${{ matrix.platform }}
 
       - name: Coverage
-        uses: codecov/codecov-action@v2
+        uses: codecov/codecov-action@v4
 
   deploy:
     # this will run when you have tagged a commit, starting with "v*"
@@ -70,7 +75,10 @@ jobs:
     # github secrets (see readme for details)
     needs: [test]
     runs-on: ubuntu-latest
-    if: contains(github.ref, 'tags')
+    if: |
+      always() &&
+      inputs.force_deploy ||
+      (contains(github.ref, 'tags') && contains(needs.test.result, 'success'))
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
