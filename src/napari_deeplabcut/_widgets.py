@@ -871,7 +871,7 @@ class KeypointControls(QWidget):
                     guarantee_multiindex_rows(df_prev)
                     df = pd.concat([df_prev, df])
                     df = df[~df.index.duplicated(keep="first")]
-                df.to_hdf(filepath, key="machinelabels")
+                df.to_hdf(filepath, key="df_with_missing")
 
     def _store_crop_coordinates(self, *args):
         if not (project_path := self._images_meta.get("project")):
