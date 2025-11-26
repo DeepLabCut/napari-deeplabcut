@@ -1,6 +1,5 @@
 import sys
 import pandas as pd
-import debugpy
 import logging
 import time
 from qtpy.QtCore import QObject, QThread, Signal, Slot, QCoreApplication
@@ -39,7 +38,6 @@ class TrackingWorker(QObject):
     def track(self, cfg: TrackingWorkerData):
         # TODO: if cfg.tracker == 'cotracker'
         import torch
-        debugpy.debug_this_thread()
         if self.model is None:
             self.model = torch.hub.load("facebookresearch/co-tracker", "cotracker3_online").to(self.device)
         def _process_step(window_frames, is_first_step, queries):

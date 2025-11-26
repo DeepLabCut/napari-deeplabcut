@@ -1,7 +1,6 @@
 from magicgui import magic_factory
 import pandas as pd
 import numpy as np
-import debugpy
 from functools import partial
 from magicgui.widgets import CheckBox, Container, create_widget, ComboBox, Slider, SpinBox
 from napari.types import PointsData, ImageData
