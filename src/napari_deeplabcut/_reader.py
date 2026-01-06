@@ -2,7 +2,7 @@ import glob
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Union
 
 import cv2
 import dask.array as da
@@ -62,21 +62,32 @@ def get_config_reader(path):
     return read_config
 
 
+def _filter_extensions(
+    image_paths: list[Union[str, Path]],
+    valid_extensions: tuple[str] = SUPPORTED_IMAGES,
+) -> list[Path]:
+    """
+    Filter image paths by valid extensions.
+    """
+    valid_paths = [
+        p for p in image_paths
+        if Path(p).suffix.lower() in valid_extensions
+    ]
+    return valid_paths
+
 def get_folder_parser(path):
     if not os.path.isdir(path):
         return None
-
     layers = []
-    files = os.listdir(path)
-    images = ""
-    for file in files:
-        if any(file.lower().endswith(ext) for ext in SUPPORTED_IMAGES):
-            images = os.path.join(path, f"*{os.path.splitext(file)[1]}")
-            break
+    images = _filter_extensions(
+        Path(path).iterdir(),
+        valid_extensions=SUPPORTED_IMAGES
+    )
     if not images:
-        raise OSError(f"No supported images were found in {path}.")
+        raise OSError(f"No supported images were found in {path} with extensions {SUPPORTED_IMAGES}.")
 
-    layers.extend(read_images(images))
+    image_layer = read_images(images)
+    layers.extend(image_layer)
     datafile = ""
     for file in os.listdir(path):
         if file.endswith(".h5"):
@@ -88,28 +99,130 @@ def get_folder_parser(path):
     return lambda _: layers
 
 
-def read_images(path):
+def read_images(
+    path: Union[str, Path] | list[Union[str, Path]]
+):
+    """
+    Read images from path, glob pattern, or list of filepaths.
+    """
     if isinstance(path, list):
-        root, ext = os.path.splitext(path[0])
-        path = os.path.join(os.path.dirname(root), f"*{ext}")
-    # Retrieve filepaths exactly as parsed by pims
-    filepaths = []
-    for filepath in glob.iglob(path):
-        relpath = Path(filepath).parts[-3:]
-        filepaths.append(os.path.join(*relpath))
+        filepaths = _filter_extensions(path, valid_extensions=SUPPORTED_IMAGES)
+    else:
+        filepaths = list(glob.iglob(path))
+
+    relative_paths = [
+        os.path.join(*Path(fn).parts[-3:])
+        for fn in filepaths
+    ]
     params = {
         "name": "images",
         "metadata": {
-            "paths": natsorted(filepaths),
-            "root": os.path.split(path)[0],
+            "paths": natsorted(relative_paths),
+            "root": os.path.split(filepaths[0])[0],
         },
     }
+    return [(lazy_imread(filepaths), params, "image")]
 
-    # https://github.com/soft-matter/pims/issues/452
-    if len(filepaths) == 1:
-        path = glob.glob(path)[0]
 
-    return [(imread(path), params, "image")]
+def lazy_imread(
+    filenames: Union[str, Path] | list[Union[str, Path]],
+    use_dask=None,
+    stack=True,
+):
+    """
+    Image reader that supports dask and numpy. Can be used to read a single 
+    image or a list of images, specified by a list of filepaths or a glob pattern.
+
+    Parameters
+    ----------
+    filenames : list
+        List of filenames or directories to be opened.
+        A list of `pathlib.Path` objects and a single filename or `Path` object
+        are also accepted.
+    use_dask : bool
+        Whether to use dask to create a lazy array, rather than NumPy.
+        Default of None will resolve to True if filenames contains more than
+        one image, False otherwise.
+    stack : bool
+        Whether to stack the images in multiple files into a single array. If
+        False, a list of arrays will be returned.
+
+    Returns
+    -------
+    image : array-like
+        Array or list of images
+    """
+    _filenames: list[str] = (
+        [str(x) for x in filenames]
+        if isinstance(filenames, list | tuple)
+        else [str(filenames)]
+    )
+    if not _filenames:  # pragma: no cover
+        raise ValueError('No files found')
+
+    # replace folders with their contents
+    filenames_expanded: list[str] = []
+    for filename in _filenames:
+        # zarr files are folders, but should be read as 1 file
+        if os.path.isdir(filename):
+            dir_contents = natsorted(
+                glob(os.path.join(filename, '*.*'))
+            )
+            # remove subdirectories
+            dir_contents_files = filter(
+                lambda f: not os.path.isdir(f), dir_contents
+            )
+            filenames_expanded.extend(dir_contents_files)
+        else:
+            filenames_expanded.append(filename)
+
+    if use_dask is None:
+        use_dask = len(filenames_expanded) > 1
+
+    if not filenames_expanded:
+        raise ValueError(
+                f'No files found in {filenames} after removing subdirectories',
+        )
+
+    # then, read in images
+    images = []
+    shape = None
+    for filename in filenames_expanded:
+        if shape is None:
+            image = imread(filename)
+            shape = image.shape
+            dtype = image.dtype
+        if use_dask:
+            image = da.from_delayed(
+                delayed(imread)(filename), shape=shape, dtype=dtype
+            )
+        elif len(images) > 0:  # not read by shape clause
+            image = imread(filename)
+        images.append(image)
+
+    if not images:
+        return None
+
+    if len(images) == 1:
+        image = images[0]
+    elif stack:
+        if use_dask:
+            image = da.stack(images)
+        else:
+            try:
+                image = np.stack(images)
+            except ValueError as e:
+                if 'input arrays must have the same shape' in str(e):
+                    msg = (
+                        "To stack multiple files into a single array with numpy, all "
+                        "input arrays must have the same shape. Set `use_dask` to True " 
+                        "to stack arrays with different shapes."
+                    )
+                    raise ValueError(msg) from e
+                raise  # pragma: no cover
+    else:
+        image = images  # return a list
+    return image
 
 
 def _populate_metadata(
