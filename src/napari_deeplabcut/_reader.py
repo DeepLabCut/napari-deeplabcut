@@ -58,10 +58,22 @@ def get_config_reader(path):
     return read_config
 
 
+def _filter_extensions(
+    image_paths: list[Union[str, Path]],
+    valid_extensions: tuple[str] = SUPPORTED_IMAGES,
+) -> list[Path]:
+    """
+    Filter image paths by valid extensions.
+    """
+    valid_paths = [
+        p for p in image_paths
+        if Path(p).suffix.lower() in valid_extensions
+    ]
+    return valid_paths
+
 def get_folder_parser(path):
     if not path or not Path(path).is_dir():
         return None
-
     layers = []
     files = Path(path).iterdir()
     images = ""
@@ -70,7 +82,7 @@ def get_folder_parser(path):
             images = str(Path(path) / f"*{Path(file.name).suffix}")
             break
     if not images:
-        raise OSError(f"No supported images were found in {path}.")
+        raise OSError(f"No supported images were found in {path} with extensions {SUPPORTED_IMAGES}.")
 
     layers.extend(read_images(images))
     for file in Path(path).iterdir():
@@ -80,7 +92,12 @@ def get_folder_parser(path):
     return lambda _: layers
 
 
-def read_images(path):
+def read_images(
+    path: Union[str, Path] | list[Union[str, Path]]
+):
+    """
+    Read images from path, glob pattern, or list of filepaths.
+    """
     if isinstance(path, list):
         first_path = Path(path[0])
         suffixes = first_path.suffixes
