@@ -619,6 +619,7 @@ class KeypointControls(QWidget):
         self._trail_cb.stateChanged.connect(self._show_trails)
         self._trails = None
 
+        self._mpl_docked = False
         self._matplotlib_canvas = KeypointMatplotlibCanvas(self.viewer)
         self._matplotlib_cb = QCheckBox("Show trajectories", parent=self)
         self._matplotlib_cb.setToolTip("Toggle to see trajectories in a t-y plot outside of the main video viewer")
@@ -691,9 +692,46 @@ class KeypointControls(QWidget):
         # Slightly delay docking so it is shown underneath the KeypointsControls widget
         QTimer.singleShot(10, self.silently_dock_matplotlib_canvas)
 
-    def silently_dock_matplotlib_canvas(self):
-        self.viewer.window.add_dock_widget(self._matplotlib_canvas, name="Trajectory plot", area="right")
-        self._matplotlib_canvas.hide()
+    def _ensure_mpl_canvas_docked(self) -> None:
+        """
+        Dock the Matplotlib canvas as a napari dock widget, exactly once,
+        and only if the Qt window exists. Safe no-op in headless/proxy teardown.
+        """
+        if self._mpl_docked:
+            return
+
+        window = getattr(self.viewer, "window", None)
+        if window is None:
+            return
+
+        # If napari hasn't materialized its Qt window yet, skip (safe no-op).
+        if getattr(window, "_qt_window", None) is None:
+            # In normal UI runs this won't happen when the user hits the checkbox.
+            # In tests/headless it may—so just do nothing.
+            return
+
+        try:
+            window.add_dock_widget(self._matplotlib_canvas, name="Trajectory plot", area="right", tabify=False)
+            self._matplotlib_canvas.hide()
+            self._mpl_docked = True
+        except Exception as e:
+            logging.debug("Skipping docking KeypointMatplotlibCanvas (not ready / teardown): %r", e)
+            return
+
+    def silently_dock_matplotlib_canvas(self) -> None:
+        """Dock the Matplotlib canvas without showing it."""
+        self._ensure_mpl_canvas_docked()
+        if self._mpl_docked:
+            self._matplotlib_canvas.hide()
+
+    def _show_matplotlib_canvas(self, state):
+        if Qt.CheckState(state) == Qt.CheckState.Checked:
+            self._ensure_mpl_canvas_docked()
+            if self._mpl_docked:
+                self._matplotlib_canvas.show()
+        else:
+            if self._mpl_docked:
+                self._matplotlib_canvas.hide()
 
     @cached_property
     def settings(self):
