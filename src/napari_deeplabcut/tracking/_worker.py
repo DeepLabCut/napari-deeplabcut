@@ -1,22 +1,33 @@
-import sys
-import pandas as pd
 import logging
-import time
-from qtpy.QtCore import QObject, QThread, Signal, Slot, QCoreApplication
-from qtpy.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel, QVBoxLayout, QWidget
-import numpy as np
-
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+import torch
+from qtpy.QtCore import QCoreApplication, QObject, QThread, Signal, Slot
+
+from napari_deeplabcut.tracking._data import (
+    RawModelOutputs,
+    TrackingModelInputs,
+    TrackingWorkerData,
+    TrackingWorkerOutput,
+)
+from napari_deeplabcut.tracking._models import AVAILABLE_TRACKERS
+
+if TYPE_CHECKING:
+    pass
+
 logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+DEBUG = True
+if DEBUG:
+    pass
+
 
 @dataclass
-class TrackingWorkerData:
-    tracker: str
-    video: np.ndarray
-    keypoints: np.ndarray # (num_keypoint, 3) first col is frame numbe in `video` and the second and third are x, y
-    keypoint_features: dict
-    keypoint_range: tuple[int, int]
-    backward_tracking: bool
+class TorchHubModel:
+    org: str
+    model: str
 
 
 class TrackingWorker(QObject):
@@ -24,69 +35,77 @@ class TrackingWorker(QObject):
     finished = Signal()
     progress = Signal(tuple)
     trackingStarted = Signal()
-    trackingFinished = Signal(TrackingWorkerData)
+    trackingFinished = Signal(TrackingWorkerOutput)
     trackingStopped = Signal()
 
     def __init__(self):
         super().__init__()
-        import torch
         self.is_stopped = False
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model: object | None = None
 
     @Slot(TrackingWorkerData)
     def track(self, cfg: TrackingWorkerData):
-        # TODO: if cfg.tracker == 'cotracker'
-        import torch
-        if self.model is None:
-            self.model = torch.hub.load("facebookresearch/co-tracker", "cotracker3_online").to(self.device)
-        def _process_step(window_frames, is_first_step, queries):
-            video_chunk = (
-                torch.tensor(np.stack(window_frames[-self.model.step * 2:]), device=self.device)
-                .float()
-                .permute(0, 3, 1, 2)[None]
-            )  # (1, T, 3, H, W)
-            return self.model(video_chunk, is_first_step=is_first_step, queries=queries[None], add_support_grid=True)
-        # video is originally of shape (num_frames, height, width, channels)
-        video = np.array(cfg.video)
-        window_frames = []
-
-        # We need to swap x, y so that it matches what cotracker expects 
-        cfg.keypoints[:, [1, 2]] = cfg.keypoints[:, [2, 1]]
-
-        queries = torch.from_numpy(cfg.keypoints).to(self.device).float()
-        
-        # Iterating over video frames, processing one window at a time:
-        is_first_step = True
-        for i, frame in enumerate(video):
-            if i % self.model.step == 0 and i != 0:
-                pred_tracks, _pred_visibility = _process_step(window_frames, is_first_step, queries=queries)
-                is_first_step = False
-            window_frames.append(frame)
-            self.progress.emit((i, len(video)))
-            if self._should_stop():
+        """
+        Tracking core logic:
+            1. Instantiate model from registry.
+            2. prepare_inputs(cfg)
+            3. run(inputs, progress_cb, stop_cb)
+            4. prepare_outputs(raw, inputs)
+            5. Emit results to the plugin.
+        """
+        model = None
+        try:
+            # Choose model by name from your TrackerType (cfg.tracker.value.name)
+            # if DEBUG:
+            #     debugpy.debug_this_thread()
+            model_name = cfg.tracker_name
+            try:
+                model_cls = AVAILABLE_TRACKERS[model_name]["class"]
+            except KeyError:
+                logger.error(f"Unknown tracker: {model_name}")
+                self.trackingStopped.emit()
                 return
 
-        # Processing final frames in case video length is not a multiple of model.step
-        # TODO: Use visibility
-        pred_tracks, _pred_visibility = _process_step(
-            window_frames[-(i % self.model.step) - self.model.step - 1:],
-            is_first_step,
-            queries=queries,
-        )
-        self.progress.emit((len(video), len(video)))
+            model = model_cls(cfg)
 
-        tracks = pred_tracks.squeeze().cpu().numpy()
-        tracks = tracks[:, :cfg.keypoints.shape[0], :] # drop the support grid (necessary only for cotracker version < 3)
-        tracks = tracks.reshape(-1, 2)
-        if cfg.backward_tracking:
-            tracks = tracks[::-1]
-        frame_ids = np.repeat(np.arange(cfg.keypoint_range[0], cfg.keypoint_range[1]), cfg.keypoints.shape[0])
-        tracks = np.column_stack((frame_ids, tracks))
-        cfg.keypoint_features = pd.concat([cfg.keypoint_features] * len(np.unique(tracks[:, 0])), ignore_index=True)
-        cfg.keypoints = tracks
-        cfg.keypoints[:, [1, 2]] = cfg.keypoints[:, [2, 1]]
-        self.trackingFinished.emit(cfg)
+            # Define callbacks to let the model report status
+            def progress_callback(current: int, total: int):
+                self.progress.emit((current, total))
+
+            def stop_callback() -> bool:
+                # Return early if requested
+                return self._should_stop()
+
+            try:
+                # we let the model handle coordinate conventions internally, such that
+                # the worker and plugin can remain agnostic to these details.
+                inputs: TrackingModelInputs = model.prepare_inputs(cfg)
+
+                # Run inference; models implement their own batching and chunking
+                raw: RawModelOutputs = model.run(inputs, progress_callback, stop_callback)
+
+                # Convert to canonical output (N,3) plus features
+                output: TrackingWorkerOutput = model.prepare_outputs(raw, cfg)
+
+                if hasattr(model, "validate_outputs") and not model.validate_outputs(inputs, output):
+                    valid, msg = model.validate_outputs(inputs, output)
+                    if not valid:
+                        raise ValueError(f"Invalid model outputs: {msg}")
+            except Exception as exc:
+                logger.exception("Tracking failed", exc_info=exc)
+                self.trackingStopped.emit()
+                return
+
+            # Old : update the worker cfg & keep existing signal type
+            # cfg.keypoints = output.keypoints
+            # cfg.keypoint_features = output.keypoint_features
+            # self.trackingFinished.emit(cfg)
+
+            # Use the new signal type only and keep cfg immutable
+            self.trackingFinished.emit(output)
+        finally:
+            torch.cuda.empty_cache()
+            if model is not None:
+                del model
 
     def run(self):
         self.started.emit()
@@ -98,7 +117,7 @@ class TrackingWorker(QObject):
         self.finished.connect(self.thread.quit)
         self.thread.started.connect(self.run)
         self.thread.finished.connect(self.thread.deleteLater)
-        
+
         self.thread.start()
 
     @Slot()

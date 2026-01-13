@@ -1,3 +1,5 @@
+import weakref
+
 import numpy as np
 
 from napari_deeplabcut import keypoints
@@ -23,7 +25,7 @@ def test_store_find_first_unlabeled_frame(store):
 
     # Remove all annotations for a specific frame -> it becomes the first "unlabeled" frame
     ind_to_remove = 2
-    data = store.layer.data
+    data = weakref.proxy(store.layer).data
     store.layer.data = data[data[:, 0] != ind_to_remove]
     store._find_first_unlabeled_frame(event=None)
     # Expect the navigation to jump to the first frame missing annotations

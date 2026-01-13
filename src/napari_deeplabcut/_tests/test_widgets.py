@@ -14,6 +14,7 @@ def test_guess_continuous():
 
 def test_keypoint_controls(viewer, qtbot):
     controls = _widgets.KeypointControls(viewer)
+    qtbot.addWidget(controls)
     controls.label_mode = "loop"
     assert controls._radio_group.checkedButton().text() == "Loop"
     controls.cycle_through_label_modes()

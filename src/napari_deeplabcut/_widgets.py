@@ -348,10 +348,12 @@ class NapariNavigationToolbar(NavigationToolbar2QT):
                 self._actions["pan"].setIcon(QIcon(os.path.join(icon_dir, "Pan_checked.png")))
             else:
                 self._actions["pan"].setIcon(QIcon(os.path.join(icon_dir, "Pan.png")))
+                self._actions["pan"].setIcon(QIcon(os.path.join(icon_dir, "Pan.png")))
         if "zoom" in self._actions:
             if self._actions["zoom"].isChecked():
                 self._actions["zoom"].setIcon(QIcon(os.path.join(icon_dir, "Zoom_checked.png")))
             else:
+                self._actions["zoom"].setIcon(QIcon(os.path.join(icon_dir, "Zoom.png")))
                 self._actions["zoom"].setIcon(QIcon(os.path.join(icon_dir, "Zoom.png")))
 
 
@@ -490,6 +492,7 @@ class KeypointMatplotlibCanvas(QWidget):
             return
 
         self.show()  # Silly hack so the window does not hang the first time it is shown
+        self.show()  # Silly hack so the window does not hang the first time it is shown
         self.hide()
 
         self.df = _form_df(
@@ -518,6 +521,7 @@ class KeypointMatplotlibCanvas(QWidget):
         end = min(value + self._window // 2, len(self.df))
 
         self.ax.set_xlim(start, end)
+        self.vline.set_xdata([value])
         self.vline.set_xdata([value])
         self.canvas.draw()
 
@@ -606,6 +610,8 @@ class KeypointControls(QWidget):
         # form helper display
         self._keypoint_mapping_button = None
         self._func_id = None
+        self._keypoint_mapping_button = None
+        self._func_id = None
         help_buttons = self._form_help_buttons()
         self._layout.addLayout(help_buttons)
 
@@ -629,15 +635,22 @@ class KeypointControls(QWidget):
         grid.addWidget(self._matplotlib_cb, 0, 0)
         grid.addWidget(self._trail_cb, 1, 0)
         grid.addWidget(self._view_scheme_cb, 2, 0)
+        grid.addWidget(self._matplotlib_cb, 0, 0)
+        grid.addWidget(self._trail_cb, 1, 0)
+        grid.addWidget(self._view_scheme_cb, 2, 0)
 
+        self._layout.addLayout(grid)
         self._layout.addLayout(grid)
 
         # form buttons for selection of annotation mode
         self._radio_box, self._radio_group = self._form_mode_radio_buttons()
         self._radio_box.setEnabled(False)
+        self._radio_box, self._radio_group = self._form_mode_radio_buttons()
+        self._radio_box.setEnabled(False)
 
         # form color scheme display + color mode selector
         self._color_grp, self._color_mode_selector = self._form_color_mode_selector()
+        self._color_grp.setEnabled(False)
         self._color_grp.setEnabled(False)
         self._display = ColorSchemeDisplay(parent=self)
         self._color_scheme_display = self._form_color_scheme_display(self.viewer)
@@ -845,6 +858,7 @@ class KeypointControls(QWidget):
         if Qt.CheckState(state) == Qt.CheckState.Checked:
             self._matplotlib_canvas.show()
             self.viewer.window._qt_window.update()
+            self.viewer.window._qt_window.update()
         else:
             self._matplotlib_canvas.hide()
 
@@ -901,6 +915,7 @@ class KeypointControls(QWidget):
                         "properties": points_layer.properties,
                     },
                 )
+                df = df.iloc[ind : ind + 1]
                 df = df.iloc[ind : ind + 1]
                 df.index = pd.MultiIndex.from_tuples([Path(output_path).parts[-3:]])
                 filepath = os.path.join(image_layer.metadata["root"], "machinelabels-iter0.h5")
@@ -963,6 +978,7 @@ class KeypointControls(QWidget):
             self.label_mode = group.checkedButton().text().lower()
 
         group.buttonClicked.connect(_func)
+        return group_box, group
         return group_box, group
 
     def _form_color_mode_selector(self):
@@ -1090,11 +1106,15 @@ class KeypointControls(QWidget):
                     _layer.metadata["face_color_cycles"] = new_metadata["face_color_cycles"]
                     _layer.face_color = "label"
                     _layer.face_color_cycle = new_metadata["face_color_cycles"]["label"]
+                    _layer.face_color_cycle = new_metadata["face_color_cycles"]["label"]
                     _layer.events.face_color()
                     store.layer = _layer
                 self._update_color_scheme()
 
                 return
+
+            if layer.metadata.get("tables", ""):
+                self._keypoint_mapping_button.show()
 
             if layer.metadata.get("tables", ""):
                 self._keypoint_mapping_button.show()
@@ -1126,6 +1146,8 @@ class KeypointControls(QWidget):
                     "project": layer.metadata.get("project"),
                 }
             )
+            self._radio_box.setEnabled(True)
+            self._color_grp.setEnabled(True)
             self._radio_box.setEnabled(True)
             self._color_grp.setEnabled(True)
             self._trail_cb.setEnabled(True)
@@ -1199,6 +1221,9 @@ class KeypointControls(QWidget):
         * Hides all KeypointsDropdownMenu that aren't for the selected layer
         * Sets the visibility of the "Color mode" box to True if the selected layer
             is a multi-animal one, or False otherwise
+        * Hides all KeypointsDropdownMenu that aren't for the selected layer
+        * Sets the visibility of the "Color mode" box to True if the selected layer
+            is a multi-animal one, or False otherwise
         """
         self._color_grp.setVisible(self._is_multianimal(event.value))
         menu_idx = -1
@@ -1215,6 +1240,8 @@ class KeypointControls(QWidget):
         for layer in self.viewer.layers.selection:
             if isinstance(layer, Points) and layer.metadata:
                 face_color_cycle_maps = build_color_cycles(
+                    layer.metadata["header"],
+                    colormap_name,
                     layer.metadata["header"],
                     colormap_name,
                 )
