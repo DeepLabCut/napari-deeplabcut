@@ -1,8 +1,10 @@
-import numpy as np
 import os
+
+import numpy as np
 import pandas as pd
 import pytest
-from napari_deeplabcut import misc, _reader
+
+from napari_deeplabcut import _reader, misc
 
 
 def test_unsorted_unique_numeric():
@@ -21,7 +23,7 @@ def test_encode_categories():
     categories = list("abcdabcd")
     inds, map_ = misc.encode_categories(categories, return_map=True)
     assert list(inds) == [0, 1, 2, 3, 0, 1, 2, 3]
-    assert map_ == dict(zip(list("abcd"), range(4)))
+    assert map_ == dict(zip(list("abcd"), range(4), strict=False))
     inds = misc.encode_categories(categories, return_map=False)
 
 
@@ -65,9 +67,7 @@ def test_to_os_dir_sep_invalid():
 
 
 def test_guarantee_multiindex_rows():
-    fake_index = [
-        f"labeled-data/subfolder_{i}/image_{j}" for i in range(3) for j in range(10)
-    ]
+    fake_index = [f"labeled-data/subfolder_{i}/image_{j}" for i in range(3) for j in range(10)]
     df = pd.DataFrame(index=fake_index)
     misc.guarantee_multiindex_rows(df)
     assert isinstance(df.index, pd.MultiIndex)

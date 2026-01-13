@@ -86,7 +86,10 @@ def get_folder_parser(path):
 
 def read_images(path):
     if isinstance(path, list):
-        _root, ext = Path(path[0]).with_suffix("").suffixes[0], Path(path[0]).suffixes[1]
+        _root, ext = (
+            Path(path[0]).with_suffix("").suffixes[0],
+            Path(path[0]).suffixes[1],
+        )
         path = str(Path(path[0]).parent / f"*{ext}")
     # Retrieve filepaths exactly as parsed by pims
     filepaths = []

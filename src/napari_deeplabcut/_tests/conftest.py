@@ -7,6 +7,7 @@ import pytest
 from skimage.io import imsave
 
 from napari_deeplabcut import _writer, keypoints
+
 # os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
 
 os.environ["NAPARI_ASYNC"] = "0"  # avoid async teardown surprises in tests
@@ -66,7 +67,6 @@ def points(tmp_path_factory, viewer, fake_keypoints, qtbot):
     layer = viewer.open(output_path, plugin="napari-deeplabcut")[0]
 
     return layer
-
 
 
 @pytest.fixture

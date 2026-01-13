@@ -1,6 +1,6 @@
 from collections import namedtuple
+from collections.abc import Sequence
 from enum import auto
-from typing import List, Sequence
 
 import numpy as np
 from napari._qt.layer_controls.qt_points_controls import QtPointsControls
@@ -77,8 +77,7 @@ TOOLTIPS = {
     "clicking to add an already annotated point has no effect.",
     "QUICK": "Similar to SEQUENTIAL, but trying to add an already\n"
     "annotated point actually moves it to the cursor location.",
-    "LOOP": "The currently selected point is placed frame after frame,\n"
-    "before wrapping at the end to frame 1, etc.",
+    "LOOP": "The currently selected point is placed frame after frame,\nbefore wrapping at the end to frame 1, etc.",
 }
 
 
@@ -113,11 +112,11 @@ class KeypointStore:
         return self.viewer.dims.nsteps[0]
 
     @property
-    def annotated_keypoints(self) -> List[Keypoint]:
+    def annotated_keypoints(self) -> list[Keypoint]:
         mask = self.current_mask
         labels = self.layer.properties["label"][mask]
         ids = self.layer.properties["id"][mask]
-        return [Keypoint(label, id_) for label, id_ in zip(labels, ids)]
+        return [Keypoint(label, id_) for label, id_ in zip(labels, ids, strict=False)]
 
     @property
     def current_mask(self) -> Sequence[bool]:
@@ -148,7 +147,7 @@ class KeypointStore:
             self.current_keypoint = self._keypoints[ind]
 
     @property
-    def labels(self) -> List[str]:
+    def labels(self) -> list[str]:
         return self.layer.metadata["header"].bodyparts
 
     @property
@@ -163,7 +162,7 @@ class KeypointStore:
             self.layer.current_properties = current_properties
 
     @property
-    def ids(self) -> List[str]:
+    def ids(self) -> list[str]:
         return self.layer.metadata["header"].individuals
 
     @property
