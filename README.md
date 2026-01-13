@@ -195,7 +195,6 @@ We cannot be held responsible for any lost annotations!
 The current intended workflow would be to annotate a single frame, use the tracker to propagate annotations,
 and manually correct any mistakes before saving.
 
-
 Based on interest, we may polish the user experience and add more advanced tracking algorithms in the future.
 
 **Basic usage:**
@@ -209,14 +208,14 @@ Based on interest, we may polish the user experience and add more advanced track
 **Key bindings:**
 
 - Tracking Controls
-- **`l`** → Track **forward**
-- **`k`** → Track **forward (to end)**
-- **`h`** → Track **backward**
-- **`j`** → Track **backward (to end)**
+  - **`l`** → Track **forward**
+  - **`k`** → Track **forward (to end)**
+  - **`h`** → Track **backward**
+  - **`j`** → Track **backward (to end)**
 
-	- Frame Navigation
-		- **`i`** → Move **forward one frame**
-		- **`u`** → Move **backward one frame**
+- Frame Navigation
+  - **`i`** → Move **forward one frame**
+  - **`u`** → Move **backward one frame**
 
 **Known issues:**
 - After several runs, keypoint attributions may get shuffled. Do not run the tracker several times without checking the results in between.
