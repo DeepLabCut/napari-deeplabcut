@@ -1,22 +1,43 @@
-import cv2
-import numpy as np
 import os
 
-os.environ["hide_tutorial"] = "True"
+import cv2
+import numpy as np
 import pandas as pd
 import pytest
-from napari_deeplabcut import keypoints, _writer
 from skimage.io import imsave
+
+from napari_deeplabcut import _writer, keypoints
+# os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
+
+os.environ["NAPARI_ASYNC"] = "0"  # avoid async teardown surprises in tests
+# os.environ["PYTHONFAULTHANDLER"] = "1"  # better segfault traces in CI
+# os.environ["QT_QPA_PLATFORM"] = "offscreen"  # headless QT for CI
+# os.environ["QT_OPENGL"] = "software"  # avoid some CI issues with OpenGL
+# os.environ["PYTEST_QT_API"] = "pyqt6" # only for local testing with pyqt6, we use pyside6 otherwise
 
 
 @pytest.fixture
-def viewer(make_napari_viewer):
-    viewer = make_napari_viewer()
-    for action in viewer.window.plugins_menu.actions():
-        if "deeplabcut" in action.text():
-            action.trigger()
-            break
-    return viewer
+def viewer(make_napari_viewer_proxy):
+    viewer = make_napari_viewer_proxy()
+
+    # Safer : explicitly add the dock widgets
+    keypoints_dock_widget, keypoints_plugin_widget = viewer.window.add_plugin_dock_widget(
+        "napari-deeplabcut",
+        "Keypoint controls",
+    )
+
+    try:
+        yield viewer
+    finally:
+        # proactively close dock widgets to drop any lingering Qt refs
+        try:
+            # close all added dock widgets (if any) before viewer is closed
+            for dw in list(viewer.window._qt_window.findChildren(type(viewer.window._qt_window))):
+                # defensive: some Qt objects can be None during shutdown
+                if hasattr(dw, "close"):
+                    dw.close()
+        except Exception:
+            pass
 
 
 @pytest.fixture
@@ -39,11 +60,13 @@ def fake_keypoints():
 
 
 @pytest.fixture
-def points(tmp_path_factory, viewer, fake_keypoints):
+def points(tmp_path_factory, viewer, fake_keypoints, qtbot):
     output_path = str(tmp_path_factory.mktemp("folder") / "fake_data.h5")
     fake_keypoints.to_hdf(output_path, key="data")
     layer = viewer.open(output_path, plugin="napari-deeplabcut")[0]
+
     return layer
+
 
 
 @pytest.fixture
@@ -55,8 +78,7 @@ def fake_image():
 def images(tmp_path_factory, viewer, fake_image):
     output_path = str(tmp_path_factory.mktemp("folder") / "img.png")
     imsave(output_path, fake_image)
-    layer = viewer.open(output_path, plugin="napari-deeplabcut")[0]
-    return layer
+    return viewer.open(output_path, plugin="napari-deeplabcut")[0]
 
 
 @pytest.fixture

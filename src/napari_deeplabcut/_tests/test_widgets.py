@@ -1,7 +1,9 @@
-import numpy as np
 import os
-from napari_deeplabcut import _widgets
+
+import numpy as np
 from vispy import keys
+
+from napari_deeplabcut import _widgets
 
 
 def test_guess_continuous():
@@ -9,12 +11,13 @@ def test_guess_continuous():
     assert not _widgets.guess_continuous(np.array(list("abc")))
 
 
-def test_keypoint_controls(viewer):
+def test_keypoint_controls(viewer, qtbot):
     controls = _widgets.KeypointControls(viewer)
+    qtbot.addWidget(controls)
     controls.label_mode = "loop"
-    assert controls._radio_group.checkedButton().text() == "loop"
+    assert controls._radio_group.checkedButton().text() == "Loop"
     controls.cycle_through_label_modes()
-    assert controls._radio_group.checkedButton().text() == "sequential"
+    assert controls._radio_group.checkedButton().text() == "Sequential"
 
 
 def test_save_layers(viewer, points):
@@ -64,9 +67,9 @@ def test_toggle_face_color(viewer, points):
 def test_toggle_edge_color(viewer, points):
     viewer.layers.selection.add(points)
     view = viewer.window._qt_viewer
-    np.testing.assert_array_equal(points.edge_width, 0)
+    np.testing.assert_array_equal(points.border_width, 0)
     view.canvas.events.key_press(key=keys.Key("E"))
-    np.testing.assert_array_equal(points.edge_width, 2)
+    np.testing.assert_array_equal(points.border_width, 2)
 
 
 def test_dropdown_menu(qtbot):
@@ -83,9 +86,9 @@ def test_keypoints_dropdown_menu(store):
     assert "id" in widget.menus
     assert "label" in widget.menus
     label_menu = widget.menus["label"]
-    label_menu.currentText() == "kpt_0"
+    assert label_menu.currentText() == "kpt_0"
     widget.update_menus(event=None)
-    label_menu.currentText() == "kpt_2"
+    assert label_menu.currentText() == "kpt_0"
     widget.refresh_label_menu("id_0")
     assert label_menu.count() == 0
 
