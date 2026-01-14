@@ -735,13 +735,6 @@ class KeypointControls(QWidget):
             if self._mpl_docked:
                 self._matplotlib_canvas.hide()
 
-    # def _show_matplotlib_canvas(self, state):
-    #     if Qt.CheckState(state) == Qt.CheckState.Checked:
-    #         self._matplotlib_canvas.show()
-    #         self.viewer.window._qt_window.update()
-    #     else:
-    #         self._matplotlib_canvas.hide()
-
     @cached_property
     def settings(self):
         return QSettings()
@@ -1135,6 +1128,8 @@ class KeypointControls(QWidget):
             # Hide the color pickers, as colormaps are strictly defined by users
             controls = self.viewer.window.qt_viewer.dockLayerControls
             point_controls = controls.widget().widgets[layer]
+            # Attempt to hide several napari UI elements.
+            # To avoid potential breakage, we pass if they don't exist.
             try:
                 face_color_controls = point_controls._face_color_control.face_color_edit
                 face_color_label = point_controls._face_color_control.face_color_label

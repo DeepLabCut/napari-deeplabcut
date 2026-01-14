@@ -75,7 +75,8 @@ def get_folder_parser(path):
     layers.extend(read_images(images))
     for file in Path(path).iterdir():
         if file.name.endswith(".h5"):
-            layers.extend(read_hdf(str(file)))  # Process all matching .h5 files
+            layers.extend(read_hdf(str(file)))
+            break # one h5 per annotated video
 
     return lambda _: layers
 
@@ -102,9 +103,9 @@ def read_images(path):
 
     # https://github.com/soft-matter/pims/issues/452
     if len(filepaths) == 1:
-        path = next(Path(path).parent.glob(Path(path).name))
-
-    return [(imread(path), params, "image")]
+        path = next(Path(path).parent.glob(Path(path).name), None)
+        if path is not None:
+            return [(imread(path), params, "image")]
 
 
 def _populate_metadata(
@@ -193,7 +194,7 @@ def read_hdf(filename: str) -> list[LayerData]:
     config_path = misc.find_project_config_path(filename)
     layers = []
     for file in Path(filename).parent.glob(Path(filename).name):
-        temp = pd.read_hdf(file)
+        temp = pd.read_hdf(str(file))
         temp = misc.merge_multiple_scorers(temp)
         header = misc.DLCHeader(temp.columns)
         temp = temp.droplevel("scorer", axis=1)
