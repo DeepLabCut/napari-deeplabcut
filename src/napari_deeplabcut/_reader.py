@@ -73,24 +73,20 @@ def get_folder_parser(path):
         raise OSError(f"No supported images were found in {path}.")
 
     layers.extend(read_images(images))
-    datafile = ""
     for file in Path(path).iterdir():
         if file.name.endswith(".h5"):
-            datafile = str(file)  # Use the actual file name
-            break
-    if datafile:
-        layers.extend(read_hdf(datafile))
+            layers.extend(read_hdf(str(file)))  # Process all matching .h5 files
 
     return lambda _: layers
 
 
 def read_images(path):
     if isinstance(path, list):
-        _root, ext = (
-            Path(path[0]).with_suffix("").suffixes[0],
-            Path(path[0]).suffixes[1],
-        )
-        path = str(Path(path[0]).parent / f"*{ext}")
+        first_path = Path(path[0])
+        suffixes = first_path.suffixes
+        ext = "".join(suffixes) if suffixes else ""
+        pattern = f"*{ext}" if ext else "*"
+        path = str(first_path.parent / pattern)
     # Retrieve filepaths exactly as parsed by pims
     filepaths = []
     for filepath in Path(path).parent.glob(Path(path).name):
@@ -315,7 +311,7 @@ def read_video(filename: str, opencv: bool = True):
     movie = da.stack([da.from_delayed(lazy_imread(i), shape=shape, dtype=np.uint8) for i in range(len(stream))])
     elems = list(Path(filename).parts)
     elems[-2] = "labeled-data"
-    elems[-1] = Path(elems[-1]).stem + Path(filename).suffix
+    elems[-1] = Path(elems[-1]).stem  # + Path(filename).suffix
     root = str(Path(*elems))
     params = {
         "name": filename,
