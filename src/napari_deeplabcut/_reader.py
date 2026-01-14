@@ -76,7 +76,7 @@ def get_folder_parser(path):
     for file in Path(path).iterdir():
         if file.name.endswith(".h5"):
             layers.extend(read_hdf(str(file)))
-            break # one h5 per annotated video
+            break  # one h5 per annotated video
 
     return lambda _: layers
 
