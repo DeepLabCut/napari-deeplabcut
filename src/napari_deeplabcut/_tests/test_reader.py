@@ -1,3 +1,4 @@
+import dask.array as da
 import numpy as np
 import pandas as pd
 import pytest
@@ -110,3 +111,60 @@ def test_read_video(video_path):
     assert dict_["metadata"].get("root")
     assert array.shape[0] == 5
     assert array[0].compute().shape == (50, 50, 3)
+
+
+def test_lazy_imread_single_image(tmp_path):
+    img = (np.random.rand(10, 10, 3) * 255).astype(np.uint8)
+    path = tmp_path / "img.png"
+    imsave(path, img)
+
+    result = _reader.lazy_imread(path, use_dask=False)
+    assert isinstance(result, np.ndarray)
+    assert result.shape == img.shape
+
+
+def test_lazy_imread_multiple_images_equal_shape(tmp_path):
+    img1 = (np.random.rand(10, 10, 3) * 255).astype(np.uint8)
+    img2 = (np.random.rand(10, 10, 3) * 255).astype(np.uint8)
+    path1 = tmp_path / "img1.png"
+    path2 = tmp_path / "img2.png"
+    imsave(path1, img1)
+    imsave(path2, img2)
+
+    result = _reader.lazy_imread([path1, path2], use_dask=True)
+    assert isinstance(result, da.Array)
+    assert result.shape == (2, 10, 10, 3)
+
+
+def test_lazy_imread_mixed_shapes(tmp_path):
+    img1 = (np.random.rand(10, 10, 3) * 255).astype(np.uint8)
+    img2 = (np.random.rand(12, 10, 3) * 255).astype(np.uint8)
+    path1 = tmp_path / "img1.png"
+    path2 = tmp_path / "img2.png"
+    imsave(path1, img1)
+    imsave(path2, img2)
+
+    # Should fail when stacking mixed shapes without padding
+    with pytest.raises(ValueError):
+        _ = _reader.lazy_imread([path1, path2], use_dask=False, stack=True)
+
+
+def test_read_images_list_input(tmp_path):
+    img = (np.random.rand(10, 10, 3) * 255).astype(np.uint8)
+    path1 = tmp_path / "img1.png"
+    path2 = tmp_path / "img2.png"
+    imsave(path1, img)
+    imsave(path2, img)
+
+    layers = _reader.read_images([path1, path2])
+    assert len(layers) == 1
+    data, params, kind = layers[0]
+    assert kind == "image"
+    assert "paths" in params["metadata"]
+    assert isinstance(data, da.Array)
+    assert data.shape[0] == 2
+
+
+def test_read_images_empty_list():
+    with pytest.raises(OSError):
+        _reader.read_images([])
