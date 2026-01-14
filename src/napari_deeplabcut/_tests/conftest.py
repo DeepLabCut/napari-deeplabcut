@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import pytest
+from qtpy.QtWidgets import QDockWidget
 from skimage.io import imsave
 
 from napari_deeplabcut import _writer, keypoints
@@ -33,7 +34,8 @@ def viewer(make_napari_viewer_proxy):
         # proactively close dock widgets to drop any lingering Qt refs
         try:
             # close all added dock widgets (if any) before viewer is closed
-            for dw in list(viewer.window._qt_window.findChildren(type(viewer.window._qt_window))):
+            # for dw in list(viewer.window._qt_window.findChildren(type(viewer.window._qt_window))):
+            for dw in list(viewer.window._qt_window.findChildren(QDockWidget)):
                 # defensive: some Qt objects can be None during shutdown
                 if hasattr(dw, "close"):
                     dw.close()
