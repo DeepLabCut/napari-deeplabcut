@@ -381,7 +381,7 @@ class KeypointMatplotlibCanvas(QWidget):
         self.slider.setMinimum(50)
         self.slider.setMaximum(10000)
         self.slider.setValue(50)
-        self.slider.setToolTip("Adjust the range of frames to show on the plot")
+        self.slider.setToolTip("Adjust the window size of frames to display around the current frame")
         self.slider.setTickPosition(QSlider.TicksBelow)
         self.slider.setTickInterval(50)
         self.slider_value = QLabel(str(self.slider.value()))
@@ -553,8 +553,6 @@ class KeypointControls(QWidget):
         self._is_saved = False
 
         self.viewer = napari_viewer
-        # This is now a standalone menu and should not be loaded with this plugin
-        # self.viewer.window.add_plugin_dock_widget("napari-deeplabcut", "Tracking controls", tabify = False)
 
         self.viewer.layers.events.inserted.connect(self.on_insert)
         self.viewer.layers.events.removed.connect(self.on_remove)
@@ -674,8 +672,8 @@ class KeypointControls(QWidget):
         self.viewer.window.help_menu.addAction(display_shortcuts_action)
 
         # Hide some unused viewer buttons
-        # TODO do we truly want to disable these ? Tracking util may need to create new points layers
-        # TODO fix direct access to qt_viewer private members
+        # NOTE (future) do we truly want to disable these ? Tracking util may need to create new points layers
+        # NOTE fix direct access to qt_viewer private members when napari releases 0.7.0 (or later if they delay again)
         # self.viewer.window._qt_viewer.viewerButtons.gridViewButton.hide()
         self.viewer.window._qt_viewer.viewerButtons.rollDimsButton.hide()
         self.viewer.window._qt_viewer.viewerButtons.transposeDimsButton.hide()
@@ -690,6 +688,9 @@ class KeypointControls(QWidget):
         #     self.settings.setValue("first_launch", False)
 
         # Slightly delay docking so it is shown underneath the KeypointsControls widget
+        # NOTE while a timer may seem hacky, it is a simple, one-line solution that minimizes intrusion
+        # There are to my knowledge no other way that is as concise and clean
+        # (Of course this will be a problem if we start using it everywhere so do not reuse lightly)
         QTimer.singleShot(10, self.silently_dock_matplotlib_canvas)
 
     def _ensure_mpl_canvas_docked(self) -> None:
@@ -908,7 +909,7 @@ class KeypointControls(QWidget):
                     guarantee_multiindex_rows(df_prev)
                     df = pd.concat([df_prev, df])
                     df = df[~df.index.duplicated(keep="first")]
-                df.to_hdf(filepath, key="machinelabels")
+                df.to_hdf(filepath, key="df_with_missing")
 
     def _store_crop_coordinates(self, *args):
         if not (project_path := self._images_meta.get("project")):
@@ -1156,13 +1157,6 @@ class KeypointControls(QWidget):
                 out_of_slice_label.hide()
             except AttributeError:
                 pass
-            # NOTE these are rather unsafe ways of hiding built-in GUI
-            # and will break with napari updates
-            # try to use the above pattern instead,
-            # also to ensure we do not break anything if the attribute is not found
-            # point_controls.layout().itemAt(9).widget().hide()
-            # point_controls.layout().itemAt(11).widget().hide()
-            # point_controls.layout().itemAt(15).widget().hide()
 
             # Add dropdown menu for colormap picking
             colormap_selector = DropdownMenu(plt.colormaps, self)
