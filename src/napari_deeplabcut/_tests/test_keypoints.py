@@ -1,5 +1,3 @@
-import weakref
-
 import numpy as np
 
 from napari_deeplabcut import keypoints
@@ -21,7 +19,7 @@ def test_store_find_first_unlabeled_frame(store):
     assert store.current_step == store.n_steps - 1
     # Remove a frame to test whether it is correctly found
     ind_to_remove = 2
-    data = weakref.proxy(store.layer).data
+    data = store.layer.data
     store.layer.data = data[data[:, 0] != ind_to_remove]
     store._find_first_unlabeled_frame(event=None)
     assert store.current_step == ind_to_remove
@@ -62,9 +60,14 @@ def test_add_unannotated(store):
     store.viewer.dims.set_current_step(0, ind_to_remove)
     assert not store.annotated_keypoints
     n_points = store.layer.data.shape[0]
-    keypoints._add(store, coord=(0, 1, 1))
+    keypoints._add(store, coord=(ind_to_remove, 1, 1))
+    # One point added
     assert store.layer.data.shape[0] == n_points + 1
-    assert store.current_step == ind_to_remove + 1
+    # The viewer should have advanced to the NEXT frame in LOOP mode
+    expected_next = (ind_to_remove + 1) % store.n_steps
+    assert store.current_step == expected_next
+    # Verify that a point was actually added to frame 1
+    assert np.any(store.layer.data[:, 0] == ind_to_remove)
 
 
 def test_add_quick(store):
