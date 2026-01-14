@@ -104,8 +104,9 @@ def read_images(path):
     # https://github.com/soft-matter/pims/issues/452
     if len(filepaths) == 1:
         path = next(Path(path).parent.glob(Path(path).name), None)
-        if path is not None:
-            return [(imread(path), params, "image")]
+        if path is None:
+            return []
+    return [(imread(path), params, "image")]
 
 
 def _populate_metadata(
