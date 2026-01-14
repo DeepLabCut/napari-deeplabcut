@@ -75,7 +75,8 @@ def test_toggle_edge_color(viewer, points):
 def test_dropdown_menu(qtbot):
     widget = _widgets.DropdownMenu(list("abc"))
     qtbot.add_widget(widget)
-    widget.update_to("c")  # Ensure update_to selects the correct item
+    # Ensure update_to selects the correct item
+    widget.update_to("c")
     assert widget.currentText() == "c"
     widget.reset()  # Reset should always select the first item
     assert widget.currentText() == "a"

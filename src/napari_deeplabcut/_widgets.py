@@ -434,7 +434,7 @@ class KeypointMatplotlibCanvas(QWidget):
         """
         theme = napari.utils.theme.get_theme(
             self.viewer.theme,
-            # as_dict=False # deprecated in napari > 0.6.6
+            # as_dict=False # deprecated as of napari 0.6.6
         )
         _, _, bg_lightness = theme.background.as_hsl_tuple()
         return bg_lightness > 0.5
@@ -543,7 +543,8 @@ class KeypointMatplotlibCanvas(QWidget):
                 # if less than 50 frames, set max to min to avoid slider issues
                 if n_frames < self.slider.minimum():
                     self.slider.setMaximum(self.slider.minimum())
-                self.slider.setMaximum(n_frames - 1)
+                else:
+                    self.slider.setMaximum(n_frames - 1)
                 break
 
 
@@ -619,14 +620,14 @@ class KeypointControls(QWidget):
 
         self._mpl_docked = False
         self._matplotlib_canvas = KeypointMatplotlibCanvas(self.viewer)
-        self._matplotlib_cb = QCheckBox("Show trajectories", parent=self)
-        self._matplotlib_cb.setToolTip("Toggle to see trajectories in a t-y plot outside of the main video viewer")
-        self._matplotlib_cb.stateChanged.connect(self._show_matplotlib_canvas)
-        self._matplotlib_cb.setChecked(False)
-        self._matplotlib_cb.setEnabled(False)
+        self._show_traj_plot_cb = QCheckBox("Show trajectories", parent=self)
+        self._show_traj_plot_cb.setToolTip("Toggle to see trajectories in a t-y plot outside of the main video viewer")
+        self._show_traj_plot_cb.stateChanged.connect(self._show_matplotlib_canvas)
+        self._show_traj_plot_cb.setChecked(False)
+        self._show_traj_plot_cb.setEnabled(False)
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
 
-        grid.addWidget(self._matplotlib_cb, 0, 0)
+        grid.addWidget(self._show_traj_plot_cb, 0, 0)
         grid.addWidget(self._trail_cb, 1, 0)
         grid.addWidget(self._view_scheme_cb, 2, 0)
 
@@ -734,6 +735,13 @@ class KeypointControls(QWidget):
             if self._mpl_docked:
                 self._matplotlib_canvas.hide()
 
+    # def _show_matplotlib_canvas(self, state):
+    #     if Qt.CheckState(state) == Qt.CheckState.Checked:
+    #         self._matplotlib_canvas.show()
+    #         self.viewer.window._qt_window.update()
+    #     else:
+    #         self._matplotlib_canvas.hide()
+
     @cached_property
     def settings(self):
         return QSettings()
@@ -840,13 +848,6 @@ class KeypointControls(QWidget):
             self._trails.visible = True
         elif self._trails is not None:
             self._trails.visible = False
-
-    def _show_matplotlib_canvas(self, state):
-        if Qt.CheckState(state) == Qt.CheckState.Checked:
-            self._matplotlib_canvas.show()
-            self.viewer.window._qt_window.update()
-        else:
-            self._matplotlib_canvas.hide()
 
     def _form_video_action_menu(self):
         group_box = QGroupBox("Video")
@@ -1130,7 +1131,7 @@ class KeypointControls(QWidget):
             self._radio_box.setEnabled(True)
             self._color_grp.setEnabled(True)
             self._trail_cb.setEnabled(True)
-            self._matplotlib_cb.setEnabled(True)
+            self._show_traj_plot_cb.setEnabled(True)
 
             # Hide the color pickers, as colormaps are strictly defined by users
             controls = self.viewer.window.qt_viewer.dockLayerControls
@@ -1183,7 +1184,7 @@ class KeypointControls(QWidget):
                 menu.destroy()
             self._layer_to_menu = {}
             self._trail_cb.setEnabled(False)
-            self._matplotlib_cb.setEnabled(False)
+            self._show_traj_plot_cb.setEnabled(False)
             self.last_saved_label.hide()
         elif isinstance(layer, Image):
             self._images_meta = dict()
@@ -1192,7 +1193,7 @@ class KeypointControls(QWidget):
                 self.video_widget.setVisible(False)
         elif isinstance(layer, Tracks):
             self._trail_cb.setChecked(False)
-            self._matplotlib_cb.setChecked(False)
+            self._show_traj_plot_cb.setChecked(False)
             self._trails = None
 
     def on_active_layer_change(self, event) -> None:
