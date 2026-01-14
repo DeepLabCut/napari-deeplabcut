@@ -7,6 +7,8 @@ import pytest
 from skimage.io import imsave
 
 from napari_deeplabcut import _writer, keypoints
+from napari_deeplabcut.tracking._data import TrackingModelInputs, TrackingWorkerData, TrackingWorkerOutput
+from napari_deeplabcut.tracking._models import AVAILABLE_TRACKERS, RawModelOutputs, TrackingModel
 
 # os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
 
@@ -65,7 +67,7 @@ def fake_keypoints():
 
 
 @pytest.fixture
-def points(tmp_path_factory, viewer, fake_keypoints, qtbot):
+def points(tmp_path_factory, viewer, fake_keypoints):
     output_path = str(tmp_path_factory.mktemp("folder") / "fake_data.h5")
     fake_keypoints.to_hdf(output_path, key="data")
     layer = viewer.open(output_path, plugin="napari-deeplabcut")[0]

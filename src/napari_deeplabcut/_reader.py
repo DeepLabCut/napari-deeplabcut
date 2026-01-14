@@ -22,10 +22,6 @@ def is_video(filename: str):
     return any(filename.lower().endswith(ext) for ext in SUPPORTED_VIDEOS)
 
 
-def is_video(filename: str):
-    return any(filename.lower().endswith(ext) for ext in SUPPORTED_VIDEOS)
-
-
 def get_hdf_reader(path):
     if isinstance(path, list):
         path = path[0]
@@ -74,7 +70,6 @@ def get_folder_parser(path):
             images = str(Path(path) / f"*{Path(file.name).suffix}")
             break
     if not images:
-        raise OSError(f"No supported images were found in {path}.")
         raise OSError(f"No supported images were found in {path}.")
 
     layers.extend(read_images(images))
@@ -168,17 +163,6 @@ def _load_superkeypoints(super_animal: str):
         return json.load(f)
 
 
-def _load_superkeypoints_diagram(super_animal: str):
-    path = str(Path(__file__).parent / "assets" / f"{super_animal}.jpg")
-    return imread(path), {"root": ""}, "images"
-
-
-def _load_superkeypoints(super_animal: str):
-    path = str(Path(__file__).parent / "assets" / f"{super_animal}.json")
-    with open(path) as f:
-        return json.load(f)
-
-
 def _load_config(config_path: str):
     with open(config_path) as file:
         return yaml.safe_load(file)
@@ -219,11 +203,6 @@ def read_hdf(filename: str) -> list[LayerData]:
             old_idx = temp.columns.to_frame()
             old_idx.insert(0, "individuals", "")
             temp.columns = pd.MultiIndex.from_frame(old_idx)
-            try:
-                cfg = _load_config(config_path)
-                colormap = cfg["colormap"]
-            except FileNotFoundError:
-                colormap = "rainbow"
             try:
                 cfg = _load_config(config_path)
                 colormap = cfg["colormap"]
@@ -335,7 +314,6 @@ def read_video(filename: str, opencv: bool = True):
     elems[-1] = Path(elems[-1]).stem  # + Path(filename).suffix
     root = str(Path(*elems))
     params = {
-        "name": filename,
         "name": filename,
         "metadata": {
             "root": root,

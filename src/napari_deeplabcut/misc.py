@@ -15,10 +15,6 @@ def find_project_config_path(labeled_data_path: str) -> str:
     return str(Path(labeled_data_path).parents[2] / "config.yaml")
 
 
-def find_project_config_path(labeled_data_path: str) -> str:
-    return str(Path(labeled_data_path).parents[2] / "config.yaml")
-
-
 def is_latest_version():
     import json
     import urllib.request
