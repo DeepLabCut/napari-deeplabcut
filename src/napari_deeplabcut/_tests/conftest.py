@@ -61,7 +61,7 @@ def fake_keypoints():
 
 
 @pytest.fixture
-def points(tmp_path_factory, viewer, fake_keypoints, qtbot):
+def points(tmp_path_factory, viewer, fake_keypoints):
     output_path = str(tmp_path_factory.mktemp("folder") / "fake_data.h5")
     fake_keypoints.to_hdf(output_path, key="data")
     layer = viewer.open(output_path, plugin="napari-deeplabcut")[0]
@@ -84,6 +84,29 @@ def images(tmp_path_factory, viewer, fake_image):
 @pytest.fixture
 def store(viewer, points):
     return keypoints.KeypointStore(viewer, points)
+
+
+@pytest.fixture
+def single_animal_store(tmp_path_factory, viewer, fake_keypoints):
+    # Keep only columns for one animal
+    df = fake_keypoints.xs("animal_0", level="individuals", axis=1)
+    # Now df has levels: scorer, bodyparts, coords
+    # Rebuild MultiIndex with an empty "individuals" level inserted
+    df.columns = pd.MultiIndex.from_product(
+        [
+            [df.columns.levels[0][0]],  # scorer
+            [""],  # single-animal: empty ID
+            df.columns.levels[1],  # bodyparts
+            df.columns.levels[2],  # coords
+        ],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
+
+    path = tmp_path_factory.mktemp("folder") / "single_animal_data.h5"
+    df.to_hdf(path, key="data")
+    layer = viewer.open(path, plugin="napari-deeplabcut")[0]
+
+    return keypoints.KeypointStore(viewer, layer)
 
 
 @pytest.fixture(scope="session")
