@@ -65,63 +65,148 @@ def _filter_extensions(
     """
     Filter image paths by valid extensions.
     """
-    valid_paths = [
-        p for p in image_paths
-        if Path(p).suffix.lower() in valid_extensions
-    ]
-    return valid_paths
+    return [Path(p) for p in image_paths if Path(p).suffix.lower() in valid_extensions]
 
 def get_folder_parser(path):
     if not path or not Path(path).is_dir():
         return None
     layers = []
-    files = Path(path).iterdir()
-    images = ""
-    for file in files:
-        if any(file.name.lower().endswith(ext) for ext in SUPPORTED_IMAGES):
-            images = str(Path(path) / f"*{Path(file.name).suffix}")
-            break
+
+    images = _filter_extensions(Path(path).iterdir(), valid_extensions=SUPPORTED_IMAGES)
+
     if not images:
         raise OSError(f"No supported images were found in {path} with extensions {SUPPORTED_IMAGES}.")
 
-    layers.extend(read_images(images))
+    image_layer = read_images(images)
+    layers.extend(image_layer)
+    datafile = ""
     for file in Path(path).iterdir():
         if file.name.endswith(".h5"):
-            layers.extend(read_hdf(str(file)))  # Process all matching .h5 files
+            datafile = str(file)
+            break
+    if datafile:
+        try:
+            layers.extend(read_hdf(str(datafile)))
+        except Exception as e:
+            raise RuntimeError(f"Could not read annotation data from {datafile}") from e
 
     return lambda _: layers
 
 
-def read_images(
-    path: Union[str, Path] | list[Union[str, Path]]
+def lazy_imread(
+    filenames: str | Path | list[str | Path],
+    use_dask: bool | None = None,
+    stack: bool = True,
 ):
     """
-    Read images from path, glob pattern, or list of filepaths.
+    Lazy image reader using cv2 (+dask) for lists/single files, with optional padding.
+    - Supports a single filename/Path, a list of filenames/Paths, or a directory path.
+    """
+    # Normalize input to list[Path]
+    _raw: list[Path] = [Path(p) for p in filenames] if isinstance(filenames, (list, tuple)) else [Path(filenames)]
+    if not _raw:
+        raise ValueError("No files found")
+
+    # Expand directories (except zarr) into files, sorted
+    expanded: list[Path] = []
+    for p in _raw:
+        if p.is_dir() and not str(p).endswith(".zarr"):
+            files = [x for x in natsorted(p.glob("*.*")) if not x.is_dir()]
+            expanded.extend(files)
+        else:
+            expanded.append(p)
+
+    if use_dask is None:
+        use_dask = len(expanded) > 1
+
+    if not expanded:
+        raise ValueError(f"No files found in {filenames} after removing subdirectories")
+
+    def _normalize_to_rgb(arr: np.ndarray) -> np.ndarray:
+        if arr.ndim == 2:
+            return cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
+        if arr.ndim == 3 and arr.shape[2] == 4:
+            return cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
+        return cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+
+    images: list[da.Array | np.ndarray] = []
+    first_shape: tuple[int, ...] | None = None
+    first_dtype: np.dtype | None = None
+    for fp in expanded:
+        if first_shape is None:
+            arr0 = cv2.imread(str(fp), cv2.IMREAD_UNCHANGED)
+            if arr0 is None:
+                raise OSError(f"Could not read image: {fp}")
+            arr0 = _normalize_to_rgb(arr0)
+            first_shape = arr0.shape
+            first_dtype = arr0.dtype
+            if use_dask:
+                images.append(
+                    da.from_delayed(
+                        delayed(lambda p: _normalize_to_rgb(cv2.imread(str(p), cv2.IMREAD_UNCHANGED)))(fp),
+                        shape=first_shape,
+                        dtype=first_dtype,
+                    )
+                )
+            else:
+                images.append(arr0)
+            continue
+        if use_dask:
+            images.append(
+                da.from_delayed(
+                    delayed(lambda p: _normalize_to_rgb(cv2.imread(str(p), cv2.IMREAD_UNCHANGED)))(fp),
+                    shape=first_shape,
+                    dtype=first_dtype,
+                )
+            )
+        else:
+            images.append(_normalize_to_rgb(cv2.imread(str(fp), cv2.IMREAD_UNCHANGED)))
+
+    if not images:
+        return None
+    if len(images) == 1:
+        return images[0]
+    return da.stack(images) if use_dask and stack else (np.stack(images) if stack else images)
+
+
+def read_images(path: str | Path | list[str | Path]) -> list[LayerData]:
+    """
+    Read images from a list of files or a glob/string path.
+    - List: filter by SUPPORTED_IMAGES, build metadata, then lazily read via `lazy_imread`
+      with padding to allow stacking images of different sizes.
+    - Glob/string: preserve previous behavior using `dask_image.imread.imread`.
     """
     if isinstance(path, list):
-        first_path = Path(path[0])
-        suffixes = first_path.suffixes
-        ext = "".join(suffixes) if suffixes else ""
-        pattern = f"*{ext}" if ext else "*"
-        path = str(first_path.parent / pattern)
-    # Retrieve filepaths exactly as parsed by pims
-    filepaths = []
-    for filepath in Path(path).parent.glob(Path(path).name):
-        relpath = Path(filepath).parts[-3:]
-        filepaths.append(str(Path(*relpath)))
+        filepaths: list[Path] = _filter_extensions(path, valid_extensions=SUPPORTED_IMAGES)
+        if not filepaths:
+            raise OSError(f"No supported images were found in list with extensions {SUPPORTED_IMAGES}.")
+        filepaths = [Path(p) for p in natsorted([str(p) for p in filepaths])]
+
+        relative_paths = [str(Path(*fp.parts[-3:])) for fp in filepaths]
+        params = {
+            "name": "images",
+            "metadata": {
+                "paths": relative_paths,
+                "root": str(filepaths[0].parent),
+            },
+        }
+        data = lazy_imread(filepaths, use_dask=True, stack=True)  # disable padding for now
+        return [(data, params, "image")]
+
+    # Original behavior for glob/string
+    pathp = Path(path)
+    filepaths: list[str] = [str(Path(*p.parts[-3:])) for p in pathp.parent.glob(pathp.name)]
     params = {
         "name": "images",
         "metadata": {
             "paths": natsorted(filepaths),
-            "root": str(Path(path).parent),
+            "root": str(pathp.parent),
         },
     }
-
-    # https://github.com/soft-matter/pims/issues/452
-    if len(filepaths) == 1:
-        path = next(Path(path).parent.glob(Path(path).name))
-
-    return [(imread(path), params, "image")]
+    matches = list(pathp.parent.glob(pathp.name))
+    if len(matches) == 1:
+        pathp = matches[0]
+    return [(imread(str(pathp)), params, "image")]
 
 
 def _populate_metadata(
