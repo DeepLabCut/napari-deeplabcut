@@ -22,7 +22,11 @@ os.environ["NAPARI_ASYNC"] = "0"  # avoid async teardown surprises in tests
 def viewer(make_napari_viewer_proxy):
     viewer = make_napari_viewer_proxy()
 
-    # Safer : explicitly add the dock widgets
+    # Explicitly add the dock widgets
+    # NOTE The old approach of opening every plugin menu
+    # with "napari-deeplabcut" in the name is not reliable
+    # and is not recommended.
+
     #  keypoints_dock_widget, keypoints_plugin_widget
     _, _ = viewer.window.add_plugin_dock_widget(
         "napari-deeplabcut",
