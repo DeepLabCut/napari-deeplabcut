@@ -105,7 +105,7 @@ def read_images(path):
     if len(filepaths) == 1:
         path = next(Path(path).parent.glob(Path(path).name), None)
         if path is None:
-            return []
+            raise FileNotFoundError(f"No files found for pattern: {path}")
     return [(imread(path), params, "image")]
 
 
