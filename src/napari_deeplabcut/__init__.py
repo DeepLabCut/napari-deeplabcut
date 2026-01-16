@@ -32,7 +32,7 @@ from ._writer import (  # noqa: F401 (explicit re-export via __all__)
 
 try:
     from ._version import version as __version__  # noqa: F401
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     __version__ = "unknown"
 
 # ---- Warnings & logging setup ------------------------------------------------

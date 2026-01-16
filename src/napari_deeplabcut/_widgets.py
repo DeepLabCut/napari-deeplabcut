@@ -381,7 +381,7 @@ class KeypointMatplotlibCanvas(QWidget):
         self.slider.setMinimum(50)
         self.slider.setMaximum(10000)
         self.slider.setValue(50)
-        self.slider.setToolTip("Adjust the window size of frames to display around the current frame")
+        self.slider.setToolTip("Adjust the range of frames to display around the current frame")
         self.slider.setTickPosition(QSlider.TicksBelow)
         self.slider.setTickInterval(50)
         self.slider_value = QLabel(str(self.slider.value()))
@@ -412,7 +412,7 @@ class KeypointMatplotlibCanvas(QWidget):
         self.update_plot_range(Event(type_name="", value=[self.viewer.dims.current_step[0]]))
 
         self.viewer.layers.events.inserted.connect(self._load_dataframe)
-        self.viewer.dims.events.range.connect(self.update_slider_max)
+        self.viewer.dims.events.range.connect(self._update_slider_max)
         self._lines = {}
 
     def on_doubleclick(self, event):
@@ -535,7 +535,7 @@ class KeypointMatplotlibCanvas(QWidget):
 
         self._refresh_canvas(value)
 
-    def update_slider_max(self, event):
+    def _update_slider_max(self, event):
         """Update the slider's maximum value based on the number of frames in the data."""
         for layer in self.viewer.layers:
             if isinstance(layer, Image) and len(layer.data.shape) >= 3:
@@ -1135,6 +1135,8 @@ class KeypointControls(QWidget):
             # Hide the color pickers, as colormaps are strictly defined by users
             controls = self.viewer.window.qt_viewer.dockLayerControls
             point_controls = controls.widget().widgets[layer]
+            # Attempt to hide several napari UI elements.
+            # To avoid potential breakage, we pass if they don't exist.
             try:
                 face_color_controls = point_controls._face_color_control.face_color_edit
                 face_color_label = point_controls._face_color_control.face_color_label
@@ -1246,8 +1248,8 @@ class KeypointControls(QWidget):
     def label_mode(self, mode: str | keypoints.LabelMode):
         self._label_mode = keypoints.LabelMode(mode)
         self.viewer.status = self.label_mode
-        mode_ = str(mode)
-        if mode_ == "loop":
+        mode_ = str(mode).lower()
+        if mode_ == keypoints.LabelMode.LOOP.value.lower():
             for menu in self._menus:
                 menu._locked = True
         else:
@@ -1277,7 +1279,7 @@ class KeypointControls(QWidget):
                 layer.events.face_color()
 
         for btn in self._color_mode_selector.buttons():
-            if btn.text() == str(mode):
+            if btn.text().lower() == str(mode).lower():
                 btn.setChecked(True)
                 break
 

@@ -1,6 +1,8 @@
 import os
+import types
 
 import numpy as np
+import pytest
 from vispy import keys
 
 from napari_deeplabcut import _widgets
@@ -191,3 +193,120 @@ def test_color_scheme_display(qtbot):
     widget.add_entry("keypoint", "red")
     assert widget.scheme_dict["keypoint"] == "red"
     assert widget._container.layout().count() == 1
+
+
+def test_matplotlib_canvas_initialization_and_slider(viewer, points, qtbot):
+    # Create the canvas widget
+    canvas = _widgets.KeypointMatplotlibCanvas(viewer)
+    qtbot.add_widget(canvas)
+
+    # Simulate adding a Points layer (triggers _load_dataframe)
+    viewer.layers.selection.add(points)
+    canvas._load_dataframe()
+
+    # Ensure dataframe loaded and lines plotted
+    assert canvas.df is not None
+    assert len(canvas._lines) > 0
+    assert canvas.ax.get_xlabel() == "Frame"
+    assert canvas.ax.get_ylabel() == "Y position"
+
+    # Test slider updates
+    initial_window = canvas._window
+    canvas.slider.setValue(initial_window + 100)
+    assert canvas._window == initial_window + 100
+    assert canvas.slider_value.text() == str(initial_window + 100)
+
+    # Test plot refresh on frame change
+    canvas.update_plot_range(event=type("Event", (), {"value": [5]}))
+    assert canvas._n == 5
+    # Check that x-limits reflect the new window
+    start, end = canvas.ax.get_xlim()
+    assert start <= 5 <= end
+
+
+@pytest.fixture(autouse=True)
+def _no_autodock(monkeypatch):
+    """
+    Prevent the QTimer.singleShot in KeypointControls.__init__ from auto-calling
+    silently_dock_matplotlib_canvas during tests, which would otherwise race
+    with these scenarios and make assertions flaky.
+    """
+    monkeypatch.setattr(_widgets.QTimer, "singleShot", lambda *args, **kwargs: None)
+
+
+def test_ensure_mpl_canvas_docked_already_docked(viewer, qtbot, monkeypatch):
+    """If already docked, it must be a no-op: do not call add_dock_widget again."""
+    controls = _widgets.KeypointControls(viewer)
+    qtbot.add_widget(controls)
+    controls._mpl_docked = True  # simulate already docked
+
+    called = {"count": 0}
+
+    def fake_add_dock_widget(*args, **kwargs):
+        called["count"] += 1
+
+    # Ensure it wouldn't try to dock again
+    monkeypatch.setattr(controls.viewer.window, "add_dock_widget", fake_add_dock_widget)
+
+    controls._ensure_mpl_canvas_docked()
+    assert called["count"] == 0, "add_dock_widget should not be called when already docked"
+    assert controls._mpl_docked is True  # stays docked
+
+
+def test_ensure_mpl_canvas_docked_missing_window(viewer, qtbot):
+    """If viewer has no window attribute, method should safely no-op."""
+    controls = _widgets.KeypointControls(viewer)
+    qtbot.add_widget(controls)
+
+    # Swap the viewer for a minimal stub object with *no* 'window' attribute
+    controls.viewer = types.SimpleNamespace()  # no 'window'
+
+    controls._mpl_docked = False
+    controls._ensure_mpl_canvas_docked()
+
+    # Nothing should change; crucially, no exceptions should be raised
+    assert controls._mpl_docked is False
+
+
+def test_ensure_mpl_canvas_docked_missing_qt_window(viewer, qtbot):
+    """If window._qt_window is None, method should safely no-op."""
+    controls = _widgets.KeypointControls(viewer)
+    qtbot.add_widget(controls)
+
+    class DummyWindow:
+        def __init__(self):
+            self._qt_window = None  # simulate missing Qt window
+
+        def add_dock_widget(self, *args, **kwargs):
+            raise AssertionError("add_dock_widget should not be called when _qt_window is None")
+
+    controls.viewer = types.SimpleNamespace(window=DummyWindow())
+
+    controls._mpl_docked = False
+    controls._ensure_mpl_canvas_docked()
+
+    # Still undocked, no crash
+    assert controls._mpl_docked is False
+
+
+def test_ensure_mpl_canvas_docked_exception_during_docking(viewer, qtbot):
+    """If add_dock_widget raises, method should catch, log, and remain undocked (no crash)."""
+    controls = _widgets.KeypointControls(viewer)
+    qtbot.add_widget(controls)
+
+    class DummyWindow:
+        def __init__(self):
+            self._qt_window = object()  # present → attempt docking
+
+        def add_dock_widget(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
+    controls.viewer = types.SimpleNamespace(window=DummyWindow())
+
+    controls._mpl_docked = False
+
+    # Should not raise
+    controls._ensure_mpl_canvas_docked()
+
+    # Docking failed → remains undocked
+    assert controls._mpl_docked is False
