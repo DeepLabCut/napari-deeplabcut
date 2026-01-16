@@ -735,13 +735,6 @@ class KeypointControls(QWidget):
             if self._mpl_docked:
                 self._matplotlib_canvas.hide()
 
-    # def _show_matplotlib_canvas(self, state):
-    #     if Qt.CheckState(state) == Qt.CheckState.Checked:
-    #         self._matplotlib_canvas.show()
-    #         self.viewer.window._qt_window.update()
-    #     else:
-    #         self._matplotlib_canvas.hide()
-
     @cached_property
     def settings(self):
         return QSettings()
