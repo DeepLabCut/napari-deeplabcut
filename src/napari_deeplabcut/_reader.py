@@ -199,7 +199,8 @@ def read_images(path: str | Path | list[str | Path]) -> list[LayerData]:
         raise FileNotFoundError(f"No files found for pattern: {image_path}")
     if len(matches) > 1:
         raise ValueError(
-            f"Multiple files match the pattern '{image_path.name}', but only a single image is expected: {matches}"
+            f"Multiple files match the pattern '{image_path.name}' for this non-list path input, "
+            f"but this usage expects the pattern to resolve to a single image: {matches}"
         )
 
     # Exactly 1 match
