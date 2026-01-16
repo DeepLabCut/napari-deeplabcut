@@ -95,24 +95,6 @@ def test_read_hdf_new_index(tmp_path_factory, fake_keypoints):
     assert "labeled-data" in image_paths[0]
 
 
-def test_video(video_path):
-    video = _reader.Video(video_path)
-    video.close()
-    assert not video.stream.isOpened()
-
-
-def test_video_wrong_path():
-    with pytest.raises(ValueError):
-        _ = _reader.Video("")
-
-
-def test_read_video(video_path):
-    array, dict_ = _reader.read_video(video_path)[0]
-    assert dict_["metadata"].get("root")
-    assert array.shape[0] == 5
-    assert array[0].compute().shape == (50, 50, 3)
-
-
 def test_lazy_imread_single_image(tmp_path):
     img = (np.random.rand(10, 10, 3) * 255).astype(np.uint8)
     path = tmp_path / "img.png"
@@ -168,3 +150,95 @@ def test_read_images_list_input(tmp_path):
 def test_read_images_empty_list():
     with pytest.raises(OSError):
         _reader.read_images([])
+
+
+def test_video_init_and_properties(video_path):
+    """Ensure Video object initializes and exposes correct properties."""
+    vid = _reader.Video(video_path)
+
+    assert len(vid) == 5  # number of frames created by fixture
+    assert vid.width == 50
+    assert vid.height == 50
+
+    vid.close()
+    assert not vid.stream.isOpened()
+
+
+def test_video_read_single_frame(video_path):
+    """Check that we can read at least one frame correctly."""
+    vid = _reader.Video(video_path)
+    vid.set_to_frame(0)
+    frame = vid.read_frame()
+
+    assert isinstance(frame, np.ndarray)
+    assert frame.shape == (50, 50, 3)
+    assert frame.dtype == np.uint8
+
+    vid.close()
+
+
+def test_video_reader_invalid_path():
+    """Invalid path should raise ValueError."""
+    with pytest.raises(ValueError):
+        _ = _reader.Video("")
+
+
+def test_read_video_output(video_path):
+    """Test the full read_video() API returns expected tuple structure."""
+    layers = _reader.read_video(video_path)
+    assert len(layers) == 1
+
+    data, params, kind = layers[0]
+
+    # basic structure
+    assert kind == "image"
+    assert isinstance(data, da.Array)
+    assert "root" in params["metadata"]
+
+    # shape & dtype
+    assert data.shape[0] == 5  # number of frames
+    frame = data[0].compute()
+    assert frame.shape == (50, 50, 3)
+    assert frame.dtype == np.uint8
+
+
+def test_get_video_reader_dispatch(video_path):
+    assert _reader.get_video_reader(video_path) is not None
+    assert _reader.is_video(str(video_path))
+    assert _reader.get_video_reader("file.txt") is None
+    assert not _reader.is_video("file.png")
+
+
+def test_lazy_imread_list_no_stack(tmp_path):
+    img = (np.random.rand(8, 9, 3) * 255).astype(np.uint8)
+    p1, p2 = tmp_path / "a.png", tmp_path / "b.png"
+    imsave(p1, img)
+    imsave(p2, img)
+    res = _reader.lazy_imread([p1, p2], use_dask=True, stack=False)
+    assert isinstance(res, list) and len(res) == 2
+    assert all(isinstance(x, da.Array) for x in res)
+
+
+def test_read_images_list_metadata_paths(tmp_path):
+    img = (np.random.rand(10, 10, 3) * 255).astype(np.uint8)
+    p1, p2 = tmp_path / "img1.png", tmp_path / "img2.png"
+    imsave(p1, img)
+    imsave(p2, img)
+    [(data, params, kind)] = _reader.read_images([p2, p1])  # unordered input
+    assert params["metadata"]["paths"]  # exists
+    assert len(params["metadata"]["paths"]) == 2
+    # natsorted is applied; assert the order is deterministic by name
+    assert params["metadata"]["paths"][0].endswith("img1.png")
+    assert params["metadata"]["paths"][1].endswith("img2.png")
+
+
+def test_lazy_imread_grayscale_and_rgba(tmp_path):
+    import cv2
+
+    gray = (np.random.rand(10, 10) * 255).astype(np.uint8)
+    rgba = (np.random.rand(10, 10, 4) * 255).astype(np.uint8)
+    p1, p2 = tmp_path / "g.png", tmp_path / "r.png"
+    cv2.imwrite(str(p1), gray)  # cv2 writes BGR/GRAY
+    cv2.imwrite(str(p2), cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
+    res = _reader.lazy_imread([p1, p2], use_dask=False, stack=False)
+    assert all(img.shape[-1] == 3 for img in res)
