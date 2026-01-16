@@ -59,13 +59,14 @@ def get_config_reader(path):
 
 
 def _filter_extensions(
-    image_paths: list[Union[str, Path]],
+    image_paths: list[str | Path],
     valid_extensions: tuple[str] = SUPPORTED_IMAGES,
 ) -> list[Path]:
     """
     Filter image paths by valid extensions.
     """
     return [Path(p) for p in image_paths if Path(p).suffix.lower() in valid_extensions]
+
 
 def get_folder_parser(path):
     if not path or not Path(path).is_dir():
