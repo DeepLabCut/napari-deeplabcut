@@ -5,8 +5,8 @@ from napari_deeplabcut.tracking._worker import TrackingWorker
 def test_tracking_worker(qtbot, track_worker_inputs):
     worker = TrackingWorker()
 
-    await_finished = qtbot.waitSignal(worker.trackingFinished, timeout=1000)
-    worker.track(track_worker_inputs)
+    with qtbot.waitSignal(worker.trackingFinished, timeout=1000) as await_finished:
+        worker.track(track_worker_inputs)
 
     output: TrackingWorkerOutput = await_finished.args[0]
     assert isinstance(output, TrackingWorkerOutput)

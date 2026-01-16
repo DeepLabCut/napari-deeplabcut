@@ -90,19 +90,13 @@ class TrackingModel(ABC):
         """Prepare outputs after processing."""
         raise NotImplementedError
 
+    @abstractmethod
     def validate_outputs(self, inputs: TrackingModelInputs, outputs: "TrackingWorkerOutput") -> tuple[bool, str]:
         """Validate the outputs."""
-        if not isinstance(outputs.keypoints, np.ndarray):
-            return False, "Outputs keypoints is not a numpy array."
-        if not outputs.keypoints.ndim == 2:
-            return False, "Outputs keypoints is not a 2D array."
-        if not outputs.keypoints.shape[1] == 3:
-            return False, "Outputs keypoints does not have 3 columns."
-        if not outputs.keypoints.shape[0] == inputs.keypoints.shape[0]:
-            return False, "Number of output keypoints does not match number of input keypoints."
-        return True, ""
+        raise NotImplementedError
 
 
+# pragma: no cover
 ct3 = "Cotracker 3"
 
 
@@ -234,3 +228,18 @@ class Cotracker3(TrackingModel):
             queries=queries[None],
             add_support_grid=True,
         )
+
+    def validate_outputs(self, inputs: TrackingModelInputs, outputs: "TrackingWorkerOutput") -> tuple[bool, str]:
+        """Validate the outputs."""
+        if not isinstance(outputs.keypoints, np.ndarray):
+            return False, "Outputs keypoints is not a numpy array."
+        if not outputs.keypoints.ndim == 2:
+            return False, "Outputs keypoints is not a 2D array."
+        if not outputs.keypoints.shape[1] == 3:
+            return False, "Outputs keypoints does not have 3 columns."
+        if not outputs.keypoints.shape[0] == inputs.keypoints.shape[0]:
+            return False, "Number of output keypoints does not match number of input keypoints."
+        return True, ""
+
+
+# pragma: cover
