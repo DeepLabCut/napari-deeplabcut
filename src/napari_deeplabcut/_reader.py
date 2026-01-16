@@ -1,5 +1,6 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from functools import partial
 from pathlib import Path
 
 import cv2
@@ -90,84 +91,84 @@ def get_folder_parser(path):
     return lambda _: layers
 
 
+# Helper functions for lazy image reading and normalization
+# NOTE : forced keyword-only arguments for clarity
+def _read_and_normalize(*, filepath: Path, normalize_func: Callable[[np.ndarray], np.ndarray]) -> np.ndarray:
+    arr = cv2.imread(str(filepath), cv2.IMREAD_UNCHANGED)
+    if arr is None:
+        raise OSError(f"Could not read image: {filepath}")
+    return normalize_func(arr)
+
+
+def _normalize_to_rgb(arr: np.ndarray) -> np.ndarray:
+    if arr.ndim == 2:
+        return cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
+    if arr.ndim == 3 and arr.shape[2] == 4:
+        return cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
+    return cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+
+
+# Lazy image reader that supports directories and lists of files
 def lazy_imread(
     filenames: str | Path | list[str | Path],
     use_dask: bool | None = None,
     stack: bool = True,
 ):
-    """
-    Lazy image reader using cv2 (+dask) for lists/single files, with optional padding.
-    - Supports a single filename/Path, a list of filenames/Paths, or a directory path.
-    """
-    # Normalize input to list[Path]
-    _raw: list[Path] = [Path(p) for p in filenames] if isinstance(filenames, (list, tuple)) else [Path(filenames)]
+    _raw = [Path(p) for p in filenames] if isinstance(filenames, (list, tuple)) else [Path(filenames)]
     if not _raw:
         raise ValueError("No files found")
 
-    # Expand directories (except zarr) into files, sorted
     expanded: list[Path] = []
     for p in _raw:
         if p.is_dir() and not str(p).endswith(".zarr"):
-            files = [x for x in natsorted(p.glob("*.*")) if not x.is_dir()]
-            expanded.extend(files)
+            expanded.extend([x for x in natsorted(p.glob("*.*")) if not x.is_dir()])
         else:
             expanded.append(p)
 
     if use_dask is None:
         use_dask = len(expanded) > 1
 
+    expanded = [p for p in expanded if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGES]
     if not expanded:
         raise ValueError(f"No files found in {filenames} after removing subdirectories")
 
-    def _normalize_to_rgb(arr: np.ndarray) -> np.ndarray:
-        if arr is None:
-            raise OSError("Could not read image.")
-        if arr.ndim == 2:
-            return cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
-        if arr.ndim == 3 and arr.shape[2] == 4:
-            return cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
-        return cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+    images = []
+    first_shape = None
+    first_dtype = None
 
-    images: list[da.Array | np.ndarray] = []
-    first_shape: tuple[int, ...] | None = None
-    first_dtype: np.dtype | None = None
+    def make_delayed_array(fp: Path):
+        """Create a dask array for a single file."""
+        delayed_reader = delayed(partial(_read_and_normalize, filepath=fp, normalize_func=_normalize_to_rgb))
+        return da.from_delayed(delayed_reader(), shape=first_shape, dtype=first_dtype)
+
     for fp in expanded:
         if first_shape is None:
-            arr0 = cv2.imread(str(fp), cv2.IMREAD_UNCHANGED)
+            arr0 = _read_and_normalize(filepath=fp, normalize_func=_normalize_to_rgb)
             if arr0 is None:
                 raise OSError(f"Could not read image: {fp}")
-            arr0 = _normalize_to_rgb(arr0)
             first_shape = arr0.shape
             first_dtype = arr0.dtype
+
             if use_dask:
-                images.append(
-                    da.from_delayed(
-                        delayed(lambda p=fp: _normalize_to_rgb(cv2.imread(str(p), cv2.IMREAD_UNCHANGED)))(),
-                        shape=first_shape,
-                        dtype=first_dtype,
-                    )
-                )
+                images.append(make_delayed_array(fp))
             else:
                 images.append(arr0)
             continue
+
         if use_dask:
-            images.append(
-                da.from_delayed(
-                    delayed(lambda p=fp: _normalize_to_rgb(cv2.imread(str(p), cv2.IMREAD_UNCHANGED)))(),
-                    shape=first_shape,
-                    dtype=first_dtype,
-                )
-            )
+            images.append(make_delayed_array(fp))
         else:
-            images.append(_normalize_to_rgb(cv2.imread(str(fp), cv2.IMREAD_UNCHANGED)))
+            images.append(_read_and_normalize(filepath=fp, normalize_func=_normalize_to_rgb))
 
     if not images:
         return None
     if len(images) == 1:
         return images[0]
+
     return da.stack(images) if use_dask and stack else (np.stack(images) if stack else images)
 
 
+# Read images from a list of files or a glob/string path
 def read_images(path: str | Path | list[str | Path]) -> list[LayerData]:
     """
     Read images from a list of files or a glob/string path.
@@ -218,6 +219,7 @@ def read_images(path: str | Path | list[str | Path]) -> list[LayerData]:
     return [(imread(str(image_path)), params, "image")]
 
 
+# Helper to populate keypoint layer metadata
 def _populate_metadata(
     header: misc.DLCHeader,
     *,
@@ -265,7 +267,7 @@ def _populate_metadata(
 
 def _load_superkeypoints_diagram(super_animal: str):
     path = str(Path(__file__).parent / "assets" / f"{super_animal}.jpg")
-    return imread(path), {"root": ""}, "images"
+    return imread(path), {"root": ""}, "image"
 
 
 def _load_superkeypoints(super_animal: str):
@@ -279,6 +281,7 @@ def _load_config(config_path: str):
         return yaml.safe_load(file)
 
 
+# Read config file and create keypoint layer metadata
 def read_config(configname: str) -> list[LayerData]:
     config = _load_config(configname)
     header = misc.DLCHeader.from_config(config)
@@ -300,6 +303,7 @@ def read_config(configname: str) -> list[LayerData]:
     return [(None, metadata, "points")]
 
 
+# Read HDF file and create keypoint layers
 def read_hdf(filename: str) -> list[LayerData]:
     config_path = misc.find_project_config_path(filename)
     layers = []
@@ -358,6 +362,7 @@ def read_hdf(filename: str) -> list[LayerData]:
     return layers
 
 
+# Video reader using OpenCV
 class Video:
     def __init__(self, video_path):
         if not Path(video_path).is_file():
