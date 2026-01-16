@@ -1,8 +1,9 @@
 import numpy as np
 import pandas as pd
 import pytest
-from napari_deeplabcut import _reader
 from skimage.io import imsave
+
+from napari_deeplabcut import _reader
 
 
 @pytest.mark.parametrize("ext", _reader.SUPPORTED_IMAGES)
@@ -63,9 +64,7 @@ def test_read_config(config_path):
 
 def test_read_hdf_old_index(tmp_path_factory, fake_keypoints):
     path = str(tmp_path_factory.mktemp("folder") / "data.h5")
-    old_index = [
-        f"labeled-data/video/img{i}.png" for i in range(fake_keypoints.shape[0])
-    ]
+    old_index = [f"labeled-data/video/img{i}.png" for i in range(fake_keypoints.shape[0])]
     fake_keypoints.index = old_index
     fake_keypoints.to_hdf(path, key="data")
     layers = _reader.read_hdf(path)

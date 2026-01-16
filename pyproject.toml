@@ -2,6 +2,15 @@
 requires = ["setuptools", "wheel", "setuptools_scm"]
 build-backend = "setuptools.build_meta"
 
+[tool.ruff]
+lint.select = ["E", "F", "B", "I", "UP"]
+lint.ignore = ["E741"]
+target-version = "py310"
+fix = true
+line-length = 120
+
+[tool.uv]
+package = true
 
 [tool.setuptools_scm]
 write_to = "src/napari_deeplabcut/_version.py"

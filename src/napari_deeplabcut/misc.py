@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from enum import Enum, EnumMeta
 from itertools import cycle
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -18,6 +18,7 @@ def find_project_config_path(labeled_data_path: str) -> str:
 def is_latest_version():
     import json
     import urllib.request
+
     from napari_deeplabcut import __version__
 
     url = "https://pypi.org/pypi/napari-deeplabcut/json"
@@ -26,18 +27,15 @@ def is_latest_version():
     return __version__ == latest_version, latest_version
 
 
-
 def unsorted_unique(array: Sequence) -> np.ndarray:
     """Return the unsorted unique elements of an array."""
     _, inds = np.unique(array, return_index=True)
     return np.asarray(array)[np.sort(inds)]
 
 
-def encode_categories(
-    categories: List[str], return_map: bool = False
-) -> Union[List[int], Tuple[List[int], Dict]]:
+def encode_categories(categories: list[str], return_map: bool = False) -> list[int] | tuple[list[int], dict]:
     unique_cat = unsorted_unique(categories)
-    map_ = dict(zip(unique_cat, range(len(unique_cat))))
+    map_ = dict(zip(unique_cat, range(len(unique_cat)), strict=False))
     inds = np.vectorize(map_.get)(categories)
     if return_map:
         return inds, map_
@@ -65,9 +63,7 @@ def merge_multiple_scorers(
             data[mask] = -1
             idx = np.nanargmax(data[..., 2], axis=1)
             data[mask] = np.nan
-        data_best = data[
-            np.arange(n_frames)[:, None], idx, np.arange(data.shape[2])
-        ].reshape((n_frames, -1))
+        data_best = data[np.arange(n_frames)[:, None], idx, np.arange(data.shape[2])].reshape((n_frames, -1))
         df = pd.DataFrame(
             data_best,
             index=df.index,
@@ -113,17 +109,17 @@ def guarantee_multiindex_rows(df):
             pass
 
 
-def build_color_cycle(n_colors: int, colormap: Optional[str] = "viridis") -> np.ndarray:
+def build_color_cycle(n_colors: int, colormap: str | None = "viridis") -> np.ndarray:
     cmap = colormaps.ensure_colormap(colormap)
     return cmap.map(np.linspace(0, 1, n_colors))
 
 
-def build_color_cycles(header: DLCHeader, colormap: Optional[str] = "viridis"):
+def build_color_cycles(header: DLCHeader, colormap: str | None = "viridis"):
     label_colors = build_color_cycle(len(header.bodyparts), colormap)
     id_colors = build_color_cycle(len(header.individuals), colormap)
     return {
-        "label": dict(zip(header.bodyparts, label_colors)),
-        "id": dict(zip(header.individuals, id_colors)),
+        "label": dict(zip(header.bodyparts, label_colors, strict=False)),
+        "id": dict(zip(header.individuals, id_colors, strict=False)),
     }
 
 
@@ -132,7 +128,7 @@ class DLCHeader:
         self.columns = columns
 
     @classmethod
-    def from_config(cls, config: Dict) -> DLCHeader:
+    def from_config(cls, config: dict) -> DLCHeader:
         multi = config.get("multianimalproject", False)
         scorer = [config["scorer"]]
         if multi:
@@ -145,13 +141,9 @@ class DLCHeader:
                 ]
             )
             if len(config["uniquebodyparts"]):
-                temp = pd.MultiIndex.from_product(
-                    [scorer, ["single"], config["uniquebodyparts"], ["x", "y"]]
-                )
+                temp = pd.MultiIndex.from_product([scorer, ["single"], config["uniquebodyparts"], ["x", "y"]])
                 columns = columns.append(temp)
-            columns.set_names(
-                ["scorer", "individuals", "bodyparts", "coords"], inplace=True
-            )
+            columns.set_names(["scorer", "individuals", "bodyparts", "coords"], inplace=True)
         else:
             columns = pd.MultiIndex.from_product(
                 [scorer, config["bodyparts"], ["x", "y"]],
@@ -159,12 +151,8 @@ class DLCHeader:
             )
         return cls(columns)
 
-    def form_individual_bodypart_pairs(self) -> List[Tuple[str]]:
-        to_drop = [
-            name
-            for name in self.columns.names
-            if name not in ("individuals", "bodyparts")
-        ]
+    def form_individual_bodypart_pairs(self) -> list[tuple[str]]:
+        to_drop = [name for name in self.columns.names if name not in ("individuals", "bodyparts")]
         temp = self.columns.droplevel(to_drop).unique()
         if "individuals" not in temp.names:
             temp = pd.MultiIndex.from_product([self.individuals, temp])
@@ -179,29 +167,29 @@ class DLCHeader:
         self.columns = self.columns.set_levels([scorer], level="scorer")
 
     @property
-    def individuals(self) -> List[str]:
+    def individuals(self) -> list[str]:
         individuals = self._get_unique("individuals")
         if individuals is None:
             return [""]
         return individuals
 
     @property
-    def bodyparts(self) -> List[str]:
+    def bodyparts(self) -> list[str]:
         return self._get_unique("bodyparts")
 
     @property
-    def coords(self) -> List[str]:
+    def coords(self) -> list[str]:
         return self._get_unique("coords")
 
-    def _get_unique(self, name: str) -> Optional[List]:
+    def _get_unique(self, name: str) -> list | None:
         if name in self.columns.names:
             return list(unsorted_unique(self.columns.get_level_values(name)))
         return None
 
 
 class CycleEnumMeta(EnumMeta):
-    def __new__(metacls, cls, bases, classdict):
-        enum_ = super().__new__(metacls, cls, bases, classdict)
+    def __new__(metacls, cls, bases, classdict, **kwargs):
+        enum_ = super().__new__(metacls, cls, bases, classdict, **kwargs)
         enum_._cycle = cycle(enum_._member_map_[name] for name in enum_._member_names_)
         return enum_
 

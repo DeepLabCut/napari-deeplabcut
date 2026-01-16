@@ -1,22 +1,51 @@
-import cv2
-import numpy as np
 import os
 
-os.environ["hide_tutorial"] = "True"
+import cv2
+import numpy as np
 import pandas as pd
 import pytest
-from napari_deeplabcut import keypoints, _writer
+from qtpy.QtWidgets import QDockWidget
 from skimage.io import imsave
+
+from napari_deeplabcut import _writer, keypoints
+
+# os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
+
+os.environ["NAPARI_ASYNC"] = "0"  # avoid async teardown surprises in tests
+# os.environ["PYTHONFAULTHANDLER"] = "1"  # better segfault traces in CI
+# os.environ["QT_QPA_PLATFORM"] = "offscreen"  # headless QT for CI
+# os.environ["QT_OPENGL"] = "software"  # avoid some CI issues with OpenGL
+# os.environ["PYTEST_QT_API"] = "pyqt6" # only for local testing with pyqt6, we use pyside6 otherwise
 
 
 @pytest.fixture
-def viewer(make_napari_viewer):
-    viewer = make_napari_viewer()
-    for action in viewer.window.plugins_menu.actions():
-        if "deeplabcut" in action.text():
-            action.trigger()
-            break
-    return viewer
+def viewer(make_napari_viewer_proxy):
+    viewer = make_napari_viewer_proxy()
+
+    # Explicitly add the dock widgets
+    # NOTE The old approach of opening every plugin menu
+    # with "napari-deeplabcut" in the name is not reliable
+    # and is not recommended.
+
+    #  keypoints_dock_widget, keypoints_plugin_widget
+    _, _ = viewer.window.add_plugin_dock_widget(
+        "napari-deeplabcut",
+        "Keypoint controls",
+    )
+
+    try:
+        yield viewer
+    finally:
+        # proactively close dock widgets to drop any lingering Qt refs
+        try:
+            # close all added dock widgets (if any) before viewer is closed
+            for dw in list(viewer.window._qt_window.findChildren(QDockWidget)):
+                # defensive: some Qt objects can be None during shutdown
+                if hasattr(dw, "close"):
+                    dw.close()
+        except Exception:
+            # bail if viewer or its window is already gone
+            pass
 
 
 @pytest.fixture
@@ -43,6 +72,7 @@ def points(tmp_path_factory, viewer, fake_keypoints):
     output_path = str(tmp_path_factory.mktemp("folder") / "fake_data.h5")
     fake_keypoints.to_hdf(output_path, key="data")
     layer = viewer.open(output_path, plugin="napari-deeplabcut")[0]
+
     return layer
 
 
@@ -55,13 +85,35 @@ def fake_image():
 def images(tmp_path_factory, viewer, fake_image):
     output_path = str(tmp_path_factory.mktemp("folder") / "img.png")
     imsave(output_path, fake_image)
-    layer = viewer.open(output_path, plugin="napari-deeplabcut")[0]
-    return layer
+    return viewer.open(output_path, plugin="napari-deeplabcut")[0]
 
 
 @pytest.fixture
 def store(viewer, points):
     return keypoints.KeypointStore(viewer, points)
+
+
+@pytest.fixture
+def single_animal_store(tmp_path_factory, viewer, fake_keypoints):
+    # Keep only columns for one animal
+    df = fake_keypoints.xs("animal_0", level="individuals", axis=1)
+    # Now df has levels: scorer, bodyparts, coords
+    # Rebuild MultiIndex with an empty "individuals" level inserted
+    df.columns = pd.MultiIndex.from_product(
+        [
+            [df.columns.levels[0][0]],  # scorer
+            [""],  # single-animal: empty ID
+            df.columns.levels[1],  # bodyparts
+            df.columns.levels[2],  # coords
+        ],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
+
+    path = tmp_path_factory.mktemp("folder") / "single_animal_data.h5"
+    df.to_hdf(path, key="data")
+    layer = viewer.open(path, plugin="napari-deeplabcut")[0]
+
+    return keypoints.KeypointStore(viewer, layer)
 
 
 @pytest.fixture(scope="session")

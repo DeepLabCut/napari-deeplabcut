@@ -1,8 +1,6 @@
-import glob
 import json
-import os
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
 
 import cv2
 import dask.array as da
@@ -45,9 +43,7 @@ def get_image_reader(path):
 
 
 def get_video_reader(path):
-    if isinstance(path, str) and any(
-        path.lower().endswith(ext) for ext in SUPPORTED_VIDEOS
-    ):
+    if isinstance(path, str) and any(path.lower().endswith(ext) for ext in SUPPORTED_VIDEOS):
         return read_video
     return None
 
@@ -63,66 +59,67 @@ def get_config_reader(path):
 
 
 def get_folder_parser(path):
-    if not os.path.isdir(path):
+    if not path or not Path(path).is_dir():
         return None
 
     layers = []
-    files = os.listdir(path)
+    files = Path(path).iterdir()
     images = ""
     for file in files:
-        if any(file.lower().endswith(ext) for ext in SUPPORTED_IMAGES):
-            images = os.path.join(path, f"*{os.path.splitext(file)[1]}")
+        if any(file.name.lower().endswith(ext) for ext in SUPPORTED_IMAGES):
+            images = str(Path(path) / f"*{Path(file.name).suffix}")
             break
     if not images:
         raise OSError(f"No supported images were found in {path}.")
 
     layers.extend(read_images(images))
-    datafile = ""
-    for file in os.listdir(path):
-        if file.endswith(".h5"):
-            datafile = os.path.join(path, "*.h5")
-            break
-    if datafile:
-        layers.extend(read_hdf(datafile))
+    for file in Path(path).iterdir():
+        if file.name.endswith(".h5"):
+            layers.extend(read_hdf(str(file)))
+            break  # one h5 per annotated video
 
     return lambda _: layers
 
 
 def read_images(path):
     if isinstance(path, list):
-        root, ext = os.path.splitext(path[0])
-        path = os.path.join(os.path.dirname(root), f"*{ext}")
+        first_path = Path(path[0])
+        suffixes = first_path.suffixes
+        ext = "".join(suffixes) if suffixes else ""
+        pattern = f"*{ext}" if ext else "*"
+        path = str(first_path.parent / pattern)
     # Retrieve filepaths exactly as parsed by pims
     filepaths = []
-    for filepath in glob.iglob(path):
+    for filepath in Path(path).parent.glob(Path(path).name):
         relpath = Path(filepath).parts[-3:]
-        filepaths.append(os.path.join(*relpath))
+        filepaths.append(str(Path(*relpath)))
     params = {
         "name": "images",
         "metadata": {
             "paths": natsorted(filepaths),
-            "root": os.path.split(path)[0],
+            "root": str(Path(path).parent),
         },
     }
 
     # https://github.com/soft-matter/pims/issues/452
     if len(filepaths) == 1:
-        path = glob.glob(path)[0]
-
+        path = next(Path(path).parent.glob(Path(path).name), None)
+        if path is None:
+            raise FileNotFoundError(f"No files found for pattern: {path}")
     return [(imread(path), params, "image")]
 
 
 def _populate_metadata(
     header: misc.DLCHeader,
     *,
-    labels: Optional[Sequence[str]] = None,
-    ids: Optional[Sequence[str]] = None,
-    likelihood: Optional[Sequence[float]] = None,
-    paths: Optional[List[str]] = None,
-    size: Optional[int] = 8,
-    pcutoff: Optional[float] = 0.6,
-    colormap: Optional[str] = "viridis",
-) -> Dict:
+    labels: Sequence[str] | None = None,
+    ids: Sequence[str] | None = None,
+    likelihood: Sequence[float] | None = None,
+    paths: list[str] | None = None,
+    size: int | None = 8,
+    pcutoff: float | None = 0.6,
+    colormap: str | None = "viridis",
+) -> dict:
     if labels is None:
         labels = header.bodyparts
     if ids is None:
@@ -143,10 +140,10 @@ def _populate_metadata(
         "face_color_cycle": face_color_cycle_maps[face_color_prop],
         "face_color": face_color_prop,
         "face_colormap": colormap,
-        "edge_color": "valid",
-        "edge_color_cycle": ["black", "red"],
-        "edge_width": 0,
-        "edge_width_is_relative": False,
+        "border_color": "valid",
+        "border_color_cycle": ["black", "red"],
+        "border_width": 0,
+        "border_width_is_relative": False,
         "size": size,
         "metadata": {
             "header": header,
@@ -173,7 +170,7 @@ def _load_config(config_path: str):
         return yaml.safe_load(file)
 
 
-def read_config(configname: str) -> List[LayerData]:
+def read_config(configname: str) -> list[LayerData]:
     config = _load_config(configname)
     header = misc.DLCHeader.from_config(config)
     metadata = _populate_metadata(
@@ -186,7 +183,7 @@ def read_config(configname: str) -> List[LayerData]:
     metadata["name"] = f"CollectedData_{config['scorer']}"
     metadata["ndim"] = 3
     metadata["property_choices"] = metadata.pop("properties")
-    metadata["metadata"]["project"] = os.path.dirname(configname)
+    metadata["metadata"]["project"] = str(Path(configname).parent)
     conversion_tables = config.get("SuperAnimalConversionTables")
     if conversion_tables is not None:
         super_animal, table = conversion_tables.popitem()
@@ -194,11 +191,11 @@ def read_config(configname: str) -> List[LayerData]:
     return [(None, metadata, "points")]
 
 
-def read_hdf(filename: str) -> List[LayerData]:
+def read_hdf(filename: str) -> list[LayerData]:
     config_path = misc.find_project_config_path(filename)
     layers = []
-    for filename in glob.iglob(filename):
-        temp = pd.read_hdf(filename)
+    for file in Path(filename).parent.glob(Path(filename).name):
+        temp = pd.read_hdf(str(file))
         temp = misc.merge_multiple_scorers(temp)
         header = misc.DLCHeader(temp.columns)
         temp = temp.droplevel("scorer", axis=1)
@@ -216,7 +213,7 @@ def read_hdf(filename: str) -> List[LayerData]:
         else:
             colormap = "Set3"
         if isinstance(temp.index, pd.MultiIndex):
-            temp.index = [os.path.join(*row) for row in temp.index]
+            temp.index = [str(Path(*row)) for row in temp.index]
         df = (
             temp.stack(["individuals", "bodyparts"])
             .reindex(header.individuals, level="individuals")
@@ -244,8 +241,8 @@ def read_hdf(filename: str) -> List[LayerData]:
             paths=list(paths2inds),
             colormap=colormap,
         )
-        metadata["name"] = os.path.split(filename)[1].split(".")[0]
-        metadata["metadata"]["root"] = os.path.split(filename)[0]
+        metadata["name"] = Path(filename).stem
+        metadata["metadata"]["root"] = str(Path(filename).parent)
         # Store file name in case the layer's name is edited by the user
         metadata["metadata"]["name"] = metadata["name"]
         layers.append((data, metadata, "points"))
@@ -254,7 +251,7 @@ def read_hdf(filename: str) -> List[LayerData]:
 
 class Video:
     def __init__(self, video_path):
-        if not os.path.isfile(video_path):
+        if not Path(video_path).is_file():
             raise ValueError(f'Video path "{video_path}" does not point to a file.')
 
         self.path = video_path
@@ -308,21 +305,16 @@ def read_video(filename: str, opencv: bool = True):
         try:
             stream = PyAVReaderIndexed(filename)
         except ImportError:
-            raise ImportError("`pip install av` to use the PyAV video reader.")
+            raise ImportError("`pip install av` to use the PyAV video reader.") from None
 
         shape = stream.frame_shape
         lazy_imread = delayed(stream.get_frame)
 
-    movie = da.stack(
-        [
-            da.from_delayed(lazy_imread(i), shape=shape, dtype=np.uint8)
-            for i in range(len(stream))
-        ]
-    )
+    movie = da.stack([da.from_delayed(lazy_imread(i), shape=shape, dtype=np.uint8) for i in range(len(stream))])
     elems = list(Path(filename).parts)
     elems[-2] = "labeled-data"
-    elems[-1] = elems[-1].split(".")[0]
-    root = os.path.join(*elems)
+    elems[-1] = Path(elems[-1]).stem  # + Path(filename).suffix
+    root = str(Path(*elems))
     params = {
         "name": filename,
         "metadata": {
