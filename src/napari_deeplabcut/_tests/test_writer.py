@@ -97,12 +97,15 @@ def test_form_df_multi_animal(fake_keypoints):
 def test_form_df_single_animal(fake_keypoints):
     """Drop the individuals level and check that _form_df handles it."""
     df_single = fake_keypoints.xs("animal_0", axis=1, level="individuals")
+    scorer_values = df_single.columns.get_level_values("scorer").unique()
+    bodyparts_values = df_single.columns.get_level_values("bodyparts").unique()
+    coords_values = df_single.columns.get_level_values("coords").unique()
     df_single.columns = pd.MultiIndex.from_product(
         [
-            [df_single.columns.levels[0][0]],  # scorer
+            [scorer_values[0]],  # scorer
             [""],  # empty individuals level
-            df_single.columns.levels[1],  # bodyparts
-            df_single.columns.levels[2],  # coords
+            bodyparts_values,  # bodyparts
+            coords_values,  # coords
         ],
         names=["scorer", "individuals", "bodyparts", "coords"],
     )
