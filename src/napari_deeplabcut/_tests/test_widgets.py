@@ -310,3 +310,31 @@ def test_ensure_mpl_canvas_docked_exception_during_docking(viewer, qtbot):
 
     # Docking failed → remains undocked
     assert controls._mpl_docked is False
+
+
+def test_display_shortcuts_dialog(viewer, qtbot):
+    """Ensure that the Shortcuts dialog can be created and shown without errors."""
+    controls = _widgets.KeypointControls(viewer)
+    qtbot.add_widget(controls)
+
+    # Create the dialog directly
+    dlg = _widgets.Shortcuts(controls)
+    qtbot.add_widget(dlg)
+
+    # Show it non-modally
+    dlg.show()
+    qtbot.waitExposed(dlg)
+
+    # Verify it is visible
+    assert dlg.isVisible()
+
+    # Ensure the SVG widget is present
+    found_svg = False
+    for child in dlg.children():
+        from qtpy.QtSvgWidgets import QSvgWidget
+
+        if isinstance(child, QSvgWidget):
+            found_svg = True
+            break
+
+    assert found_svg, "Shortcuts dialog should contain a QSvgWidget with the shortcuts image."
