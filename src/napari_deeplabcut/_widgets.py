@@ -1091,7 +1091,6 @@ class KeypointControls(QWidget):
                     _layer.metadata["face_color_cycles"] = new_metadata["face_color_cycles"]
                     _layer.face_color = "label"
                     _layer.face_color_cycle = new_metadata["face_color_cycles"]["label"]
-                    _layer.face_color_cycle = new_metadata["face_color_cycles"]["label"]
                     _layer.events.face_color()
                     store.layer = _layer
                 self._update_color_scheme()
@@ -1198,9 +1197,6 @@ class KeypointControls(QWidget):
 
     def on_active_layer_change(self, event) -> None:
         """Updates the GUI when the active layer changes
-        * Hides all KeypointsDropdownMenu that aren't for the selected layer
-        * Sets the visibility of the "Color mode" box to True if the selected layer
-            is a multi-animal one, or False otherwise
         * Hides all KeypointsDropdownMenu that aren't for the selected layer
         * Sets the visibility of the "Color mode" box to True if the selected layer
             is a multi-animal one, or False otherwise

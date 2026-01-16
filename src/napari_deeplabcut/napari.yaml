@@ -28,7 +28,7 @@ contributions:
       title: Make keypoint controls
     - id: napari-deeplabcut.make_tracking_controls
       python_name: napari_deeplabcut.tracking._widgets:TrackingControls
-      title: Make the racking controls widget
+      title: Make the tracking controls widget
   readers:
     - command: napari-deeplabcut.get_hdf_reader
       accepts_directories: false
