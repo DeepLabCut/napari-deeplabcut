@@ -144,8 +144,6 @@ def lazy_imread(
     for fp in expanded:
         if first_shape is None:
             arr0 = _read_and_normalize(filepath=fp, normalize_func=_normalize_to_rgb)
-            if arr0 is None:
-                raise OSError(f"Could not read image: {fp}")
             first_shape = arr0.shape
             first_dtype = arr0.dtype
 
@@ -161,7 +159,7 @@ def lazy_imread(
             images.append(_read_and_normalize(filepath=fp, normalize_func=_normalize_to_rgb))
 
     if not images:
-        return None
+        raise ValueError("No images could be read from the provided paths.")
     if len(images) == 1:
         return images[0]
 
@@ -406,13 +404,14 @@ class Video:
 def read_video(filename: str, opencv: bool = True):
     if opencv:
         stream = Video(filename)
-        shape = stream.width, stream.height, 3
+        # NOTE OpenCV stream expects H, W, C
+        shape = stream.height, stream.width, 3
 
         def _read_frame(ind):
             stream.set_to_frame(ind)
             return stream.read_frame()
 
-        lazy_imread = delayed(_read_frame)
+        lazy_reader = delayed(_read_frame)
     else:  # pragma: no cover
         from pims import PyAVReaderIndexed
 
@@ -422,9 +421,9 @@ def read_video(filename: str, opencv: bool = True):
             raise ImportError("`pip install av` to use the PyAV video reader.") from None
 
         shape = stream.frame_shape
-        lazy_imread = delayed(stream.get_frame)
+        lazy_reader = delayed(stream.get_frame)
 
-    movie = da.stack([da.from_delayed(lazy_imread(i), shape=shape, dtype=np.uint8) for i in range(len(stream))])
+    movie = da.stack([da.from_delayed(lazy_reader(i), shape=shape, dtype=np.uint8) for i in range(len(stream))])
     elems = list(Path(filename).parts)
     elems[-2] = "labeled-data"
     elems[-1] = Path(elems[-1]).stem  # + Path(filename).suffix
@@ -435,4 +434,4 @@ def read_video(filename: str, opencv: bool = True):
             "root": root,
         },
     }
-    return [(movie, params)]
+    return [(movie, params, "image")]
