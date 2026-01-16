@@ -200,7 +200,7 @@ Based on interest, we may polish the user experience and add more advanced track
 **Basic usage:**
 
 - The tracking widget is opened via the "Plugin > napari-deeplabcut: Tracking controls" menu.
-- Select the Points layer to track in the dropdown menu.
+- In the layer selection lists, select both the video layer and the Points layer to be used for tracking.
 - Select the starting frame for tracking by moving the viewer slider to the desired frame.
 - Select how many frames you want to track forward and backward (relative to current frame or in absolute terms, termed respectively Rel and Abs.).
 - Use the track forward/backward/both buttons to run the tracker.
