@@ -32,6 +32,7 @@ from napari_deeplabcut.tracking._data import TrackingWorkerData, TrackingWorkerO
 from napari_deeplabcut.tracking._models import AVAILABLE_TRACKERS
 from napari_deeplabcut.tracking._worker import TrackingWorker
 
+logger = logging.getLogger(__name__)
 # Keybinds
 TRACKING_SHORTCUTS_ENABLED = os.environ.get("NAPARI_DLC_TRACKING_SHORTCUTS_ENABLED", "1") == "1"
 
@@ -381,7 +382,7 @@ class TrackingControls(QWidget):
                 new_features_df = pd.DataFrame()
             self.add_keypoints_to_layer(out.keypoints, new_features_df)
         except Exception as e:
-            print(e)
+            logger.error(f"Error adding keypoints to layer: {e}")
         self._tracking_progress_bar.setValue(self._tracking_progress_bar.maximum())
         self._tracking_progress_bar.setFormat("%p% Done")
         self.trackedKeypointsAdded.emit()
@@ -457,7 +458,7 @@ class TrackingControls(QWidget):
         backward_frame_idx: int = self._backward_spinbox_absolute.value()
         if backward_frame_idx >= ref_frame_idx:
             return
-        print(backward_frame_idx, ref_frame_idx)
+        logger.debug(f"Tracking backward from {backward_frame_idx} to {ref_frame_idx}")
         self.track(
             (backward_frame_idx, ref_frame_idx + 1),
             ref_frame_idx,

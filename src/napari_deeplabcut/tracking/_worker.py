@@ -16,12 +16,12 @@ from napari_deeplabcut.tracking._models import AVAILABLE_TRACKERS
 if TYPE_CHECKING:
     pass
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DEBUG = True
+DEBUG = False
 if DEBUG:
-    pass
+    logger.setLevel(logging.DEBUG)
 
 
 @dataclass
@@ -86,7 +86,7 @@ class TrackingWorker(QObject):
                 # Convert to canonical output (N,3) plus features
                 output: TrackingWorkerOutput = model.prepare_outputs(raw, cfg)
 
-                if hasattr(model, "validate_outputs") and not model.validate_outputs(inputs, output):
+                if hasattr(model, "validate_outputs"):
                     valid, msg = model.validate_outputs(inputs, output)
                     if not valid:
                         raise ValueError(f"Invalid model outputs: {msg}")
