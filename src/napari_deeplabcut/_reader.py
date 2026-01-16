@@ -80,17 +80,13 @@ def get_folder_parser(path):
 
     image_layer = read_images(images)
     layers.extend(image_layer)
-    datafile = ""
     for file in Path(path).iterdir():
         if file.name.endswith(".h5"):
-            datafile = str(file)
-        if datafile:
             try:
-                layers.extend(read_hdf(str(datafile)))
+                layers.extend(read_hdf(str(file)))
                 break  # one h5 per annotated video
             except Exception as e:
-                raise RuntimeError(f"Could not read annotation data from {datafile}") from e
-
+                raise RuntimeError(f"Could not read annotation data from {file}") from e
     return lambda _: layers
 
 
@@ -198,17 +194,27 @@ def read_images(path: str | Path | list[str | Path]) -> list[LayerData]:
 
     # Original behavior for glob/string
     image_path = Path(path)
-    filepaths: list[str] = [str(Path(*p.parts[-3:])) for p in image_path.parent.glob(image_path.name)]
+    matches = list(image_path.parent.glob(image_path.name))
+
+    if not matches:
+        raise FileNotFoundError(f"No files found for pattern: {image_path}")
+    if len(matches) > 1:
+        raise ValueError(
+            f"Multiple files match the pattern '{image_path.name}', but only a single image is expected: {matches}"
+        )
+
+    # Exactly 1 match
+    image_path = matches[0]
+
+    filepaths = [str(Path(*image_path.parts[-3:]))]
     params = {
         "name": "images",
         "metadata": {
-            "paths": natsorted(filepaths),
+            "paths": filepaths,
             "root": str(image_path.parent),
         },
     }
-    matches = list(image_path.parent.glob(image_path.name))
-    if len(matches) == 1:
-        image_path = matches[0]
+
     return [(imread(str(image_path)), params, "image")]
 
 
