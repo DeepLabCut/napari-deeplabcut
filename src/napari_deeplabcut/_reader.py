@@ -1,5 +1,6 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from functools import partial
 from pathlib import Path
 
 import cv2
@@ -58,57 +59,166 @@ def get_config_reader(path):
     return read_config
 
 
+def _filter_extensions(
+    image_paths: list[str | Path],
+    valid_extensions: tuple[str] = SUPPORTED_IMAGES,
+) -> list[Path]:
+    """
+    Filter image paths by valid extensions.
+    """
+    return [Path(p) for p in image_paths if Path(p).suffix.lower() in valid_extensions]
+
+
 def get_folder_parser(path):
     if not path or not Path(path).is_dir():
         return None
-
     layers = []
-    files = Path(path).iterdir()
-    images = ""
-    for file in files:
-        if any(file.name.lower().endswith(ext) for ext in SUPPORTED_IMAGES):
-            images = str(Path(path) / f"*{Path(file.name).suffix}")
-            break
-    if not images:
-        raise OSError(f"No supported images were found in {path}.")
 
-    layers.extend(read_images(images))
+    images = _filter_extensions(Path(path).iterdir(), valid_extensions=SUPPORTED_IMAGES)
+
+    if not images:
+        raise OSError(f"No supported images were found in {path} with extensions {SUPPORTED_IMAGES}.")
+
+    image_layer = read_images(images)
+    layers.extend(image_layer)
     for file in Path(path).iterdir():
         if file.name.endswith(".h5"):
-            layers.extend(read_hdf(str(file)))
-            break  # one h5 per annotated video
-
+            try:
+                layers.extend(read_hdf(str(file)))
+                break  # one h5 per annotated video
+            except Exception as e:
+                raise RuntimeError(f"Could not read annotation data from {file}") from e
     return lambda _: layers
 
 
-def read_images(path):
+# Helper functions for lazy image reading and normalization
+# NOTE : forced keyword-only arguments for clarity
+def _read_and_normalize(*, filepath: Path, normalize_func: Callable[[np.ndarray], np.ndarray]) -> np.ndarray:
+    arr = cv2.imread(str(filepath), cv2.IMREAD_UNCHANGED)
+    if arr is None:
+        raise OSError(f"Could not read image: {filepath}")
+    return normalize_func(arr)
+
+
+def _normalize_to_rgb(arr: np.ndarray) -> np.ndarray:
+    if arr.ndim == 2:
+        return cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
+    if arr.ndim == 3 and arr.shape[2] == 4:
+        return cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
+    return cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+
+
+# Lazy image reader that supports directories and lists of files
+def lazy_imread(
+    filenames: str | Path | list[str | Path],
+    use_dask: bool | None = None,
+    stack: bool = True,
+):
+    _raw = [Path(p) for p in filenames] if isinstance(filenames, (list, tuple)) else [Path(filenames)]
+    if not _raw:
+        raise ValueError("No files found")
+
+    expanded: list[Path] = []
+    for p in _raw:
+        if p.is_dir() and not str(p).endswith(".zarr"):
+            expanded.extend([x for x in natsorted(p.glob("*.*")) if not x.is_dir()])
+        else:
+            expanded.append(p)
+
+    if use_dask is None:
+        use_dask = len(expanded) > 1
+
+    expanded = [p for p in expanded if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGES]
+    if not expanded:
+        raise ValueError(f"No files found in {filenames} after removing subdirectories")
+
+    images = []
+    first_shape = None
+    first_dtype = None
+
+    def make_delayed_array(fp: Path):
+        """Create a dask array for a single file."""
+        delayed_reader = delayed(partial(_read_and_normalize, filepath=fp, normalize_func=_normalize_to_rgb))
+        return da.from_delayed(delayed_reader(), shape=first_shape, dtype=first_dtype)
+
+    for fp in expanded:
+        if first_shape is None:
+            arr0 = _read_and_normalize(filepath=fp, normalize_func=_normalize_to_rgb)
+            first_shape = arr0.shape
+            first_dtype = arr0.dtype
+
+            if use_dask:
+                images.append(make_delayed_array(fp))
+            else:
+                images.append(arr0)
+            continue
+
+        if use_dask:
+            images.append(make_delayed_array(fp))
+        else:
+            images.append(_read_and_normalize(filepath=fp, normalize_func=_normalize_to_rgb))
+
+    if not images:
+        raise ValueError("No images could be read from the provided paths.")
+    if len(images) == 1:
+        return images[0]
+
+    return da.stack(images) if use_dask and stack else (np.stack(images) if stack else images)
+
+
+# Read images from a list of files or a glob/string path
+def read_images(path: str | Path | list[str | Path]) -> list[LayerData]:
+    """
+    Read images from a list of files or a glob/string path.
+    - List: filter by SUPPORTED_IMAGES, build metadata, then lazily read via `lazy_imread`
+      with padding to allow stacking images of different sizes.
+    - Glob/string: preserve previous behavior using `dask_image.imread.imread`.
+    """
     if isinstance(path, list):
-        first_path = Path(path[0])
-        suffixes = first_path.suffixes
-        ext = "".join(suffixes) if suffixes else ""
-        pattern = f"*{ext}" if ext else "*"
-        path = str(first_path.parent / pattern)
-    # Retrieve filepaths exactly as parsed by pims
-    filepaths = []
-    for filepath in Path(path).parent.glob(Path(path).name):
-        relpath = Path(filepath).parts[-3:]
-        filepaths.append(str(Path(*relpath)))
+        filepaths: list[Path] = _filter_extensions(path, valid_extensions=SUPPORTED_IMAGES)
+        if not filepaths:
+            raise OSError(f"No supported images were found in list with extensions {SUPPORTED_IMAGES}.")
+        filepaths = natsorted(filepaths, key=str)
+
+        relative_paths = [str(Path(*fp.parts[-3:])) for fp in filepaths]
+        params = {
+            "name": "images",
+            "metadata": {
+                "paths": relative_paths,
+                "root": str(filepaths[0].parent),
+            },
+        }
+        data = lazy_imread(filepaths, use_dask=True, stack=True)
+        return [(data, params, "image")]
+
+    # Original behavior for glob/string
+    image_path = Path(path)
+    matches = list(image_path.parent.glob(image_path.name))
+
+    if not matches:
+        raise FileNotFoundError(f"No files found for pattern: {image_path}")
+    if len(matches) > 1:
+        raise ValueError(
+            f"Multiple files match the pattern '{image_path.name}' for this non-list path input, "
+            f"but this usage expects the pattern to resolve to a single image: {matches}"
+        )
+
+    # Exactly 1 match
+    image_path = matches[0]
+
+    filepaths = [str(Path(*image_path.parts[-3:]))]
     params = {
         "name": "images",
         "metadata": {
-            "paths": natsorted(filepaths),
-            "root": str(Path(path).parent),
+            "paths": filepaths,
+            "root": str(image_path.parent),
         },
     }
 
-    # https://github.com/soft-matter/pims/issues/452
-    if len(filepaths) == 1:
-        path = next(Path(path).parent.glob(Path(path).name), None)
-        if path is None:
-            raise FileNotFoundError(f"No files found for pattern: {path}")
-    return [(imread(path), params, "image")]
+    return [(imread(str(image_path)), params, "image")]
 
 
+# Helper to populate keypoint layer metadata
 def _populate_metadata(
     header: misc.DLCHeader,
     *,
@@ -156,7 +266,7 @@ def _populate_metadata(
 
 def _load_superkeypoints_diagram(super_animal: str):
     path = str(Path(__file__).parent / "assets" / f"{super_animal}.jpg")
-    return imread(path), {"root": ""}, "images"
+    return imread(path), {"root": ""}, "image"
 
 
 def _load_superkeypoints(super_animal: str):
@@ -170,6 +280,7 @@ def _load_config(config_path: str):
         return yaml.safe_load(file)
 
 
+# Read config file and create keypoint layer metadata
 def read_config(configname: str) -> list[LayerData]:
     config = _load_config(configname)
     header = misc.DLCHeader.from_config(config)
@@ -191,6 +302,7 @@ def read_config(configname: str) -> list[LayerData]:
     return [(None, metadata, "points")]
 
 
+# Read HDF file and create keypoint layers
 def read_hdf(filename: str) -> list[LayerData]:
     config_path = misc.find_project_config_path(filename)
     layers = []
@@ -249,6 +361,7 @@ def read_hdf(filename: str) -> list[LayerData]:
     return layers
 
 
+# Video reader using OpenCV
 class Video:
     def __init__(self, video_path):
         if not Path(video_path).is_file():
@@ -292,13 +405,14 @@ class Video:
 def read_video(filename: str, opencv: bool = True):
     if opencv:
         stream = Video(filename)
-        shape = stream.width, stream.height, 3
+        # NOTE OpenCV stream expects H, W, C
+        shape = stream.height, stream.width, 3
 
         def _read_frame(ind):
             stream.set_to_frame(ind)
             return stream.read_frame()
 
-        lazy_imread = delayed(_read_frame)
+        lazy_reader = delayed(_read_frame)
     else:  # pragma: no cover
         from pims import PyAVReaderIndexed
 
@@ -308,9 +422,9 @@ def read_video(filename: str, opencv: bool = True):
             raise ImportError("`pip install av` to use the PyAV video reader.") from None
 
         shape = stream.frame_shape
-        lazy_imread = delayed(stream.get_frame)
+        lazy_reader = delayed(stream.get_frame)
 
-    movie = da.stack([da.from_delayed(lazy_imread(i), shape=shape, dtype=np.uint8) for i in range(len(stream))])
+    movie = da.stack([da.from_delayed(lazy_reader(i), shape=shape, dtype=np.uint8) for i in range(len(stream))])
     elems = list(Path(filename).parts)
     elems[-2] = "labeled-data"
     elems[-1] = Path(elems[-1]).stem  # + Path(filename).suffix
@@ -321,4 +435,4 @@ def read_video(filename: str, opencv: bool = True):
             "root": root,
         },
     }
-    return [(movie, params)]
+    return [(movie, params, "image")]
