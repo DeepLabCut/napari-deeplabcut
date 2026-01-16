@@ -14,7 +14,7 @@ def test_guess_continuous():
     assert not _widgets.guess_continuous(np.array(list("abc")))  # Strings → categorical
 
 
-def test_keypoint_controls(viewer, qtbot):
+def test_keypoint_controls(viewer):
     controls = _widgets.KeypointControls(viewer)
     controls.label_mode = "loop"
     assert controls._radio_group.checkedButton().text() == "Loop"
