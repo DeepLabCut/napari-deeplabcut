@@ -84,12 +84,12 @@ def get_folder_parser(path):
     for file in Path(path).iterdir():
         if file.name.endswith(".h5"):
             datafile = str(file)
-            break
-    if datafile:
-        try:
-            layers.extend(read_hdf(str(datafile)))
-        except Exception as e:
-            raise RuntimeError(f"Could not read annotation data from {datafile}") from e
+        if datafile:
+            try:
+                layers.extend(read_hdf(str(datafile)))
+                break  # one h5 per annotated video
+            except Exception as e:
+                raise RuntimeError(f"Could not read annotation data from {datafile}") from e
 
     return lambda _: layers
 
@@ -124,6 +124,8 @@ def lazy_imread(
         raise ValueError(f"No files found in {filenames} after removing subdirectories")
 
     def _normalize_to_rgb(arr: np.ndarray) -> np.ndarray:
+        if arr is None:
+            raise OSError("Could not read image.")
         if arr.ndim == 2:
             return cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
         if arr.ndim == 3 and arr.shape[2] == 4:
@@ -144,7 +146,7 @@ def lazy_imread(
             if use_dask:
                 images.append(
                     da.from_delayed(
-                        delayed(lambda p: _normalize_to_rgb(cv2.imread(str(p), cv2.IMREAD_UNCHANGED)))(fp),
+                        delayed(lambda p=fp: _normalize_to_rgb(cv2.imread(str(p), cv2.IMREAD_UNCHANGED)))(),
                         shape=first_shape,
                         dtype=first_dtype,
                     )
@@ -155,7 +157,7 @@ def lazy_imread(
         if use_dask:
             images.append(
                 da.from_delayed(
-                    delayed(lambda p: _normalize_to_rgb(cv2.imread(str(p), cv2.IMREAD_UNCHANGED)))(fp),
+                    delayed(lambda p=fp: _normalize_to_rgb(cv2.imread(str(p), cv2.IMREAD_UNCHANGED)))(),
                     shape=first_shape,
                     dtype=first_dtype,
                 )
@@ -181,7 +183,7 @@ def read_images(path: str | Path | list[str | Path]) -> list[LayerData]:
         filepaths: list[Path] = _filter_extensions(path, valid_extensions=SUPPORTED_IMAGES)
         if not filepaths:
             raise OSError(f"No supported images were found in list with extensions {SUPPORTED_IMAGES}.")
-        filepaths = [Path(p) for p in natsorted([str(p) for p in filepaths])]
+        filepaths = natsorted(filepaths, key=str)
 
         relative_paths = [str(Path(*fp.parts[-3:])) for fp in filepaths]
         params = {
@@ -191,23 +193,23 @@ def read_images(path: str | Path | list[str | Path]) -> list[LayerData]:
                 "root": str(filepaths[0].parent),
             },
         }
-        data = lazy_imread(filepaths, use_dask=True, stack=True)  # disable padding for now
+        data = lazy_imread(filepaths, use_dask=True, stack=True)
         return [(data, params, "image")]
 
     # Original behavior for glob/string
-    pathp = Path(path)
-    filepaths: list[str] = [str(Path(*p.parts[-3:])) for p in pathp.parent.glob(pathp.name)]
+    image_path = Path(path)
+    filepaths: list[str] = [str(Path(*p.parts[-3:])) for p in image_path.parent.glob(image_path.name)]
     params = {
         "name": "images",
         "metadata": {
             "paths": natsorted(filepaths),
-            "root": str(pathp.parent),
+            "root": str(image_path.parent),
         },
     }
-    matches = list(pathp.parent.glob(pathp.name))
+    matches = list(image_path.parent.glob(image_path.name))
     if len(matches) == 1:
-        pathp = matches[0]
-    return [(imread(str(pathp)), params, "image")]
+        image_path = matches[0]
+    return [(imread(str(image_path)), params, "image")]
 
 
 def _populate_metadata(
