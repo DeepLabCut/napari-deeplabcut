@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 DEBUG = False
 if DEBUG:
     logger.setLevel(logging.DEBUG)
+    import debugpy
 
 
 @dataclass
@@ -55,8 +56,8 @@ class TrackingWorker(QObject):
         model = None
         try:
             # Choose model by name from your TrackerType (cfg.tracker.value.name)
-            # if DEBUG:
-            #     debugpy.debug_this_thread()
+            if DEBUG:
+                debugpy.debug_this_thread()
             model_name = cfg.tracker_name
             try:
                 model_cls = AVAILABLE_TRACKERS[model_name]["class"]
@@ -95,12 +96,6 @@ class TrackingWorker(QObject):
                 self.trackingStopped.emit()
                 return
 
-            # Old : update the worker cfg & keep existing signal type
-            # cfg.keypoints = output.keypoints
-            # cfg.keypoint_features = output.keypoint_features
-            # self.trackingFinished.emit(cfg)
-
-            # Use the new signal type only and keep cfg immutable
             self.trackingFinished.emit(output)
         finally:
             torch.cuda.empty_cache()

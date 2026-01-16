@@ -83,7 +83,6 @@ class TrackingControls(QWidget):
         self._reference_spinbox = QSpinBox()
         self._reference_spinbox.setReadOnly(True)
         self._reference_spinbox.setButtonSymbols(QSpinBox.NoButtons)
-        # self._reference_spinbox.setEnabled(False)
         self._updating_controls = False
         ### Backward
         self._backward_slider = QSlider(Qt.Horizontal)
@@ -316,7 +315,6 @@ class TrackingControls(QWidget):
                 current_frame + self._backward_spinbox_relative.value()
             )  # see _backward_update
 
-            # self._viewer.dims.current_step = (current_frame, *self._viewer.dims.current_step[1:])
         finally:
             self._updating_controls = False
 
@@ -521,16 +519,13 @@ class TrackingControls(QWidget):
     def _build_layout(self):
         # Layout
         self.setLayout(QVBoxLayout())
-        # self._tracking_method_combo.addItems(["Cotracker", "PIP"])
         ## Model selection
         self._tracking_method_combo.addItems(AVAILABLE_TRACKERS.keys())
-        # self._tracking_method_combo.setCurrentText("Cotracker")
         self._tracking_method_combo.setCurrentIndex(0)
 
         _model_info_layout = QHBoxLayout()
         _model_info_layout.addWidget(QLabel("Tracker"))
         _model_info_layout.addWidget(self._model_info_button)
-        # _model_info_layout.addStretch(1)
 
         _tracking_method_layout = QHBoxLayout()
         _tracking_method_layout.addLayout(_model_info_layout)
@@ -561,6 +556,7 @@ class TrackingControls(QWidget):
         ## Frame range controls
         range_controls_layout = QGridLayout()  # 3 by 5
         self._backward_slider.setRange(-100, 0)
+        # NOTE : check why this is not inverting the slider appearance as expected
         # self._backward_slider.setInvertedAppearance(True)
         range_controls_layout.addWidget(self._backward_slider, 0, 0, 1, 2)
         self._backward_spinbox_absolute.setRange(0, 100)
@@ -598,8 +594,6 @@ class TrackingControls(QWidget):
         range_controls_layout.addWidget(self._reference_spinbox, 1, 2)
         _ref_label.setAlignment(Qt.AlignCenter)
         range_controls_layout.addWidget(_ref_label, 0, 2)
-        # self._set_ref_button.setText("Set")
-        # range_controls_layout.addWidget(self._set_ref_button, 2, 2)
         self._forward_slider.setRange(0, 100)
         range_controls_layout.addWidget(self._forward_slider, 0, 3, 1, 2)
         self._forward_spinbox_absolute.setRange(0, 100)
@@ -637,26 +631,27 @@ class TrackingControls(QWidget):
             return QIcon.fromTheme(name, style.standardIcon(fallback))
 
         tracking_controls_layout = QGridLayout()  # 2 by 3
+        # NOTE : leaving previous unicode characters as comments for reference
         # self._tracking_backward_button.setText("⇤")
+        # self._tracking_backward_end_button.setText("⇤⇤")
+        # self._tracking_stop_button.setText("□")
+        # self._tracking_forward_button.setText("⇥")
+        # self._tracking_forward_end_button.setText("⇥⇥")
+        # self._tracking_bothway_button.setText("↹")
         self._tracking_backward_button.setIcon(themed_icon("go-previous", QStyle.SP_ArrowLeft))
         tracking_controls_layout.addWidget(self._tracking_backward_button, 0, 0)
-        # self._tracking_backward_end_button.setText("⇤⇤")
         self._tracking_backward_end_button.setIcon(themed_icon("media-seek-backward", QStyle.SP_MediaSeekBackward))
         tracking_controls_layout.addWidget(self._tracking_backward_end_button, 1, 0)
 
-        # self._tracking_stop_button.setText("□")
         self._tracking_stop_button.setIcon(themed_icon("media-playback-stop", QStyle.SP_MediaStop))
         tracking_controls_layout.addWidget(self._tracking_stop_button, 0, 1)
 
         self._tracking_forward_button.setIcon(themed_icon("go-next", QStyle.SP_ArrowRight))
-        # self._tracking_forward_button.setText("⇥")
         tracking_controls_layout.addWidget(self._tracking_forward_button, 0, 2)
-        # self._tracking_forward_end_button.setText("⇥⇥")
         self._tracking_forward_end_button.setIcon(themed_icon("media-seek-forward", QStyle.SP_MediaSeekForward))
         tracking_controls_layout.addWidget(self._tracking_forward_end_button, 1, 2)
 
-        # self._tracking_bothway_button.setText("↹")
-        # TODO : better icon ? Not really any standard icon for "both way"
+        # NOTE: Find a better icon ? Not really any standard icon for "both way"
         self._tracking_bothway_button.setIcon(themed_icon("view-refresh", QStyle.SP_BrowserReload))
         tracking_controls_layout.addWidget(self._tracking_bothway_button, 1, 1)
 

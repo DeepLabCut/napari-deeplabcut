@@ -221,7 +221,7 @@ class Cotracker3(TrackingModel):
             .float()
             .permute(0, 3, 1, 2)[None]
         )  # (1, T, 3, H, W)
-        # logger.debug(f"Video chunk shape: {video_chunk.shape}, Queries shape: {queries.shape}")
+        logger.debug(f"Video chunk shape: {video_chunk.shape}, Queries shape: {queries.shape}")
         return self.model(
             video_chunk,
             is_first_step=is_first_step,
