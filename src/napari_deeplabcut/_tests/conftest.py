@@ -22,8 +22,13 @@ os.environ["NAPARI_ASYNC"] = "0"  # avoid async teardown surprises in tests
 def viewer(make_napari_viewer_proxy):
     viewer = make_napari_viewer_proxy()
 
-    # Safer : explicitly add the dock widgets
-    keypoints_dock_widget, keypoints_plugin_widget = viewer.window.add_plugin_dock_widget(
+    # Explicitly add the dock widgets
+    # NOTE The old approach of opening every plugin menu
+    # with "napari-deeplabcut" in the name is not reliable
+    # and is not recommended.
+
+    #  keypoints_dock_widget, keypoints_plugin_widget
+    _, _ = viewer.window.add_plugin_dock_widget(
         "napari-deeplabcut",
         "Keypoint controls",
     )
@@ -34,12 +39,12 @@ def viewer(make_napari_viewer_proxy):
         # proactively close dock widgets to drop any lingering Qt refs
         try:
             # close all added dock widgets (if any) before viewer is closed
-            # for dw in list(viewer.window._qt_window.findChildren(type(viewer.window._qt_window))):
             for dw in list(viewer.window._qt_window.findChildren(QDockWidget)):
                 # defensive: some Qt objects can be None during shutdown
                 if hasattr(dw, "close"):
                     dw.close()
         except Exception:
+            # bail if viewer or its window is already gone
             pass
 
 

@@ -304,7 +304,7 @@ def read_hdf(filename: str) -> list[LayerData]:
     config_path = misc.find_project_config_path(filename)
     layers = []
     for file in Path(filename).parent.glob(Path(filename).name):
-        temp = pd.read_hdf(file)
+        temp = pd.read_hdf(str(file))
         temp = misc.merge_multiple_scorers(temp)
         header = misc.DLCHeader(temp.columns)
         temp = temp.droplevel("scorer", axis=1)

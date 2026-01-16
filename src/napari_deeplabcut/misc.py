@@ -189,7 +189,7 @@ class DLCHeader:
 
 class CycleEnumMeta(EnumMeta):
     def __new__(metacls, cls, bases, classdict, **kwargs):
-        enum_ = super().__new__(metacls, cls, bases, classdict)
+        enum_ = super().__new__(metacls, cls, bases, classdict, **kwargs)
         enum_._cycle = cycle(enum_._member_map_[name] for name in enum_._member_names_)
         return enum_
 
