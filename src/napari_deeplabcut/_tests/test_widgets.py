@@ -3,6 +3,7 @@ import types
 
 import numpy as np
 import pytest
+from qtpy.QtSvgWidgets import QSvgWidget
 from vispy import keys
 
 from napari_deeplabcut import _widgets
@@ -331,8 +332,6 @@ def test_display_shortcuts_dialog(viewer, qtbot):
     # Ensure the SVG widget is present
     found_svg = False
     for child in dlg.children():
-        from qtpy.QtSvgWidgets import QSvgWidget
-
         if isinstance(child, QSvgWidget):
             found_svg = True
             break

@@ -255,10 +255,9 @@ def test_write_hdf_machine_pred_no_gt(tmp_path, fake_keypoints):
     project_root = tmp_path / "proj"
     project_root.mkdir()
 
-    # --- IMPORTANT ---
     # The writer looks for config.yaml at Path(root).parents[1] / "config.yaml".
     # With root = str(project_root), that is two levels above 'proj'.
-    cfg_path = Path(str(project_root)).parents[1] / "config.yaml"
+    cfg_path = project_root.parents[1] / "config.yaml"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text("scorer: alice")
 
