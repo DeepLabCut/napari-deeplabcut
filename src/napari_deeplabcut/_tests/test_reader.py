@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from PIL import Image
 from skimage.io import imsave
 
 from napari_deeplabcut import _reader
@@ -110,3 +111,40 @@ def test_read_video(video_path):
     assert dict_["metadata"].get("root")
     assert array.shape[0] == 5
     assert array[0].compute().shape == (50, 50, 3)
+
+
+def test_load_superkeypoints(superkeypoints_json, monkeypatch):
+    module_dir = superkeypoints_json["module_dir"]
+    super_animal = superkeypoints_json["super_animal"]
+    expected = superkeypoints_json["data"]
+
+    # Fake the module's __file__
+    fake_module_file = module_dir / "_reader_fake.py"
+    fake_module_file.write_text("# fake module")
+    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_module_file))
+
+    out = _reader._load_superkeypoints(super_animal)
+    assert out == expected
+
+
+def test_load_superkeypoints_diagram(superkeypoints_json, monkeypatch):
+    module_dir = superkeypoints_json["module_dir"]
+    assets_dir = superkeypoints_json["assets_dir"]
+    super_animal = superkeypoints_json["super_animal"]
+
+    # Create diagram file in module_dir/assets/
+
+    img = Image.new("RGB", (10, 10), "white")
+    img.save(assets_dir / f"{super_animal}.jpg")
+
+    # Patch module __file__ to point to module_dir
+    fake_module_file = module_dir / "_reader_fake.py"
+    fake_module_file.write_text("# fake")
+    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_module_file))
+
+    # Run it
+    array, meta, layer_type = _reader._load_superkeypoints_diagram(super_animal)
+
+    assert layer_type == "images"
+    assert meta == {"root": ""}
+    assert tuple(array.shape[-3:-1]) == (10, 10)

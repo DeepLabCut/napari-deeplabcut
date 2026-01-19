@@ -3,6 +3,7 @@ import types
 
 import numpy as np
 import pytest
+import yaml
 from qtpy.QtSvgWidgets import QSvgWidget
 from vispy import keys
 
@@ -337,3 +338,38 @@ def test_display_shortcuts_dialog(viewer, qtbot):
             break
 
     assert found_svg, "Shortcuts dialog should contain a QSvgWidget with the shortcuts image."
+
+
+# NOTE SuperAnimal keypoints functionality and testing
+# may need an overhaul in the future
+def test_widget_load_superkeypoints_diagram(viewer, qtbot, points, superkeypoints_assets):
+    controls = _widgets.KeypointControls(viewer)
+    qtbot.add_widget(controls)
+
+    # Inject conversion table into the existing Points layer
+    layer = points
+    super_animal = superkeypoints_assets["super_animal"]
+    layer.metadata["tables"] = {super_animal: {"kp1": "SK1", "kp2": "SK2"}}
+
+    n_layers_before = len(viewer.layers)
+    controls.load_superkeypoints_diagram()
+
+    assert len(viewer.layers) == n_layers_before + 1
+    assert list(layer.properties["label"]) == ["kp1", "kp2"]
+    assert controls._keypoint_mapping_button.text() == "Map keypoints"
+
+
+def test_widget_map_keypoints_writes_to_config(viewer, qtbot, mapped_points, config_path):
+    controls = _widgets.KeypointControls(viewer)
+    qtbot.add_widget(controls)
+
+    _, super_animal, bp1, bp2 = mapped_points
+    controls._map_keypoints(super_animal)
+
+    with open(config_path, encoding="utf-8") as fh:
+        cfg = yaml.safe_load(fh)
+    assert "SuperAnimalConversionTables" in cfg
+    assert cfg["SuperAnimalConversionTables"][super_animal] == {
+        bp1: "SK1",
+        bp2: "SK2",
+    }

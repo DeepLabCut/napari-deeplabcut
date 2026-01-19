@@ -771,6 +771,8 @@ class KeypointControls(QWidget):
         self._keypoint_mapping_button.clicked.connect(lambda: self._map_keypoints(super_animal))
 
     def _map_keypoints(self, super_animal: str):
+        # NOTE : this may need review in the future
+        # as there are some robustness/safety issues
         points_layer = None
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata.get("tables"):
@@ -799,6 +801,7 @@ class KeypointControls(QWidget):
                 strict=False,
             )
         )
+        cfg["SuperAnimalConversionTables"] = conversion_tables
         _write_config(config_path, cfg)
         self.viewer.status = "Mapping to superkeypoint set successfully saved"
 
