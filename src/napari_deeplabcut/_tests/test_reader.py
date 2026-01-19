@@ -238,7 +238,7 @@ def test_lazy_imread_grayscale_and_rgba(tmp_path):
     gray = (np.random.rand(10, 10) * 255).astype(np.uint8)
     rgba = (np.random.rand(10, 10, 4) * 255).astype(np.uint8)
     p1, p2 = tmp_path / "g.png", tmp_path / "r.png"
-    cv2.imwrite(str(p1), gray)  # cv2 writes BGR/GRAY
+    cv2.imwrite(str(p1), gray)  # cv2 writes BGR or grayscale by default
     cv2.imwrite(str(p2), cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
     res = _reader.lazy_imread([p1, p2], use_dask=False, stack=False)
     assert all(img.shape[-1] == 3 for img in res)

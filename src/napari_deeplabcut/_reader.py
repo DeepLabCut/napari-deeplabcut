@@ -1,6 +1,5 @@
 import json
 from collections.abc import Callable, Sequence
-from functools import partial
 from pathlib import Path
 
 import cv2
@@ -114,12 +113,12 @@ def lazy_imread(
     use_dask: bool | None = None,
     stack: bool = True,
 ):
-    _raw = [Path(p) for p in filenames] if isinstance(filenames, (list, tuple)) else [Path(filenames)]
-    if not _raw:
+    raw_paths = [Path(p) for p in filenames] if isinstance(filenames, (list, tuple)) else [Path(filenames)]
+    if not raw_paths:
         raise ValueError("No files found")
 
     expanded: list[Path] = []
-    for p in _raw:
+    for p in raw_paths:
         if p.is_dir() and not str(p).endswith(".zarr"):
             expanded.extend([x for x in natsorted(p.glob("*.*")) if not x.is_dir()])
         else:
@@ -138,8 +137,11 @@ def lazy_imread(
 
     def make_delayed_array(fp: Path):
         """Create a dask array for a single file."""
-        delayed_reader = delayed(partial(_read_and_normalize, filepath=fp, normalize_func=_normalize_to_rgb))
-        return da.from_delayed(delayed_reader(), shape=first_shape, dtype=first_dtype)
+        return da.from_delayed(
+            delayed(_read_and_normalize)(filepath=fp, normalize_func=_normalize_to_rgb),
+            shape=first_shape,
+            dtype=first_dtype,
+        )
 
     for fp in expanded:
         if first_shape is None:
@@ -266,7 +268,7 @@ def _populate_metadata(
 
 def _load_superkeypoints_diagram(super_animal: str):
     path = str(Path(__file__).parent / "assets" / f"{super_animal}.jpg")
-    return imread(path), {"root": ""}, "image"
+    return imread(path), {"name": f"{super_animal}_diagram", "metadata": {"root": ""}}, "image"
 
 
 def _load_superkeypoints(super_animal: str):
