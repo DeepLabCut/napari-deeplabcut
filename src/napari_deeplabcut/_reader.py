@@ -172,10 +172,6 @@ def _lazy_imread(
     if use_dask is None:
         use_dask = len(expanded) > 1
 
-    expanded = [p for p in expanded if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGES]
-    if not expanded:
-        raise ValueError(f"No files found in {filenames} after removing subdirectories")
-
     images = []
     first_shape = None
     first_dtype = None
