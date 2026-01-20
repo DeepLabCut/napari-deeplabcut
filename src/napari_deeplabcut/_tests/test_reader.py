@@ -113,38 +113,66 @@ def test_read_video(video_path):
     assert array[0].compute().shape == (50, 50, 3)
 
 
-def test_load_superkeypoints(superkeypoints_json, monkeypatch):
-    module_dir = superkeypoints_json["module_dir"]
-    super_animal = superkeypoints_json["super_animal"]
-    expected = superkeypoints_json["data"]
+@pytest.mark.parametrize(
+    "exists,expected_exception",
+    [
+        (True, None),
+        (False, FileNotFoundError),
+    ],
+)
+def test_load_superkeypoints(monkeypatch, tmp_path, exists):
+    """Test loading of superkeypoints JSON with and without the file present."""
+    module_dir = tmp_path / "module"
+    assets_dir = module_dir / "assets"
+    assets_dir.mkdir(parents=True)
 
-    # Fake the module's __file__
-    fake_module_file = module_dir / "_reader_fake.py"
-    fake_module_file.write_text("# fake module")
-    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_module_file))
+    super_animal = "fake"
+    json_path = assets_dir / f"{super_animal}.json"
 
-    out = _reader._load_superkeypoints(super_animal)
-    assert out == expected
+    if exists:
+        json_path.write_text('{"SK1": [1, 2]}')
+
+    # Patch module __file__
+    fake_file = module_dir / "_reader_fake.py"
+    fake_file.write_text("# fake module")
+    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_file))
+
+    if exists:
+        assert _reader._load_superkeypoints(super_animal) == {"SK1": [1, 2]}
+    else:
+        with pytest.raises(FileNotFoundError):
+            _reader._load_superkeypoints(super_animal)
 
 
-def test_load_superkeypoints_diagram(superkeypoints_json, monkeypatch):
-    module_dir = superkeypoints_json["module_dir"]
-    assets_dir = superkeypoints_json["assets_dir"]
-    super_animal = superkeypoints_json["super_animal"]
+@pytest.mark.parametrize(
+    "exists,expected_exception",
+    [
+        (True, None),
+        (False, FileNotFoundError),
+    ],
+)
+def test_load_superkeypoints_diagram(monkeypatch, tmp_path, exists):
+    """Test loading of superkeypoints diagram with and without the file present."""
+    module_dir = tmp_path / "module"
+    assets_dir = module_dir / "assets"
+    assets_dir.mkdir(parents=True)
 
-    # Create diagram file in module_dir/assets/
+    super_animal = "fake"
+    jpg_path = assets_dir / f"{super_animal}.jpg"
 
-    img = Image.new("RGB", (10, 10), "white")
-    img.save(assets_dir / f"{super_animal}.jpg")
+    if exists:
+        Image.new("RGB", (10, 10), "white").save(jpg_path)
 
-    # Patch module __file__ to point to module_dir
-    fake_module_file = module_dir / "_reader_fake.py"
-    fake_module_file.write_text("# fake")
-    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_module_file))
+    # Patch module __file__
+    fake_file = module_dir / "_reader_fake.py"
+    fake_file.write_text("# fake")
+    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_file))
 
-    # Run it
-    array, meta, layer_type = _reader._load_superkeypoints_diagram(super_animal)
-
-    assert layer_type == "images"
-    assert meta == {"root": ""}
-    assert tuple(array.shape[-3:-1]) == (10, 10)
+    if exists:
+        array, meta, layer_type = _reader._load_superkeypoints_diagram(super_animal)
+        assert layer_type == "images"
+        assert meta == {"root": ""}
+        assert tuple(array.shape[-3:-1]) == (10, 10)
+    else:
+        with pytest.raises(FileNotFoundError):
+            _reader._load_superkeypoints_diagram(super_animal)
