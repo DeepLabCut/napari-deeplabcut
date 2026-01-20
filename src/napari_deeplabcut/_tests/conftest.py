@@ -157,32 +157,6 @@ def video_path(tmp_path_factory):
 
 
 @pytest.fixture
-def superkeypoints_json(tmp_path):
-    """
-    Create a directory structure that mimics:
-    <module_dir>/assets/<super_animal>.json
-    """
-    module_dir = tmp_path / "module"
-    assets_dir = module_dir / "assets"
-    assets_dir.mkdir(parents=True)
-
-    data = {
-        "SK1": [10.0, 20.0],
-        "SK2": [30.0, 40.0],
-    }
-
-    json_path = assets_dir / "fake.json"
-    json_path.write_text(json.dumps(data))
-
-    return {
-        "module_dir": module_dir,
-        "assets_dir": assets_dir,
-        "super_animal": "fake",
-        "data": data,
-    }
-
-
-@pytest.fixture
 def superkeypoints_assets(tmp_path, monkeypatch):
     """
     Create a fake module dir with the expected assets layout:
