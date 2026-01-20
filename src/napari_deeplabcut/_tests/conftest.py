@@ -211,6 +211,8 @@ def mapped_points(points, superkeypoints_assets, config_path):
     superkpts = superkeypoints_assets["data"]
 
     # Required by _map_keypoints to locate and write config.yaml
+    # NOTE: This relies on config_path pointing to a file directly under the
+    # project directory, so that Path(config_path).parent is the project root.
     layer.metadata["project"] = str(Path(config_path).parent)
     header = layer.metadata["header"]
     bp1, bp2 = header.bodyparts[:2]

@@ -7,6 +7,8 @@ from skimage.io import imread
 
 from napari_deeplabcut import _writer, misc
 
+rng = np.random.default_rng(42)
+
 
 #  Basic tests
 def test_write_config(tmp_path):
@@ -22,7 +24,7 @@ def test_write_config(tmp_path):
 
 
 def test_write_image(tmp_path):
-    img = (np.random.rand(10, 10) * 255).astype(np.uint8)
+    img = (rng.random((10, 10)) * 255).astype(np.uint8)
     output = tmp_path / "test.png"
 
     _writer._write_image(img, str(output))
@@ -81,7 +83,7 @@ def test_form_df_multi_animal(fake_keypoints):
     metadata = _fake_metadata_for_df(fake_keypoints, [f"img{i}.png" for i in range(n)])
 
     # inds + (x,y)
-    data = np.column_stack([np.arange(n), np.random.rand(n), np.random.rand(n)])
+    data = np.column_stack([np.arange(n), rng.random(n), rng.random(n)])
 
     df = _writer._form_df(data, metadata)
 
@@ -116,7 +118,7 @@ def test_form_df_single_animal(fake_keypoints):
     metadata = _fake_metadata_for_df(df_single, [f"img{i}.png" for i in range(n)])
 
     # inds + (x,y)
-    points = np.column_stack([np.arange(n), np.random.rand(n), np.random.rand(n)])
+    points = np.column_stack([np.arange(n), rng.random(n), rng.random(n)])
     out = _writer._form_df(points, metadata)
 
     assert isinstance(out, pd.DataFrame)
@@ -166,8 +168,8 @@ def test_write_hdf_basic(tmp_path, fake_keypoints):
     points = np.column_stack(
         [
             np.arange(n_rows),
-            np.random.rand(n_rows),
-            np.random.rand(n_rows),
+            rng.random(n_rows),
+            rng.random(n_rows),
         ]
     )
 
@@ -230,8 +232,8 @@ def test_write_hdf_machine_prediction_merge(tmp_path, fake_keypoints):
     points = np.column_stack(
         [
             np.arange(n_rows),
-            np.random.rand(n_rows),
-            np.random.rand(n_rows),
+            rng.random(n_rows),
+            rng.random(n_rows),
         ]
     )
 
@@ -291,8 +293,8 @@ def test_write_hdf_machine_pred_no_gt(tmp_path, fake_keypoints):
     points = np.column_stack(
         [
             np.arange(n_rows),
-            np.random.rand(n_rows),
-            np.random.rand(n_rows),
+            rng.random(n_rows),
+            rng.random(n_rows),
         ]
     )
 
