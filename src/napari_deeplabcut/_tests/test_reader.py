@@ -114,10 +114,10 @@ def test_read_video(video_path):
 
 
 @pytest.mark.parametrize(
-    "exists,expected_exception",
+    "exists",
     [
-        (True, None),
-        (False, FileNotFoundError),
+        True,
+        False,
     ],
 )
 def test_load_superkeypoints(monkeypatch, tmp_path, exists):
@@ -145,10 +145,10 @@ def test_load_superkeypoints(monkeypatch, tmp_path, exists):
 
 
 @pytest.mark.parametrize(
-    "exists,expected_exception",
+    "exists",
     [
-        (True, None),
-        (False, FileNotFoundError),
+        True,
+        False,
     ],
 )
 def test_load_superkeypoints_diagram(monkeypatch, tmp_path, exists):
