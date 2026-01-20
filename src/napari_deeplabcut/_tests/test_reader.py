@@ -267,7 +267,6 @@ def test_read_images_single_glob_pattern(tmp_path):
     p1 = tmp_path / "g_a.png"
     p2 = tmp_path / "g_b.png"
     p3 = tmp_path / "g_c.jpg"  # different extension; should be excluded by '*.png' glob
-    from skimage.io import imsave
 
     imsave(p1, img)
     imsave(p2, img)
