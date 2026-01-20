@@ -95,12 +95,121 @@ def test_read_hdf_new_index(tmp_path_factory, fake_keypoints):
     assert "labeled-data" in image_paths[0]
 
 
+def test_read_images_mixed_extensions_list_input(tmp_path):
+    """List input with mixed extensions (.jpg and .png) should stack and preserve order (natsorted)."""
+    img = (np.random.rand(10, 10, 3) * 255).astype(np.uint8)
+    p_jpg = tmp_path / "img1.jpg"
+    p_png = tmp_path / "img2.png"
+    imsave(p_jpg, img)
+    imsave(p_png, img)
+
+    layers = _reader.read_images([p_jpg, p_png])
+    assert len(layers) == 1
+    data, params, kind = layers[0]
+    assert kind == "image"
+    assert isinstance(data, da.Array)
+    assert data.shape == (2, 10, 10, 3)
+
+    # Ensure metadata paths include both files and are natsorted
+    paths = params["metadata"]["paths"]
+    assert len(paths) == 2
+    assert paths[0].endswith("img1.jpg")
+    assert paths[1].endswith("img2.png")
+
+
+def test_read_images_mixed_extensions_directory_ignores_unsupported(tmp_path):
+    """Directory with .jpg, .png and an unsupported .tif should only include supported images."""
+    img = (np.random.rand(8, 8, 3) * 255).astype(np.uint8)
+    p_jpg = tmp_path / "a.jpg"
+    p_png = tmp_path / "b.png"
+    p_tif = tmp_path / "c.tif"  # unsupported by SUPPORTED_IMAGES in this reader
+    imsave(p_jpg, img)
+    imsave(p_png, img)
+    imsave(p_tif, img)
+
+    layers = _reader.read_images(tmp_path)  # pass directory
+    assert len(layers) == 1
+    data, params, kind = layers[0]
+    assert kind == "image"
+    assert isinstance(data, da.Array)
+    assert data.shape[0] == 2  # only jpg & png included
+
+    # Check metadata "paths" reflect only supported files
+    paths = params["metadata"]["paths"]
+    assert len(paths) == 2
+    assert any(p.endswith("a.jpg") for p in paths)
+    assert any(p.endswith("b.png") for p in paths)
+    assert all(not p.endswith("c.tif") for p in paths)
+
+
+def test_lazy_imread_mixed_extensions_list(tmp_path):
+    """_lazy_imread / lazy_imread should support mixed extensions with stacking and RGB normalization."""
+    img1 = (np.random.rand(12, 9, 3) * 255).astype(np.uint8)
+    img2 = (np.random.rand(12, 9, 3) * 255).astype(np.uint8)
+    p_jpg = tmp_path / "m1.jpg"
+    p_png = tmp_path / "m2.png"
+    imsave(p_jpg, img1)
+    imsave(p_png, img2)
+
+    result = _reader._lazy_imread([p_jpg, p_png], use_dask=True, stack=True)
+    assert isinstance(result, da.Array)
+    assert result.shape == (2, 12, 9, 3)
+    first = result[0].compute()
+    assert first.dtype == np.uint8
+    assert first.shape == (12, 9, 3)
+
+
+def test_read_images_mixed_extensions_globs(tmp_path):
+    """Mixed-extension globs should be supported by passing a list of patterns."""
+    img = (np.random.rand(7, 7, 3) * 255).astype(np.uint8)
+    p1 = tmp_path / "g1.jpg"
+    p2 = tmp_path / "g2.png"
+    p3 = tmp_path / "g3.tif"  # unsupported
+    imsave(p1, img)
+    imsave(p2, img)
+    imsave(p3, img)
+
+    layers = _reader.read_images([str(tmp_path / "*.jpg"), str(tmp_path / "*.png")])
+    assert len(layers) == 1
+    data, params, kind = layers[0]
+    assert kind == "image"
+    assert isinstance(data, da.Array)
+    assert data.shape[0] == 2
+
+    paths = params["metadata"]["paths"]
+    assert len(paths) == 2
+    assert any(p.endswith("g1.jpg") for p in paths)
+    assert any(p.endswith("g2.png") for p in paths)
+    assert all(not p.endswith("g3.tif") for p in paths)
+
+
+def test_read_images_mixed_extensions_tuple_input(tmp_path):
+    """Tuples should behave like lists for mixed extensions."""
+    img = (np.random.rand(6, 6, 3) * 255).astype(np.uint8)
+    p1 = tmp_path / "t1.jpg"
+    p2 = tmp_path / "t2.png"
+    imsave(p1, img)
+    imsave(p2, img)
+
+    layers = _reader.read_images((p1, p2))  # tuple
+    assert len(layers) == 1
+    data, params, kind = layers[0]
+    assert kind == "image"
+    assert isinstance(data, da.Array)
+    assert data.shape == (2, 6, 6, 3)
+
+    paths = params["metadata"]["paths"]
+    assert len(paths) == 2
+    assert paths[0].endswith("t1.jpg")
+    assert paths[1].endswith("t2.png")
+
+
 def test_lazy_imread_single_image(tmp_path):
     img = (np.random.rand(10, 10, 3) * 255).astype(np.uint8)
     path = tmp_path / "img.png"
     imsave(path, img)
 
-    result = _reader.lazy_imread(path, use_dask=False)
+    result = _reader._lazy_imread(path, use_dask=False)
     assert isinstance(result, np.ndarray)
     assert result.shape == img.shape
 
@@ -113,7 +222,7 @@ def test_lazy_imread_multiple_images_equal_shape(tmp_path):
     imsave(path1, img1)
     imsave(path2, img2)
 
-    result = _reader.lazy_imread([path1, path2], use_dask=True)
+    result = _reader._lazy_imread([path1, path2], use_dask=True)
     assert isinstance(result, da.Array)
     assert result.shape == (2, 10, 10, 3)
 
@@ -128,7 +237,7 @@ def test_lazy_imread_mixed_shapes(tmp_path):
 
     # Should fail when stacking mixed shapes without padding
     with pytest.raises(ValueError):
-        _ = _reader.lazy_imread([path1, path2], use_dask=False, stack=True)
+        _ = _reader._lazy_imread([path1, path2], use_dask=False, stack=True)
 
 
 def test_read_images_list_input(tmp_path):
@@ -150,6 +259,32 @@ def test_read_images_list_input(tmp_path):
 def test_read_images_empty_list():
     with pytest.raises(OSError):
         _reader.read_images([])
+
+
+def test_read_images_single_glob_pattern(tmp_path):
+    """A single glob pattern string (e.g., 'dir/*.png') should expand to multiple images."""
+    img = (np.random.rand(5, 5, 3) * 255).astype(np.uint8)
+    p1 = tmp_path / "g_a.png"
+    p2 = tmp_path / "g_b.png"
+    p3 = tmp_path / "g_c.jpg"  # different extension; should be excluded by '*.png' glob
+    from skimage.io import imsave
+
+    imsave(p1, img)
+    imsave(p2, img)
+    imsave(p3, img)
+
+    layers = _reader.read_images(str(tmp_path / "*.png"))
+    assert len(layers) == 1
+    data, params, kind = layers[0]
+    assert kind == "image"
+    # Both .png images must be included
+    assert data.shape[0] == 2
+    paths = params["metadata"]["paths"]
+    assert len(paths) == 2
+    assert any(p.endswith("g_a.png") for p in paths)
+    assert any(p.endswith("g_b.png") for p in paths)
+    # Ensure the .jpg file is not included by the '*.png' glob
+    assert all(not p.endswith("g_c.jpg") for p in paths)
 
 
 def test_video_init_and_properties(video_path):
@@ -214,7 +349,7 @@ def test_lazy_imread_list_no_stack(tmp_path):
     p1, p2 = tmp_path / "a.png", tmp_path / "b.png"
     imsave(p1, img)
     imsave(p2, img)
-    res = _reader.lazy_imread([p1, p2], use_dask=True, stack=False)
+    res = _reader._lazy_imread([p1, p2], use_dask=True, stack=False)
     assert isinstance(res, list) and len(res) == 2
     assert all(isinstance(x, da.Array) for x in res)
 
@@ -240,5 +375,5 @@ def test_lazy_imread_grayscale_and_rgba(tmp_path):
     p1, p2 = tmp_path / "g.png", tmp_path / "r.png"
     cv2.imwrite(str(p1), gray)  # cv2 writes BGR or grayscale by default
     cv2.imwrite(str(p2), cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
-    res = _reader.lazy_imread([p1, p2], use_dask=False, stack=False)
+    res = _reader._lazy_imread([p1, p2], use_dask=False, stack=False)
     assert all(img.shape[-1] == 3 for img in res)
