@@ -107,22 +107,67 @@ def _normalize_to_rgb(arr: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
 
 
-# Lazy image reader that supports directories and lists of files
-def lazy_imread(
-    filenames: str | Path | list[str | Path],
-    use_dask: bool | None = None,
-    stack: bool = True,
-):
-    raw_paths = [Path(p) for p in filenames] if isinstance(filenames, (list, tuple)) else [Path(filenames)]
-    if not raw_paths:
-        raise ValueError("No files found")
+def _expand_image_paths(path: str | Path | list[str | Path] | tuple[str | Path, ...]) -> list[Path]:
+    # Normalize input to list[Path]
+    raw_paths = [Path(p) for p in path] if isinstance(path, (list, tuple)) else [Path(path)]
 
     expanded: list[Path] = []
     for p in raw_paths:
         if p.is_dir() and not str(p).endswith(".zarr"):
-            expanded.extend([x for x in natsorted(p.glob("*.*")) if not x.is_dir()])
+            expanded.extend([x for x in natsorted(p.glob("*.*")) if x.is_file()])
         else:
-            expanded.append(p)
+            matches = list(p.parent.glob(p.name))
+            expanded.extend(matches or [p])
+
+    return [p for p in expanded if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGES]
+
+
+# Lazy image reader that supports directories and lists of files
+def _lazy_imread(
+    filenames: str | Path | list[str | Path],
+    use_dask: bool | None = None,
+    stack: bool = True,
+) -> np.ndarray | da.Array | list[np.ndarray | da.Array]:
+    """Lazily reads one or more images with optional Dask support.
+
+    Resolves file paths using `_expand_image_paths`, ensuring consistent
+    handling of directories, glob patterns, and lists/tuples of paths.
+    Images are normalized to RGB and may be wrapped in Dask delayed
+    objects for lazy loading.
+
+    Behavior:
+        * If a single image is resolved:
+            - The image is read eagerly and returned as a NumPy array.
+        * If multiple images are resolved:
+            - The first image is read eagerly to determine shape and dtype.
+            - Subsequent images are loaded lazily via Dask unless
+              `use_dask=False`.
+            - Stacking behavior is controlled by `stack`.
+
+    Args:
+        filenames (str | Path | list[str | Path]):
+            File path(s), directory, or glob pattern(s) to load.
+        use_dask (bool | None, optional):
+            Whether to load images lazily using Dask.
+            Defaults to `True` when multiple files are found, otherwise
+            `False`.
+        stack (bool, optional):
+            If True, stack images along axis 0 into a single array.
+            If False, return a list of arrays or delayed arrays.
+            Defaults to True.
+
+    Returns:
+        np.ndarray | da.Array | list[np.ndarray | da.Array]:
+            Loaded image data. The return type depends on the number of
+            images found, the `use_dask` flag, and the `stack` option.
+
+    Raises:
+        ValueError: If no supported images are found.
+    """
+    expanded = _expand_image_paths(filenames)
+
+    if not expanded:
+        raise ValueError(f"No supported images were found for input: {filenames}")
 
     if use_dask is None:
         use_dask = len(expanded) > 1
@@ -169,19 +214,42 @@ def lazy_imread(
 
 
 # Read images from a list of files or a glob/string path
-def read_images(path: str | Path | list[str | Path]) -> list[LayerData]:
-    """
-    Read images from a list of files or a glob/string path.
-    - List: filter by SUPPORTED_IMAGES, build metadata, then lazily read via `lazy_imread`
-      with padding to allow stacking images of different sizes.
-    - Glob/string: preserve previous behavior using `dask_image.imread.imread`.
-    """
-    if isinstance(path, list):
-        filepaths: list[Path] = _filter_extensions(path, valid_extensions=SUPPORTED_IMAGES)
-        if not filepaths:
-            raise OSError(f"No supported images were found in list with extensions {SUPPORTED_IMAGES}.")
-        filepaths = natsorted(filepaths, key=str)
+def read_images(path: str | Path | list[str | Path]):
+    """Reads one or multiple images and returns a Napari Image layer.
 
+    Uses `_expand_image_paths` to resolve the input into a list of valid
+    image files. Supports single paths, glob expressions, directories,
+    and lists or tuples of such paths.
+
+    Behavior:
+        * If one file is found:
+            - Loaded using `dask_image.imread.imread`.
+        * If multiple files are found:
+            - Loaded lazily using `lazy_imread` into a stacked image
+              layer.
+
+    Args:
+        path (str | Path | list[str | Path]):
+            Input path(s), directory, or glob pattern(s) to expand into
+            supported image files.
+
+    Returns:
+        list[LayerData]:
+            A list containing one Napari layer tuple of the form
+            `(data, metadata, "image")`.
+
+    Raises:
+        OSError: If no supported images are found after expansion.
+    """
+    filepaths = _expand_image_paths(path)
+
+    if not filepaths:
+        raise OSError(f"No supported images were found in {path}")
+
+    filepaths = natsorted(filepaths, key=str)
+
+    # Multiple images → lazy-imread stack
+    if len(filepaths) > 1:
         relative_paths = [str(Path(*fp.parts[-3:])) for fp in filepaths]
         params = {
             "name": "images",
@@ -190,33 +258,18 @@ def read_images(path: str | Path | list[str | Path]) -> list[LayerData]:
                 "root": str(filepaths[0].parent),
             },
         }
-        data = lazy_imread(filepaths, use_dask=True, stack=True)
+        data = _lazy_imread(filepaths, use_dask=True, stack=True)
         return [(data, params, "image")]
 
-    # Original behavior for glob/string
-    image_path = Path(path)
-    matches = list(image_path.parent.glob(image_path.name))
-
-    if not matches:
-        raise FileNotFoundError(f"No files found for pattern: {image_path}")
-    if len(matches) > 1:
-        raise ValueError(
-            f"Multiple files match the pattern '{image_path.name}' for this non-list path input, "
-            f"but this usage expects the pattern to resolve to a single image: {matches}"
-        )
-
-    # Exactly 1 match
-    image_path = matches[0]
-
-    filepaths = [str(Path(*image_path.parts[-3:]))]
+    # Single image → old behavior
+    image_path = filepaths[0]
     params = {
         "name": "images",
         "metadata": {
-            "paths": filepaths,
+            "paths": [str(Path(*image_path.parts[-3:]))],
             "root": str(image_path.parent),
         },
     }
-
     return [(imread(str(image_path)), params, "image")]
 
 
