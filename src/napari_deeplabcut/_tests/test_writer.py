@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import yaml
 from skimage.io import imread
 
 from napari_deeplabcut import _writer, misc
@@ -16,7 +17,8 @@ def test_write_config(tmp_path):
 
     assert path.exists()
     text = path.read_text()
-    assert "a:" in text and "b:" in text
+    loaded = yaml.safe_load(text)
+    assert loaded == cfg
 
 
 def test_write_image(tmp_path):
@@ -27,7 +29,7 @@ def test_write_image(tmp_path):
 
     assert output.exists()
     loaded = imread(str(output))
-    assert loaded.shape == img.shape
+    np.testing.assert_array_equal(loaded, img)
 
 
 #  Form_df — multi-animal + single-animal
