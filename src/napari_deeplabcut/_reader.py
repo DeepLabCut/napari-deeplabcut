@@ -460,7 +460,7 @@ class Video:
 def read_video(filename: str, opencv: bool = True):
     if opencv:
         stream = Video(filename)
-        # NOTE OpenCV stream expects H, W, C
+        # NOTE construct output shape tuple in (H, W, C) order to match read_frame() data
         shape = stream.height, stream.width, 3
 
         def _read_frame(ind):
