@@ -340,8 +340,9 @@ def test_display_shortcuts_dialog(viewer, qtbot):
     assert found_svg, "Shortcuts dialog should contain a QSvgWidget with the shortcuts image."
 
 
-# NOTE SuperAnimal keypoints functionality and testing
-# may need an overhaul in the future
+# NOTE SuperAnimal keypoints functionality and testing may need an overhaul in the future:
+# these tests currently exercise only a narrow "everything fine" path and rely on specific metadata
+# layout and SuperAnimal conversion-table conventions, which makes them susceptible to API changes
 def test_widget_load_superkeypoints_diagram(viewer, qtbot, points, superkeypoints_assets):
     controls = _widgets.KeypointControls(viewer)
     qtbot.add_widget(controls)
