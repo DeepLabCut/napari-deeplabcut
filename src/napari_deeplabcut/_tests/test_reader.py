@@ -1,3 +1,4 @@
+import cv2
 import dask.array as da
 import numpy as np
 import pandas as pd
@@ -122,6 +123,7 @@ def test_read_images_mixed_extensions_directory_ignores_unsupported(tmp_path):
     img = (np.random.rand(8, 8, 3) * 255).astype(np.uint8)
     p_jpg = tmp_path / "a.jpg"
     p_png = tmp_path / "b.png"
+    assert ".tif" not in _reader.SUPPORTED_IMAGES  # ensure tif is unsupported for this test to be valid
     p_tif = tmp_path / "c.tif"  # unsupported by SUPPORTED_IMAGES in this reader
     imsave(p_jpg, img)
     imsave(p_png, img)
@@ -367,8 +369,6 @@ def test_read_images_list_metadata_paths(tmp_path):
 
 
 def test_lazy_imread_grayscale_and_rgba(tmp_path):
-    import cv2
-
     gray = (np.random.rand(10, 10) * 255).astype(np.uint8)
     rgba = (np.random.rand(10, 10, 4) * 255).astype(np.uint8)
     p1, p2 = tmp_path / "g.png", tmp_path / "r.png"

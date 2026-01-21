@@ -176,7 +176,7 @@ def _lazy_imread(
     first_shape = None
     first_dtype = None
 
-    def make_delayed_array(fp: Path):
+    def make_delayed_array(fp: Path, first_shape=first_shape, first_dtype=first_dtype) -> da.Array:
         """Create a dask array for a single file."""
         return da.from_delayed(
             delayed(_read_and_normalize)(filepath=fp, normalize_func=_normalize_to_rgb),
@@ -191,18 +191,16 @@ def _lazy_imread(
             first_dtype = arr0.dtype
 
             if use_dask:
-                images.append(make_delayed_array(fp))
+                images.append(make_delayed_array(fp, first_shape=first_shape, first_dtype=first_dtype))
             else:
                 images.append(arr0)
             continue
 
         if use_dask:
-            images.append(make_delayed_array(fp))
+            images.append(make_delayed_array(fp, first_shape=first_shape, first_dtype=first_dtype))
         else:
             images.append(_read_and_normalize(filepath=fp, normalize_func=_normalize_to_rgb))
 
-    if not images:
-        raise ValueError("No images could be read from the provided paths.")
     if len(images) == 1:
         return images[0]
 
