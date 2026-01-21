@@ -57,9 +57,9 @@ from napari_deeplabcut._reader import (
 from napari_deeplabcut._writer import _form_df, _write_config, _write_image
 from napari_deeplabcut.misc import (
     build_color_cycles,
+    canonicalize_path,
     encode_categories,
     guarantee_multiindex_rows,
-    to_os_dir_sep,
 )
 
 Tip = namedtuple("Tip", ["msg", "pos"])
@@ -362,12 +362,14 @@ class KeypointMatplotlibCanvas(QWidget):
     Uses keypoints from a specified range of frames to plot them on a t-y axis.
     """
 
+    # FIXME : y axis should be reversed due to napari using top-left as origin
     def __init__(self, napari_viewer, parent=None):
         super().__init__(parent=parent)
 
         self.viewer = napari_viewer
         with mplstyle.context(self.mpl_style_sheet_path):
             self.canvas = FigureCanvas()
+            self.canvas.figure.set_size_inches(4, 2, forward=True)
             self.canvas.figure.set_layout_engine("constrained")
             self.ax = self.canvas.figure.subplots()
         self.toolbar = NapariNavigationToolbar(self.canvas, parent=self)
@@ -714,6 +716,7 @@ class KeypointControls(QWidget):
 
         try:
             window.add_dock_widget(self._matplotlib_canvas, name="Trajectory plot", area="right", tabify=False)
+            self._matplotlib_canvas.canvas.draw_idle()
             self._matplotlib_canvas.hide()
             self._mpl_docked = True
         except Exception as e:
@@ -824,29 +827,46 @@ class KeypointControls(QWidget):
         self._color_scheme_display.setVisible(show)
 
     def _show_trails(self, state):
-        if Qt.CheckState(state) == Qt.CheckState.Checked:
-            if self._trails is None:
-                store = list(self._stores.values())[0]
-                categories = store.layer.properties["id"]
-                if not categories[0]:  # Single animal data
-                    categories = store.layer.properties["label"]
-                inds = encode_categories(categories)
-                temp = np.c_[inds, store.layer.data]
-                cmap = "viridis"
-                for layer in self.viewer.layers:
-                    if isinstance(layer, Points) and layer.metadata:
-                        cmap = layer.metadata["colormap_name"]
-                self._trails = self.viewer.add_tracks(
-                    temp,
-                    tail_length=50,
-                    head_length=50,
-                    tail_width=6,
-                    name="trails",
-                    colormap=cmap,
-                )
-            self._trails.visible = True
-        elif self._trails is not None:
-            self._trails.visible = False
+        if Qt.CheckState(state) != Qt.CheckState.Checked:
+            if self._trails is not None:
+                self._trails.visible = False
+            return
+
+        if self._trails is None:
+            store = list(self._stores.values())[0]
+
+            # Determine coloring mode
+            mode = "label"
+            if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL):
+                mode = "id"
+
+            categories = store.layer.properties.get(mode)
+            # Check for single animal data
+            if categories is None or (mode == "id" and (not categories[0])):
+                mode = "label"
+                categories = store.layer.properties["label"]
+
+            inds = encode_categories(categories, is_path=False, do_sort=False)
+
+            # Build Tracks data
+            temp = np.c_[inds, store.layer.data]
+            cmap = "viridis"
+            for layer in self.viewer.layers:
+                if isinstance(layer, Points) and layer.metadata["colormap_name"]:
+                    cmap = layer.metadata["colormap_name"]
+                    break
+
+            # 5) Create Tracks layer
+            self._trails = self.viewer.add_tracks(
+                temp,
+                colormap=cmap,
+                tail_length=50,
+                head_length=50,
+                tail_width=6,
+                name="trails",
+            )
+
+        self._trails.visible = True
 
     def _form_video_action_menu(self):
         group_box = QGroupBox("Video")
@@ -902,7 +922,8 @@ class KeypointControls(QWidget):
                     },
                 )
                 df = df.iloc[ind : ind + 1]
-                df.index = pd.MultiIndex.from_tuples([Path(output_path).parts[-3:]])
+                canon = canonicalize_path(output_path, 3)
+                df.index = pd.MultiIndex.from_tuples([tuple(canon.split("/"))])
                 filepath = os.path.join(image_layer.metadata["root"], "machinelabels-iter0.h5")
                 if Path(filepath).is_file():
                     df_prev = pd.read_hdf(filepath)
@@ -1009,35 +1030,135 @@ class KeypointControls(QWidget):
                 )
 
     def _remap_frame_indices(self, layer):
-        if not self._images_meta.get("paths"):
-            return
+        """
+        Re-map the frame/time indices in non-Image layers (Points, Shapes, Tracks)
+        to match the currently loaded Image stack order, using canonical path keys.
 
-        new_paths = [to_os_dir_sep(p) for p in self._images_meta["paths"]]
-        paths = layer.metadata.get("paths")
-        if paths is not None and np.any(layer.data):
-            paths_map = dict(zip(range(len(paths)), map(to_os_dir_sep, paths), strict=False))
-            # Discard data if there are missing frames
-            missing = [i for i, path in paths_map.items() if path not in new_paths]
-            if missing:
-                if isinstance(layer.data, list):
-                    inds_to_remove = [i for i, verts in enumerate(layer.data) if verts[0, 0] in missing]
-                else:
-                    inds_to_remove = np.flatnonzero(np.isin(layer.data[:, 0], missing))
-                layer.selected_data = inds_to_remove
-                layer.remove_selected()
-                for i in missing:
-                    paths_map.pop(i)
+        Strategy:
+        1) Build canonical keys (POSIX, last 3 components) for both:
+            - new image paths from self._images_meta["paths"]
+            - layer's stored paths from layer.metadata["paths"]
+        2) If there is no data or no stored paths → noop (just update metadata)
+        3) If lists are identical → noop (just update metadata)
+        4) If sets match but order differs → remap indices; do NOT delete
+        5) If some old keys are missing in the new set → remove only those points,
+            then remap the rest
 
-            # Check now whether there are new frames
-            temp = {k: new_paths.index(v) for k, v in paths_map.items()}
-            data = layer.data
-            if isinstance(data, list):
-                for verts in data:
-                    verts[:, 0] = np.vectorize(temp.get)(verts[:, 0])
-            else:
-                data[:, 0] = np.vectorize(temp.get)(data[:, 0])
-            layer.data = data
-        layer.metadata.update(self._images_meta)
+        Notes:
+        * For Points/Shapes/Labels/etc., frame index is column 0.
+        * For Tracks, the time column is 1 (Napari Tracks format: [track_id, t, y, x, ...]).
+        """
+        pass
+        # # ---- 0) Guard: we only run when images metadata with paths is available
+        # new_paths_raw = self._images_meta.get("paths")
+        # if not new_paths_raw:
+        #     return
+
+        # # ---- 1) Canonicalize path keys
+        # # We must use the exact same canonicalization used everywhere else:
+        # # POSIX separators + last 3 parts (see misc.canonicize_path)
+        # new_keys = [canonicalize_path(p, 3) for p in new_paths_raw]
+
+        # old_paths_raw = (layer.metadata or {}).get("paths") or []
+        # if not old_paths_raw:
+        #     # No old paths on the layer; just sync metadata and exit
+        #     layer.metadata.update(self._images_meta)
+        #     return
+
+        # old_keys = [canonicalize_path(p, 3) for p in old_paths_raw]
+
+        # # If there is no data (empty layer), just sync metadata
+        # data = layer.data
+        # has_data = False
+        # try:
+        #     # Points/Tracks/Shapes support truth-y checks inconsistently; prefer size
+        #     if isinstance(data, list):
+        #         has_data = len(data) > 0
+        #     else:
+        #         # numpy-like
+        #         has_data = (getattr(data, "size", 0) or len(data)) > 0
+        # except Exception:
+        #     has_data = False
+
+        # if not has_data:
+        #     layer.metadata.update(self._images_meta)
+        #     return
+
+        # # ---- 2) If order and content match exactly → nothing to do
+        # if old_keys == new_keys:
+        #     layer.metadata.update(self._images_meta)
+        #     return
+
+        # # ---- 3) Build new index map from canonical key → new frame index
+        # key_to_new_idx = {k: i for i, k in enumerate(new_keys)}
+
+        # # Identify which old indices are truly missing in the new image set
+        # missing_old_idxs = [old_idx for old_idx, k in enumerate(old_keys) if k not in key_to_new_idx]
+
+        # # Keep list of old indices that still exist in the new image set
+        # kept_old_idxs = [i for i in range(len(old_keys)) if i not in missing_old_idxs]
+
+        # # Construct old->new remap for kept frames
+        # idx_map = {old_idx: key_to_new_idx[old_keys[old_idx]] for old_idx in kept_old_idxs}
+
+        # # ---- 4) Figure out which column is "time/frame" for this layer
+        # # Points/Shapes/Labels: t is column 0
+        # # Tracks: t is column 1 (format [track_id, t, y, x, ...])
+        # time_col = 1 if isinstance(layer, Tracks) else 0
+
+        # # ---- 5) Remove data referencing missing frames (only if there are any)
+        # if missing_old_idxs:
+        #     if isinstance(data, list):
+        #         # Shapes-like: list of NxD arrays; first column is t
+        #         inds_to_remove = [
+        #             i for i, verts in enumerate(data)
+        #             if int(np.asarray(verts)[:, time_col][0]) in missing_old_idxs
+        #         ]
+        #     else:
+        #         # Points/Tracks arrays
+        #         time_vals = np.asarray(data)[:, time_col].astype(int, copy=False)
+        #         inds_to_remove = np.flatnonzero(np.isin(time_vals, np.asarray(missing_old_idxs, dtype=int)))
+
+        #     if len(inds_to_remove):
+        #         try:
+        #             layer.selected_data = inds_to_remove
+        #             layer.remove_selected()
+        #         except Exception:
+        #             # Fallback if selection/removal not supported by the layer type
+        #             if isinstance(data, list):
+        #                 data = [v for i, v in enumerate(data) if i not in set(inds_to_remove)]
+        #             else:
+        #                 mask = np.ones(len(data), dtype=bool)
+        #                 mask[inds_to_remove] = False
+        #                 data = data[mask]
+        #             layer.data = data
+
+        # # Refresh `data` reference (it might have changed shape after removal)
+        # data = layer.data
+
+        # # ---- 6) Apply the index remap for remaining points
+        # if isinstance(data, list):
+        #     # Shapes-like
+        #     new_data = []
+        #     for verts in data:
+        #         verts = np.asarray(verts)
+        #         t = verts[:, time_col].astype(int, copy=False)
+        #         # map each t to new index, default to identity if not present
+        #         mapped_t = remap_array(t, idx_map)
+        #         verts = verts.copy()
+        #         verts[:, time_col] = mapped_t
+        #         new_data.append(verts)
+        #     layer.data = new_data
+        # else:
+        #     arr = np.asarray(data)
+        #     arr = arr.copy()
+        #     t = arr[:, time_col].astype(int, copy=False)
+        #     mapped = remap_array(t, idx_map)
+        #     arr[:, time_col] = mapped
+        #     layer.data = arr
+
+        # # ---- 7) Update metadata to reflect the new images meta (root, paths, shape, name, project, ...)
+        # layer.metadata.update(self._images_meta)
 
     def on_insert(self, event):
         layer = event.source[-1]
