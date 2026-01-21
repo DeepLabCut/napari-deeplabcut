@@ -9,6 +9,28 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from napari.utils import colormaps
+from natsort import natsorted
+
+
+def canonicalize_path(p: str | Path, n: int = 3) -> str:
+    """Return canonical POSIX path from last n components."""
+    try:
+        parts = Path(p).parts
+        return str(Path(*parts[-n:])).replace("\\", "/")
+    except Exception:
+        return str(p).replace("\\", "/")
+
+
+def remap_array(values, idx_map):
+    """Remap integer frame indices using a dict, safe for empty arrays."""
+    values = values.astype(int, copy=False)
+
+    if values.size == 0:
+        return values  # important: allow empty arrays!
+
+    # Build array of mapped values, falling back to identity
+    mapped = np.fromiter((idx_map.get(v, v) for v in values), dtype=values.dtype, count=len(values))
+    return mapped
 
 
 def find_project_config_path(labeled_data_path: str) -> str:
@@ -33,12 +55,34 @@ def unsorted_unique(array: Sequence) -> np.ndarray:
     return np.asarray(array)[np.sort(inds)]
 
 
-def encode_categories(categories: list[str], return_map: bool = False) -> list[int] | tuple[list[int], dict]:
-    unique_cat = unsorted_unique(categories)
-    map_ = dict(zip(unique_cat, range(len(unique_cat)), strict=False))
-    inds = np.vectorize(map_.get)(categories)
+def encode_categories(categories, return_map: bool = False, is_path: bool = True, do_sort: bool = True):
+    """
+    Convert a list of categories (typically filenames) into integer indices
+
+    Args:
+        categories: list of categories (strings or numbers)
+        return_map: if True, also return the mapping from category to index
+        is_path: if True, canonicalize categories as paths
+        do_sort: if True, sort unique categories naturally
+
+    Returns:
+        inds: array of integer indices corresponding to categories
+        map_: dict mapping unique categories to indices (if return_map is True)
+    """
+    # Canonicalize all categories (important!)
+    if is_path:
+        categories = [canonicalize_path(c) for c in categories]
+
+    # Determine unique values in stable order, but natural-sorted
+    unique_cat = list(dict.fromkeys(categories))
+    if do_sort:
+        unique_cat = natsorted(unique_cat)
+    map_ = {k: i for i, k in enumerate(unique_cat)}
+
+    inds = np.array([map_[c] for c in categories], dtype=int)
+
     if return_map:
-        return inds, map_
+        return inds, unique_cat  # return canonical keys, in order
     return inds
 
 
