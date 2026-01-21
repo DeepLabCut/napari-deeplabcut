@@ -20,6 +20,7 @@ from napari.layers import Image, Points, Shapes, Tracks
 from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
 from napari.layers.utils.layer_utils import _features_to_properties
+from napari.utils.colormaps import Colormap
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
 from qtpy.QtCore import QPoint, QSettings, QSize, Qt, QTimer, Signal
@@ -58,7 +59,6 @@ from napari_deeplabcut._writer import _form_df, _write_config, _write_image
 from napari_deeplabcut.misc import (
     build_color_cycles,
     canonicalize_path,
-    encode_categories,
     guarantee_multiindex_rows,
     remap_array,
 )
@@ -833,36 +833,97 @@ class KeypointControls(QWidget):
                 self._trails.visible = False
             return
 
+        # Always rebuild when first shown
         if self._trails is None:
             store = list(self._stores.values())[0]
+            pts_layer = store.layer
 
-            # Determine coloring mode
-            mode = "label"
-            if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL):
-                mode = "id"
+            # --- Determine properties present on Points layer
+            ids = pts_layer.properties.get("id")
+            labels = pts_layer.properties.get("label")
+            if labels is None or len(labels) == 0:
+                return
 
-            categories = store.layer.properties.get(mode)
-            # Check for single animal data
-            if categories is None or (mode == "id" and (not categories[0])):
-                mode = "label"
-                categories = store.layer.properties["label"]
+            # --- Multi-animal?
+            is_multi = ids is not None and len(ids) and isinstance(ids[0], str) and ids[0] != ""
 
-            inds = encode_categories(categories, is_path=False, do_sort=False)
+            # --- Choose the property used for coloring (categories → colors)
+            color_prop = "id" if (self.color_mode == str(keypoints.ColorMode.INDIVIDUAL) and is_multi) else "label"
+            categories_for_color = pts_layer.properties[color_prop]
 
-            # Build Tracks data
-            temp = np.c_[inds, store.layer.data]
-            cmap = "viridis"
-            for layer in self.viewer.layers:
-                if isinstance(layer, Points):
-                    colormap_name = layer.metadata.get("colormap_name")
-                    if colormap_name:
-                        cmap = colormap_name
-                        break
+            # --- Stable unique order for the *color* categories
+            uniq_color = list(dict.fromkeys(map(str, categories_for_color)))
+            n_color = len(uniq_color)
 
-            # 5) Create Tracks layer
+            # --- Build palette from DLC config cycles (fallback to tab20 for gaps)
+            face_cycles = pts_layer.metadata.get("face_color_cycles", {})
+            cycle_dict = face_cycles.get(color_prop, {})  # {name: color}
+            color_list = []
+            for u in uniq_color:
+                c = cycle_dict.get(u)
+                if c is None:
+                    color_list = []  # trigger fallback
+                    break
+                color_list.append(c)
+
+            if not color_list:
+                import matplotlib.pyplot as plt
+
+                palette = plt.get_cmap("tab20").colors
+                color_list = [palette[i % len(palette)] for i in range(n_color)]
+
+            # → RGBA in 0..1
+            colors_rgba = []
+            for c in color_list:
+                c = np.asarray(c, dtype=float)
+                if c.ndim == 0:
+                    c = np.array([0.5, 0.5, 0.5, 1.0], dtype=float)
+                if c.shape[0] == 3:
+                    c = np.r_[c, 1.0]
+                colors_rgba.append(c)
+            colors_rgba = np.asarray(colors_rgba, dtype=float)
+
+            # → Controls in [0,1], length == number of colors (special-case n=1)
+            if n_color == 1:
+                controls = np.array([0.0, 1.0], dtype=float)
+                colors_rgba = np.vstack([colors_rgba[0], colors_rgba[0]])
+            else:
+                controls = np.linspace(0.0, 1.0, n_color + 1, dtype=float)
+
+            categorical_cmap = Colormap(
+                colors=colors_rgba,
+                controls=controls,
+                name=f"{color_prop}_categorical",
+                interpolation="zero",
+            )
+
+            # --- Build *track grouping* keys: always (id,label) when multi-animal,
+            #     else just label (single-animal projects have no id)
+            if is_multi:
+                group_keys = [f"{i}|{l}" for i, l in zip(ids, labels, strict=False)]
+            else:
+                group_keys = [str(l) for l in labels]
+
+            # Map group keys → integer track IDs (first column)
+            uniq_group = list(dict.fromkeys(group_keys))
+            gid_map = {g: k for k, g in enumerate(uniq_group)}
+            track_ids = np.array([gid_map[g] for g in group_keys], dtype=int)
+
+            # Tracks.data = [track_id, t, y, x, ...]
+            tracks_data = np.c_[track_ids, pts_layer.data]
+
+            # Property to color by: normalized numeric codes of categories_for_color
+            color_index = {u: i for i, u in enumerate(uniq_color)}
+            codes = np.array([color_index[str(u)] for u in categories_for_color], dtype=int)
+            codes01 = (codes / float(max(n_color - 1, 1))).astype(float)
+
+            props = {f"{color_prop}_code01": codes01}
+
             self._trails = self.viewer.add_tracks(
-                temp,
-                colormap=cmap,
+                tracks_data,
+                properties=props,
+                color_by=f"{color_prop}_code01",
+                colormaps_dict={f"{color_prop}_code01": categorical_cmap},
                 tail_length=50,
                 head_length=50,
                 tail_width=6,
@@ -1400,18 +1461,34 @@ class KeypointControls(QWidget):
         else:
             face_color_mode = "id"
 
+        # Update Points layers immediately (as you already do)
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata:
                 layer.face_color = face_color_mode
                 layer.face_color_cycle = layer.metadata["face_color_cycles"][face_color_mode]
                 layer.events.face_color()
 
+        # Reflect radio button state
         for btn in self._color_mode_selector.buttons():
             if btn.text().lower() == str(mode).lower():
                 btn.setChecked(True)
                 break
 
         self._update_color_scheme()
+
+        # --- NEW: refresh trails if they exist & checkbox is on
+        if getattr(self, "_trails", None) is not None and self._trail_cb.isChecked():
+            vis = self._trails.visible
+            # Remove and rebuild with new color mode
+            try:
+                self.viewer.layers.remove(self._trails)
+            except Exception:
+                pass
+            self._trails = None
+            # Force rebuild
+            self._show_trails(Qt.CheckState.Checked)
+            if self._trails is not None:
+                self._trails.visible = vis
 
     def _is_multianimal(self, layer) -> bool:
         is_multi = False
