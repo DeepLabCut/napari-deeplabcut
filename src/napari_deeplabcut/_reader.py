@@ -114,7 +114,10 @@ def _expand_image_paths(path: str | Path | list[str | Path] | tuple[str | Path, 
     expanded: list[Path] = []
     for p in raw_paths:
         if p.is_dir() and not str(p).endswith(".zarr"):
-            expanded.extend([x for x in natsorted(p.glob("*.*")) if x.is_file()])
+            file_matches: list[Path] = []
+            for ext in SUPPORTED_IMAGES:
+                file_matches.extend(p.glob(f"*{ext}"))
+            expanded.extend(x for x in natsorted(file_matches, key=str) if x.is_file())
         else:
             matches = list(p.parent.glob(p.name))
             expanded.extend(matches or [p])
@@ -176,7 +179,7 @@ def _lazy_imread(
     first_shape = None
     first_dtype = None
 
-    def make_delayed_array(fp: Path, first_shape=first_shape, first_dtype=first_dtype) -> da.Array:
+    def make_delayed_array(fp: Path, first_shape, first_dtype) -> da.Array:
         """Create a dask array for a single file."""
         return da.from_delayed(
             delayed(_read_and_normalize)(filepath=fp, normalize_func=_normalize_to_rgb),
@@ -191,13 +194,13 @@ def _lazy_imread(
             first_dtype = arr0.dtype
 
             if use_dask:
-                images.append(make_delayed_array(fp, first_shape=first_shape, first_dtype=first_dtype))
+                images.append(make_delayed_array(fp, first_shape, first_dtype))
             else:
                 images.append(arr0)
             continue
 
         if use_dask:
-            images.append(make_delayed_array(fp, first_shape=first_shape, first_dtype=first_dtype))
+            images.append(make_delayed_array(fp, first_shape, first_dtype))
         else:
             images.append(_read_and_normalize(filepath=fp, normalize_func=_normalize_to_rgb))
 

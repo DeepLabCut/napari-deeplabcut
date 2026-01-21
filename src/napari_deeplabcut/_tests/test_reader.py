@@ -7,6 +7,8 @@ from skimage.io import imsave
 
 from napari_deeplabcut import _reader
 
+FAKE_EXTENSION = ".notanimage"
+
 
 @pytest.mark.parametrize("ext", _reader.SUPPORTED_IMAGES)
 def test_get_image_reader(ext):
@@ -123,11 +125,10 @@ def test_read_images_mixed_extensions_directory_ignores_unsupported(tmp_path):
     img = (np.random.rand(8, 8, 3) * 255).astype(np.uint8)
     p_jpg = tmp_path / "a.jpg"
     p_png = tmp_path / "b.png"
-    assert ".tif" not in _reader.SUPPORTED_IMAGES  # ensure tif is unsupported for this test to be valid
-    p_tif = tmp_path / "c.tif"  # unsupported by SUPPORTED_IMAGES in this reader
+    p_fake = tmp_path / f"c{FAKE_EXTENSION}"  # unsupported by SUPPORTED_IMAGES in this reader
     imsave(p_jpg, img)
     imsave(p_png, img)
-    imsave(p_tif, img)
+    imsave(p_fake, img)
 
     layers = _reader.read_images(tmp_path)  # pass directory
     assert len(layers) == 1
@@ -141,7 +142,7 @@ def test_read_images_mixed_extensions_directory_ignores_unsupported(tmp_path):
     assert len(paths) == 2
     assert any(p.endswith("a.jpg") for p in paths)
     assert any(p.endswith("b.png") for p in paths)
-    assert all(not p.endswith("c.tif") for p in paths)
+    assert all(not p.endswith(FAKE_EXTENSION) for p in paths)
 
 
 def test_lazy_imread_mixed_extensions_list(tmp_path):
@@ -166,7 +167,7 @@ def test_read_images_mixed_extensions_globs(tmp_path):
     img = (np.random.rand(7, 7, 3) * 255).astype(np.uint8)
     p1 = tmp_path / "g1.jpg"
     p2 = tmp_path / "g2.png"
-    p3 = tmp_path / "g3.tif"  # unsupported
+    p3 = tmp_path / f"g3{FAKE_EXTENSION}"  # unsupported
     imsave(p1, img)
     imsave(p2, img)
     imsave(p3, img)
@@ -182,7 +183,7 @@ def test_read_images_mixed_extensions_globs(tmp_path):
     assert len(paths) == 2
     assert any(p.endswith("g1.jpg") for p in paths)
     assert any(p.endswith("g2.png") for p in paths)
-    assert all(not p.endswith("g3.tif") for p in paths)
+    assert all(not p.endswith(FAKE_EXTENSION) for p in paths)
 
 
 def test_read_images_mixed_extensions_tuple_input(tmp_path):
