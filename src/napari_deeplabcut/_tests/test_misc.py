@@ -40,7 +40,7 @@ def test_canonicalize_path():
     p = "a/b/c/"
     # Path("a/b/c/") collapses trailing slash; last 3 parts are a/b/c
     assert misc.canonicalize_path(p, n=3) == "a/b/c"
-    # parts[-0:] is [], Path(*[]) -> Path(".") -> "."
+    # parts[-0:] is equivalent to parts[:], so full path returned
     p = "a/b/c"
     assert misc.canonicalize_path(p, n=0) == "a/b/c"
     p = "a/b/c/d"
