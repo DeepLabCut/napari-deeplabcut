@@ -11,7 +11,6 @@ from dask import delayed
 from dask_image.imread import imread
 from napari.types import LayerData
 from natsort import natsorted
-from pandas.api.types import is_numeric_dtype
 
 from napari_deeplabcut import misc
 
@@ -208,7 +207,13 @@ def _lazy_imread(
     if len(images) == 1:
         return images[0]
 
-    return da.stack(images) if use_dask and stack else (np.stack(images) if stack else images)
+    try:
+        return da.stack(images) if use_dask and stack else (np.stack(images) if stack else images)
+    except ValueError as e:
+        raise ValueError(
+            "Cannot stack images with different shapes using NumPy. "
+            "Ensure all images have the same shape or set stack=False."
+        ) from e
 
 
 # Read images from a list of files or a glob/string path
@@ -390,7 +395,7 @@ def read_hdf(filename: str) -> list[LayerData]:
         nrows = df.shape[0]
         data = np.empty((nrows, 3))
         image_paths = df["level_0"]
-        if is_numeric_dtype(getattr(image_paths, "dtype", np.asarray(image_paths).dtype)):
+        if pd.api.types.is_numeric_dtype(getattr(image_paths, "dtype", np.asarray(image_paths).dtype)):
             image_inds = image_paths.values
             paths2inds = []
         else:
