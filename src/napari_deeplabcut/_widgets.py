@@ -60,6 +60,7 @@ from napari_deeplabcut.misc import (
     canonicalize_path,
     encode_categories,
     guarantee_multiindex_rows,
+    remap_array,
 )
 
 Tip = namedtuple("Tip", ["msg", "pos"])
@@ -1031,134 +1032,140 @@ class KeypointControls(QWidget):
 
     def _remap_frame_indices(self, layer):
         """
-        Re-map the frame/time indices in non-Image layers (Points, Shapes, Tracks)
-        to match the currently loaded Image stack order, using canonical path keys.
+        Best-effort remap of time/frame indices in non-Image layers to match current Image order.
 
-        Strategy:
-        1) Build canonical keys (POSIX, last 3 components) for both:
-            - new image paths from self._images_meta["paths"]
-            - layer's stored paths from layer.metadata["paths"]
-        2) If there is no data or no stored paths → noop (just update metadata)
-        3) If lists are identical → noop (just update metadata)
-        4) If sets match but order differs → remap indices; do NOT delete
-        5) If some old keys are missing in the new set → remove only those points,
-            then remap the rest
-
-        Notes:
-        * For Points/Shapes/Labels/etc., frame index is column 0.
-        * For Tracks, the time column is 1 (Napari Tracks format: [track_id, t, y, x, ...]).
+        Safety principles:
+        - Never delete user data automatically (only remap what is safe).
+        - Only write back to layer.data after successful transformation.
+        - Always sync layer.metadata with self._images_meta when possible.
         """
-        pass
-        # # ---- 0) Guard: we only run when images metadata with paths is available
-        # new_paths_raw = self._images_meta.get("paths")
-        # if not new_paths_raw:
-        #     return
+        try:
+            # Need new image paths to define the reference order
+            new_paths_raw = self._images_meta.get("paths")
+            if not new_paths_raw:
+                return
 
-        # # ---- 1) Canonicalize path keys
-        # # We must use the exact same canonicalization used everywhere else:
-        # # POSIX separators + last 3 parts (see misc.canonicize_path)
-        # new_keys = [canonicalize_path(p, 3) for p in new_paths_raw]
+            # Determine layer's stored paths
+            md = layer.metadata or {}
+            old_paths_raw = md.get("paths") or []
+            # Always sync basic metadata (even if we can't remap)
+            try:
+                layer.metadata.update(self._images_meta)
+            except Exception:
+                pass
 
-        # old_paths_raw = (layer.metadata or {}).get("paths") or []
-        # if not old_paths_raw:
-        #     # No old paths on the layer; just sync metadata and exit
-        #     layer.metadata.update(self._images_meta)
-        #     return
+            if not old_paths_raw:
+                return
 
-        # old_keys = [canonicalize_path(p, 3) for p in old_paths_raw]
+            # Try different canonicalization depths to find overlap
+            depth_used = None
+            for depth in (3, 2, 1):
+                new_keys = [canonicalize_path(p, depth) for p in new_paths_raw]
+                old_keys = [canonicalize_path(p, depth) for p in old_paths_raw]
+                overlap = set(new_keys) & set(old_keys)
+                if overlap:
+                    depth_used = depth
+                    break
 
-        # # If there is no data (empty layer), just sync metadata
-        # data = layer.data
-        # has_data = False
-        # try:
-        #     # Points/Tracks/Shapes support truth-y checks inconsistently; prefer size
-        #     if isinstance(data, list):
-        #         has_data = len(data) > 0
-        #     else:
-        #         # numpy-like
-        #         has_data = (getattr(data, "size", 0) or len(data)) > 0
-        # except Exception:
-        #     has_data = False
+            if depth_used is None:
+                logging.warning(
+                    f"Cannot remap {getattr(layer, 'name', str(layer))}: no overlap even after matching.",
+                )
+                logging.debug(f"Old keys (sample): {old_keys[:5]}... | New keys (sample): {new_keys[:5]}...")
+                # Helpful extra debug:
+                logging.debug("Old basename sample: %s", [Path(p).name for p in old_paths_raw[:5]])
+                logging.debug("New basename sample: %s", [Path(p).name for p in new_paths_raw[:5]])
+                return
 
-        # if not has_data:
-        #     layer.metadata.update(self._images_meta)
-        #     return
+            if old_keys == new_keys:
+                return
 
-        # # ---- 2) If order and content match exactly → nothing to do
-        # if old_keys == new_keys:
-        #     layer.metadata.update(self._images_meta)
-        #     return
+            # Build map: canonical key -> new frame index
+            key_to_new_idx = {k: i for i, k in enumerate(new_keys)}
 
-        # # ---- 3) Build new index map from canonical key → new frame index
-        # key_to_new_idx = {k: i for i, k in enumerate(new_keys)}
+            # Determine which column is time/frame
+            time_col = 1 if isinstance(layer, Tracks) else 0
 
-        # # Identify which old indices are truly missing in the new image set
-        # missing_old_idxs = [old_idx for old_idx, k in enumerate(old_keys) if k not in key_to_new_idx]
+            data = layer.data
+            if data is None:
+                return
 
-        # # Keep list of old indices that still exist in the new image set
-        # kept_old_idxs = [i for i in range(len(old_keys)) if i not in missing_old_idxs]
+            # Napari layers differ: Points/Tracks are ndarray-like; Shapes is list-like
+            is_list_like = isinstance(data, list)
 
-        # # Construct old->new remap for kept frames
-        # idx_map = {old_idx: key_to_new_idx[old_keys[old_idx]] for old_idx in kept_old_idxs}
+            # Build an "old index -> new index" dict when we can map safely
+            # We only map old indices that correspond to an old canonical key present in new_keys.
+            idx_map = {}
+            for old_idx, k in enumerate(old_keys):
+                new_idx = key_to_new_idx.get(k)
+                if new_idx is not None:
+                    idx_map[old_idx] = new_idx
 
-        # # ---- 4) Figure out which column is "time/frame" for this layer
-        # # Points/Shapes/Labels: t is column 0
-        # # Tracks: t is column 1 (format [track_id, t, y, x, ...])
-        # time_col = 1 if isinstance(layer, Tracks) else 0
+            if not idx_map:
+                # No overlap at all; safest is to do nothing.
+                logging.warning(
+                    f"Cannot remap {getattr(layer, 'name', str(layer))}:"
+                    " no overlap between layer paths and current image paths.",
+                )
+                # Show debug output with a few of each
+                logging.debug(f"Old keys (sample): {old_keys[:5]}... | New keys (sample): {new_keys[:5]}...")
+                return
 
-        # # ---- 5) Remove data referencing missing frames (only if there are any)
-        # if missing_old_idxs:
-        #     if isinstance(data, list):
-        #         # Shapes-like: list of NxD arrays; first column is t
-        #         inds_to_remove = [
-        #             i for i, verts in enumerate(data)
-        #             if int(np.asarray(verts)[:, time_col][0]) in missing_old_idxs
-        #         ]
-        #     else:
-        #         # Points/Tracks arrays
-        #         time_vals = np.asarray(data)[:, time_col].astype(int, copy=False)
-        #         inds_to_remove = np.flatnonzero(np.isin(time_vals, np.asarray(missing_old_idxs, dtype=int)))
+            if is_list_like:
+                # Shapes-like: list of vertices arrays
+                new_data = []
+                for verts in data:
+                    arr = np.asarray(verts)
+                    if arr.size == 0:
+                        new_data.append(arr)
+                        continue
 
-        #     if len(inds_to_remove):
-        #         try:
-        #             layer.selected_data = inds_to_remove
-        #             layer.remove_selected()
-        #         except Exception:
-        #             # Fallback if selection/removal not supported by the layer type
-        #             if isinstance(data, list):
-        #                 data = [v for i, v in enumerate(data) if i not in set(inds_to_remove)]
-        #             else:
-        #                 mask = np.ones(len(data), dtype=bool)
-        #                 mask[inds_to_remove] = False
-        #                 data = data[mask]
-        #             layer.data = data
+                    arr2 = arr.copy()
+                    t = arr2[:, time_col]
 
-        # # Refresh `data` reference (it might have changed shape after removal)
-        # data = layer.data
+                    # If t isn't integer-like, attempt safe conversion
+                    try:
+                        t_int = np.asarray(t).astype(int, copy=False)
+                    except Exception:
+                        # Can't interpret time column; keep shape as-is
+                        new_data.append(arr2)
+                        continue
 
-        # # ---- 6) Apply the index remap for remaining points
-        # if isinstance(data, list):
-        #     # Shapes-like
-        #     new_data = []
-        #     for verts in data:
-        #         verts = np.asarray(verts)
-        #         t = verts[:, time_col].astype(int, copy=False)
-        #         # map each t to new index, default to identity if not present
-        #         mapped_t = remap_array(t, idx_map)
-        #         verts = verts.copy()
-        #         verts[:, time_col] = mapped_t
-        #         new_data.append(verts)
-        #     layer.data = new_data
-        # else:
-        #     arr = np.asarray(data)
-        #     arr = arr.copy()
-        #     t = arr[:, time_col].astype(int, copy=False)
-        #     mapped = remap_array(t, idx_map)
-        #     arr[:, time_col] = mapped
-        #     layer.data = arr
+                    arr2[:, time_col] = remap_array(t_int, idx_map)
+                    new_data.append(arr2)
 
-        # # ---- 7) Update metadata to reflect the new images meta (root, paths, shape, name, project, ...)
-        # layer.metadata.update(self._images_meta)
+                layer.data = new_data
+
+            else:
+                arr = np.asarray(data)
+                if arr.size == 0:
+                    return
+                if arr.ndim < 2 or arr.shape[1] <= time_col:
+                    return
+
+                arr2 = arr.copy()
+                t = arr2[:, time_col]
+
+                # Handle NaNs/float time indices safely
+                # (If conversion fails, we skip remap.)
+                try:
+                    t_int = np.asarray(t).astype(int, copy=False)
+                except Exception:
+                    logging.warning(
+                        f"Cannot remap {getattr(layer, 'name', str(layer))}: "
+                        "time column could not be converted to int.",
+                    )
+                    return
+
+                arr2[:, time_col] = remap_array(t_int, idx_map)
+                layer.data = arr2
+
+        except Exception as e:
+            logging.exception(
+                f"Failed to remap frame indices for layer {getattr(layer, 'name', str(layer))}: {e}",
+            )
+            # Intentionally do not raise, simply warn and skip remapping
+            return
 
     def on_insert(self, event):
         layer = event.source[-1]
