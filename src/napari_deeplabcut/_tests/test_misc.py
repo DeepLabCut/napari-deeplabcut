@@ -19,6 +19,70 @@ def test_unsorted_unique_string():
     assert list(out) == ["c", "b", "d", "a"]
 
 
+# Tests for new OS-agnostic path canonicalization in misc.canonicalize_path and misc.encode_categories
+def test_canonicalize_path():
+    p = "root/sub1/sub2/file.png"
+    assert misc.canonicalize_path(p) == "sub1/sub2/file.png"
+    p = "root/sub/file.png"
+    assert misc.canonicalize_path(p, n=2) == "sub/file.png"
+    p = "root/sub/file.png"
+    assert misc.canonicalize_path(p, n=1) == "file.png"
+    p = "a/b/c"
+    assert misc.canonicalize_path(p, n=10) == "a/b/c"
+    p = Path("a/b/c/d.txt")
+    assert misc.canonicalize_path(p, n=3) == "b/c/d.txt"
+    # Path("") becomes ".", so parts = (".",)
+    assert misc.canonicalize_path("") == "."
+    assert misc.canonicalize_path(".") == "."
+    # On POSIX, Path("/").parts == ("/",)
+    # Path(*parts[-n:]) -> Path("/") -> str("/") -> "/"
+    assert misc.canonicalize_path("/") == "/"
+    p = "a/b/c/"
+    # Path("a/b/c/") collapses trailing slash; last 3 parts are a/b/c
+    assert misc.canonicalize_path(p, n=3) == "a/b/c"
+    # parts[-0:] is [], Path(*[]) -> Path(".") -> "."
+    p = "a/b/c"
+    assert misc.canonicalize_path(p, n=0) == "a/b/c"
+    p = "a/b/c/d"
+    assert misc.canonicalize_path(p, n=-1) == "b/c/d"
+    # Path(123) raises TypeError -> fallback to str(p)
+    out = misc.canonicalize_path(123, n=3)  # type: ignore[arg-type]
+    assert out == "123"
+
+
+def test_canonicalize_path_converts_backslashes_to_forward_slashes_even_without_os_windows_parsing():
+    # Important: behavior depends on Path.parts semantics of the running OS.
+    p = r"a\b\c\file.png"
+    out = misc.canonicalize_path(p, n=3)
+
+    # Always normalize separators to POSIX style
+    assert "\\" not in out
+
+    # Portable expected result: mirror "last n parts" logic + normalization
+    parts = Path(p).parts
+    expected = str(Path(*parts[-3:])).replace("\\", "/")
+    assert out == expected
+
+
+def test_canonicalize_path_mixed_separators_normalized_to_posix():
+    # '/' splits into parts on POSIX; '\ ' stays within a component but gets replaced.
+    p = r"frames/test\video0/img001.png"
+    out = misc.canonicalize_path(p, n=3)
+    assert out == "test/video0/img001.png"
+    assert "\\" not in out
+
+
+def test_canonicalize_path_exception_fallback_still_replaces_backslashes():
+    class Weird:
+        def __str__(self):
+            return r"x\y\z"
+
+    out = misc.canonicalize_path(Weird(), n=3)  # type: ignore[arg-type]
+    assert out == "x/y/z"
+    assert "\\" not in out
+
+
+# encode_categories tests utils
 def _expected_unique(categories, *, is_path, do_sort):
     """Compute expected unique list according to encode_categories semantics."""
     if is_path:
