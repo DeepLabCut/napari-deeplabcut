@@ -126,10 +126,10 @@ def test_read_images_mixed_extensions_directory_ignores_unsupported(tmp_path):
     img = (np.random.rand(8, 8, 3) * 255).astype(np.uint8)
     p_jpg = tmp_path / "a.jpg"
     p_png = tmp_path / "b.png"
-    p_fake = tmp_path / f"c{FAKE_EXTENSION}"  # unsupported by SUPPORTED_IMAGES in this reader
+    p_unsupp = tmp_path / f"c{FAKE_EXTENSION}"  # unsupported by SUPPORTED_IMAGES in this reader
     imsave(p_jpg, img)
     imsave(p_png, img)
-    imsave(p_fake, img)
+    imsave(p_unsupp, img)
 
     layers = _reader.read_images(tmp_path)  # pass directory
     assert len(layers) == 1
@@ -374,7 +374,7 @@ def test_lazy_imread_grayscale_and_rgba(tmp_path):
     gray = (np.random.rand(10, 10) * 255).astype(np.uint8)
     rgba = (np.random.rand(10, 10, 4) * 255).astype(np.uint8)
     p1, p2 = tmp_path / "g.png", tmp_path / "r.png"
-    cv2.imwrite(str(p1), gray)  # cv2 writes BGR or grayscale by default
+    cv2.imwrite(str(p1), gray)  # cv2 writes grayscale as-is; color images are written as BGR 
     cv2.imwrite(str(p2), cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
     res = _reader._lazy_imread([p1, p2], use_dask=False, stack=False)
     assert all(img.shape[-1] == 3 for img in res)

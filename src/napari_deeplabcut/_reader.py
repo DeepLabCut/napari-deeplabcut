@@ -113,7 +113,7 @@ def _expand_image_paths(path: str | Path | list[str | Path] | tuple[str | Path, 
 
     expanded: list[Path] = []
     for p in raw_paths:
-        if p.is_dir() and not str(p).endswith(".zarr"):
+        if p.is_dir() and p.suffix.lower() != ".zarr":
             file_matches: list[Path] = []
             for ext in SUPPORTED_IMAGES:
                 file_matches.extend(p.glob(f"*{ext}"))
@@ -179,7 +179,7 @@ def _lazy_imread(
     first_shape = None
     first_dtype = None
 
-    def make_delayed_array(fp: Path, first_shape, first_dtype) -> da.Array:
+    def make_delayed_array(fp: Path, first_shape: tuple[int, ...], first_dtype: np.dtype) -> da.Array:
         """Create a dask array for a single file."""
         return da.from_delayed(
             delayed(_read_and_normalize)(filepath=fp, normalize_func=_normalize_to_rgb),
