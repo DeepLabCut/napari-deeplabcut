@@ -1074,9 +1074,9 @@ class KeypointControls(QWidget):
                     "Cannot remap %s: no path overlap found for all attempted matchings",
                     getattr(layer, "name", str(layer)),
                 )
-                logging.debug("Old keys (sample): %s... | New keys (sample): %s...", old_keys[:5], new_keys[:5])
-                logging.debug("Old basename sample: %s", [Path(p).name for p in old_paths_raw[:5]])
-                logging.debug("New basename sample: %s", [Path(p).name for p in new_paths_raw[:5]])
+                # logging.debug("Old keys (sample): %s... | New keys (sample): %s...", old_keys[:5], new_keys[:5])
+                # logging.debug("Old basename sample: %s", [Path(p).name for p in old_paths_raw[:5]])
+                # logging.debug("New basename sample: %s", [Path(p).name for p in new_paths_raw[:5]])
                 return
 
             if old_keys == new_keys:
@@ -1109,8 +1109,7 @@ class KeypointControls(QWidget):
                     f"Cannot remap {getattr(layer, 'name', str(layer))}:"
                     " no overlap between layer paths and current image paths.",
                 )
-                # Show debug output with a few of each
-                logging.debug(f"Old keys (sample): {old_keys[:5]}... | New keys (sample): {new_keys[:5]}...")
+                # logging.debug(f"Old keys (sample): {old_keys[:5]}... | New keys (sample): {new_keys[:5]}...")
                 return
 
             if is_list_like:

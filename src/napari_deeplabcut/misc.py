@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from enum import Enum, EnumMeta
 from itertools import cycle
@@ -10,18 +11,46 @@ import pandas as pd
 from napari.utils import colormaps
 from natsort import natsorted
 
+logger = logging.getLogger(__name__)
+
 
 def canonicalize_path(p: str | Path, n: int = 3) -> str:
-    """Return canonical POSIX path from last n components."""
+    """Return canonical POSIX path built from the last n path components.
+
+    Notes
+    -----
+    - Uses pathlib parsing for platform-native separators.
+    - Always normalizes backslashes to forward slashes in the returned string.
+    - If pathlib cannot parse `p`, falls back to `str(p)`.
+    """
     try:
         parts = Path(p).parts
         return str(Path(*parts[-n:])).replace("\\", "/")
-    except Exception:
+    except (TypeError, OSError) as e:
+        # Expected failures: p not path-like, or odd OS/path handling.
+        logger.debug(
+            "Failed to canonicalize path %r with pathlib (%s). Falling back to str().",
+            p,
+            type(e).__name__,
+            exc_info=True,
+        )
         return str(p).replace("\\", "/")
 
 
 def remap_array(values, idx_map):
-    """Remap integer frame indices using a dict, safe for empty arrays."""
+    """
+    Remap integer frame indices using a mapping, safe for empty arrays.
+
+    Args:
+        values: Array-like of integer indices (e.g., a NumPy array) to be remapped.
+        idx_map: Mapping from original integer indices to new integer indices.
+
+    Returns:
+        A NumPy array of integer indices where each element of ``values`` is
+        replaced by ``idx_map[value]`` when present in the mapping; if a value
+        is not found in ``idx_map``, it is left unchanged. Empty input arrays
+        are returned unchanged.
+    """
     values = values.astype(int, copy=False)
 
     if values.size == 0:
@@ -54,7 +83,7 @@ def unsorted_unique(array: Sequence) -> np.ndarray:
     return np.asarray(array)[np.sort(inds)]
 
 
-def encode_categories(categories, return_unique: bool = False, is_path: bool = True, do_sort: bool = True):
+def encode_categories(categories: Sequence, return_unique: bool = False, is_path: bool = True, do_sort: bool = True):
     """
     Convert a list of categories (typically filenames) into integer indices
 
