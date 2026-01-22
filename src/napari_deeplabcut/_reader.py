@@ -11,6 +11,7 @@ from dask import delayed
 from dask_image.imread import imread
 from napari.types import LayerData
 from natsort import natsorted
+from pandas.api.types import is_numeric_dtype
 
 from napari_deeplabcut import misc
 
@@ -228,7 +229,7 @@ def read_hdf(filename: str) -> list[LayerData]:
         nrows = df.shape[0]
         data = np.empty((nrows, 3))
         image_paths = df["level_0"]
-        if np.issubdtype(image_paths.dtype, np.number):
+        if is_numeric_dtype(getattr(image_paths, "dtype", np.asarray(image_paths).dtype)):
             image_inds = image_paths.values
             paths2inds = []
         else:
