@@ -324,7 +324,10 @@ def _populate_metadata(
 
 def _load_superkeypoints_diagram(super_animal: str):
     path = str(Path(__file__).parent / "assets" / f"{super_animal}.jpg")
-    return imread(path), {"root": ""}, "images"
+    try:
+        return imread(path), {"root": ""}, "images"
+    except Exception as e:
+        raise FileNotFoundError(f"Superkeypoints diagram not found for {super_animal}.") from e
 
 
 def _load_superkeypoints(super_animal: str):
