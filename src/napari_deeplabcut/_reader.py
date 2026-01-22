@@ -319,7 +319,7 @@ def _populate_metadata(
 
 def _load_superkeypoints_diagram(super_animal: str):
     path = str(Path(__file__).parent / "assets" / f"{super_animal}.jpg")
-    return imread(path), {"name": f"{super_animal}_diagram", "metadata": {"root": ""}}, "image"
+    return imread(path), {"root": ""}, "images"
 
 
 def _load_superkeypoints(super_animal: str):
