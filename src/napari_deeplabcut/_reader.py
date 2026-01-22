@@ -405,7 +405,7 @@ def read_hdf(filename: str) -> list[LayerData]:
             image_inds, paths2inds = misc.encode_categories(
                 image_paths,
                 is_path=True,
-                return_map=True,
+                return_unique=True,
                 do_sort=True,
             )
 

@@ -120,12 +120,12 @@ def test_encode_categories_all_branches_basic(return_map, is_path, do_sort):
     inds_expected = _expected_inds(cats, unique_expected)
 
     if return_map:
-        inds, unique = misc.encode_categories(categories, return_map=True, is_path=is_path, do_sort=do_sort)
+        inds, unique = misc.encode_categories(categories, return_unique=True, is_path=is_path, do_sort=do_sort)
         assert isinstance(unique, list)
         assert unique == unique_expected
         assert np.array_equal(inds, inds_expected)
     else:
-        inds = misc.encode_categories(categories, return_map=False, is_path=is_path, do_sort=do_sort)
+        inds = misc.encode_categories(categories, return_unique=False, is_path=is_path, do_sort=do_sort)
         assert np.array_equal(inds, inds_expected)
 
     # dtype guarantee
@@ -143,8 +143,8 @@ def test_encode_categories_return_map_consistency(do_sort):
     """
     categories = ["b", "a", "b", "a", "c"]
 
-    inds_a, unique = misc.encode_categories(categories, return_map=True, is_path=False, do_sort=do_sort)
-    inds_b = misc.encode_categories(categories, return_map=False, is_path=False, do_sort=do_sort)
+    inds_a, unique = misc.encode_categories(categories, return_unique=True, is_path=False, do_sort=do_sort)
+    inds_b = misc.encode_categories(categories, return_unique=False, is_path=False, do_sort=do_sort)
     assert np.array_equal(inds_a, inds_b)
 
     # sanity: unique produces a valid mapping
@@ -158,11 +158,13 @@ def test_encode_categories_do_sort_changes_indexing():
     """
     categories = ["b", "a", "b", "a"]
 
-    inds_sorted, unique_sorted = misc.encode_categories(categories, return_map=True, is_path=False, do_sort=True)
+    inds_sorted, unique_sorted = misc.encode_categories(categories, return_unique=True, is_path=False, do_sort=True)
     assert unique_sorted == ["a", "b"]
     assert list(inds_sorted) == [1, 0, 1, 0]
 
-    inds_unsorted, unique_unsorted = misc.encode_categories(categories, return_map=True, is_path=False, do_sort=False)
+    inds_unsorted, unique_unsorted = misc.encode_categories(
+        categories, return_unique=True, is_path=False, do_sort=False
+    )
     assert unique_unsorted == ["b", "a"]  # first-seen stable order
     assert list(inds_unsorted) == [0, 1, 0, 1]
 
@@ -173,7 +175,7 @@ def test_encode_categories_natural_sort_img2_before_img10():
     """
     categories = ["img10.png", "img2.png", "img1.png"]
 
-    inds, unique = misc.encode_categories(categories, return_map=True, is_path=False, do_sort=True)
+    inds, unique = misc.encode_categories(categories, return_unique=True, is_path=False, do_sort=True)
     assert unique == ["img1.png", "img2.png", "img10.png"]
 
     m = {k: i for i, k in enumerate(unique)}
@@ -194,7 +196,7 @@ def test_encode_categories_path_canonicalization(categories):
     Ensures canonicalization normalizes separators and retains the last components
     (default canonicalize_path n=3).
     """
-    inds, unique = misc.encode_categories(categories, return_map=True, is_path=True, do_sort=True)
+    inds, unique = misc.encode_categories(categories, return_unique=True, is_path=True, do_sort=True)
 
     # Canonical keys should use POSIX separators and keep last 3 components.
     # e.g. frames/test/img001.png
@@ -213,7 +215,7 @@ def test_encode_categories_is_path_false_does_not_canonicalize():
     Mixed separators remain distinct categories.
     """
     categories = [r"frames\test\img001.png", "frames/test/img001.png"]
-    inds, unique = misc.encode_categories(categories, return_map=True, is_path=False, do_sort=False)
+    inds, unique = misc.encode_categories(categories, return_unique=True, is_path=False, do_sort=False)
 
     assert unique == categories  # distinct, first-seen order preserved
     assert list(inds) == [0, 1]
@@ -224,12 +226,12 @@ def test_encode_categories_empty_input():
     Empty categories should return an empty indices array (and empty unique list if requested).
     """
     categories = []
-    inds = misc.encode_categories(categories, return_map=False)
+    inds = misc.encode_categories(categories, return_unique=False)
     assert isinstance(inds, np.ndarray)
     assert inds.dtype == int
     assert inds.size == 0
 
-    inds2, unique = misc.encode_categories(categories, return_map=True)
+    inds2, unique = misc.encode_categories(categories, return_unique=True)
     assert inds2.size == 0
     assert unique == []
 
@@ -243,7 +245,7 @@ def test_encode_categories_numeric_categories(is_path, do_sort):
     """
     categories = [10, 2, 10, 3]
 
-    inds, unique = misc.encode_categories(categories, return_map=True, is_path=is_path, do_sort=do_sort)
+    inds, unique = misc.encode_categories(categories, return_unique=True, is_path=is_path, do_sort=do_sort)
 
     # unique elements should be stringified if is_path=True (due to canonicalize_path fallback)
     if is_path:

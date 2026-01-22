@@ -853,9 +853,11 @@ class KeypointControls(QWidget):
             temp = np.c_[inds, store.layer.data]
             cmap = "viridis"
             for layer in self.viewer.layers:
-                if isinstance(layer, Points) and layer.metadata["colormap_name"]:
-                    cmap = layer.metadata["colormap_name"]
-                    break
+                if isinstance(layer, Points):
+                    colormap_name = layer.metadata.get("colormap_name")
+                    if colormap_name:
+                        cmap = colormap_name
+                        break
 
             # 5) Create Tracks layer
             self._trails = self.viewer.add_tracks(
@@ -1069,10 +1071,10 @@ class KeypointControls(QWidget):
 
             if depth_used is None:
                 logging.warning(
-                    f"Cannot remap {getattr(layer, 'name', str(layer))}: no overlap even after matching.",
+                    "Cannot remap %s: no path overlap found for all attempted matchings",
+                    getattr(layer, "name", str(layer)),
                 )
-                logging.debug(f"Old keys (sample): {old_keys[:5]}... | New keys (sample): {new_keys[:5]}...")
-                # Helpful extra debug:
+                logging.debug("Old keys (sample): %s... | New keys (sample): %s...", old_keys[:5], new_keys[:5])
                 logging.debug("Old basename sample: %s", [Path(p).name for p in old_paths_raw[:5]])
                 logging.debug("New basename sample: %s", [Path(p).name for p in new_paths_raw[:5]])
                 return
@@ -1160,9 +1162,9 @@ class KeypointControls(QWidget):
                 arr2[:, time_col] = remap_array(t_int, idx_map)
                 layer.data = arr2
 
-        except Exception as e:
+        except Exception:
             logging.exception(
-                f"Failed to remap frame indices for layer {getattr(layer, 'name', str(layer))}: {e}",
+                f"Failed to remap frame indices for layer {getattr(layer, 'name', str(layer))}",
             )
             # Intentionally do not raise, simply warn and skip remapping
             return

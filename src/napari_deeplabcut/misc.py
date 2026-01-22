@@ -54,19 +54,19 @@ def unsorted_unique(array: Sequence) -> np.ndarray:
     return np.asarray(array)[np.sort(inds)]
 
 
-def encode_categories(categories, return_map: bool = False, is_path: bool = True, do_sort: bool = True):
+def encode_categories(categories, return_unique: bool = False, is_path: bool = True, do_sort: bool = True):
     """
     Convert a list of categories (typically filenames) into integer indices
 
     Args:
         categories: list of categories (strings or numbers)
-        return_map: if True, also return the mapping from category to index
+        return_unique: if True, also returns a list of unique categories
         is_path: if True, canonicalize categories as paths
         do_sort: if True, sort unique categories naturally
 
     Returns:
         inds: array of integer indices corresponding to categories
-        map_: dict mapping unique categories to indices (if return_map is True)
+        unique_cat: list of unique categories (if return_unique is True)
     """
     # Canonicalize all categories (important!)
     if is_path:
@@ -80,8 +80,8 @@ def encode_categories(categories, return_map: bool = False, is_path: bool = True
 
     inds = np.array([map_[c] for c in categories], dtype=int)
 
-    if return_map:
-        return inds, unique_cat  # return canonical keys, in order
+    if return_unique:
+        return inds, unique_cat
     return inds
 
 
