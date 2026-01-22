@@ -838,7 +838,7 @@ class KeypointControls(QWidget):
             predicate=lambda lyr: lyr.metadata.get("tables") is not None,
         )
         data = getattr(points_layer, "data", None)
-        if points_layer is None or data is None or not np.any(data):
+        if points_layer is None or data is None or not data.any():
             return
 
         xy = points_layer.data[:, 1:3]
