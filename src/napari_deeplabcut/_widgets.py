@@ -501,8 +501,8 @@ class KeypointMatplotlibCanvas(QWidget):
                 self.viewer.layers,
                 Points,
             )
-
-            if points_layer is None or not np.any(points_layer.data):
+            data = getattr(points_layer, "data", None)
+            if points_layer is None or data is None or len(data) == 0:
                 return
 
             self.show()
@@ -837,7 +837,8 @@ class KeypointControls(QWidget):
             Points,
             predicate=lambda lyr: lyr.metadata.get("tables") is not None,
         )
-        if points_layer is None or ~np.any(points_layer.data):
+        data = getattr(points_layer, "data", None)
+        if points_layer is None or data is None or not np.any(data):
             return
 
         xy = points_layer.data[:, 1:3]
@@ -845,7 +846,7 @@ class KeypointControls(QWidget):
         xy_ref = np.c_[[val for val in superkpts_dict.values()]]
         neighbors = keypoints._find_nearest_neighbors(xy, xy_ref)
         found = neighbors != -1
-        if ~np.any(found):
+        if not found.any():
             return
 
         project_path = points_layer.metadata["project"]
@@ -1065,10 +1066,9 @@ class KeypointControls(QWidget):
             Points,
             predicate=lambda lyr: "face_color_cycles" in lyr.metadata,
         ):
-            if layer:
-                self._display.update_color_scheme(
-                    {name: to_hex(color) for name, color in layer.metadata["face_color_cycles"][mode].items()}
-                )
+            self._display.update_color_scheme(
+                {name: to_hex(color) for name, color in layer.metadata["face_color_cycles"][mode].items()}
+            )
 
     def _remap_frame_indices(self, layer):
         if not self._images_meta.get("paths"):
