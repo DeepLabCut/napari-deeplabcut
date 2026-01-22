@@ -218,8 +218,11 @@ def test_matplotlib_canvas_initialization_and_slider(viewer, points, qtbot):
     assert canvas._window == initial_window + 100
     assert canvas.slider_value.text() == str(initial_window + 100)
 
-    # Test plot refresh on frame change
+    # Test plot refresh does nothing when plot is hidden
     canvas.update_plot_range(event=type("Event", (), {"value": [5]}))
+    assert canvas._n == 0
+    # Test plot refresh on frame change (forced as it is hidden)
+    canvas.update_plot_range(event=type("Event", (), {"value": [5]}), force=True)
     assert canvas._n == 5
     # Check that x-limits reflect the new window
     start, end = canvas.ax.get_xlim()
