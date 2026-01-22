@@ -574,7 +574,9 @@ class KeypointMatplotlibCanvas(QWidget):
         self.slider_value.setText(str(value))
         self.update_plot_range(Event(type_name="", value=[self._n]))
 
-    def update_plot_range(self, event):
+    def update_plot_range(self, event, force=False):
+        if not self.isVisible() and not force:
+            return
         value = event.value[0]
         self._n = value
 
@@ -781,6 +783,9 @@ class KeypointControls(QWidget):
         if Qt.CheckState(state) == Qt.CheckState.Checked:
             self._ensure_mpl_canvas_docked()
             if self._mpl_docked:
+                self._matplotlib_canvas.update_plot_range(
+                    Event(type_name="", value=[self.viewer.dims.current_step[0]]), force=True
+                )
                 self._matplotlib_canvas.show()
         else:
             if self._mpl_docked:
