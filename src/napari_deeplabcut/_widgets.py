@@ -771,6 +771,11 @@ class KeypointControls(QWidget):
         self._keypoint_mapping_button.clicked.connect(lambda: self._map_keypoints(super_animal))
 
     def _map_keypoints(self, super_animal: str):
+        # NOTE: This implementation makes several assumptions that may need review:
+        # - Assumes points_layer.metadata contains "project" and "header" keys with the expected structure.
+        # - Assumes _load_superkeypoints and _load_config succeed
+        #   and return well-formed data; I/O errors are not handled.
+        # - Silently ignores keypoints that have no nearest neighbor in the superkeypoint set (no user feedback).
         points_layer = None
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata.get("tables"):
@@ -799,6 +804,7 @@ class KeypointControls(QWidget):
                 strict=False,
             )
         )
+        cfg["SuperAnimalConversionTables"] = conversion_tables
         _write_config(config_path, cfg)
         self.viewer.status = "Mapping to superkeypoint set successfully saved"
 

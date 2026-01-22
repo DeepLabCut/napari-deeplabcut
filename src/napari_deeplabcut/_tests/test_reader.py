@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from PIL import Image
 from skimage.io import imsave
 
 from napari_deeplabcut import _reader
@@ -110,3 +111,68 @@ def test_read_video(video_path):
     assert dict_["metadata"].get("root")
     assert array.shape[0] == 5
     assert array[0].compute().shape == (50, 50, 3)
+
+
+@pytest.mark.parametrize(
+    "exists",
+    [
+        True,
+        False,
+    ],
+)
+def test_load_superkeypoints(monkeypatch, tmp_path, exists):
+    """Test loading of superkeypoints JSON with and without the file present."""
+    module_dir = tmp_path / "module"
+    assets_dir = module_dir / "assets"
+    assets_dir.mkdir(parents=True)
+
+    super_animal = "fake"
+    json_path = assets_dir / f"{super_animal}.json"
+
+    if exists:
+        json_path.write_text('{"SK1": [1, 2]}')
+
+    # Patch module __file__
+    fake_file = module_dir / "_reader_fake.py"
+    fake_file.write_text("# fake module")
+    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_file))
+
+    if exists:
+        assert _reader._load_superkeypoints(super_animal) == {"SK1": [1, 2]}
+    else:
+        with pytest.raises(FileNotFoundError):
+            _reader._load_superkeypoints(super_animal)
+
+
+@pytest.mark.parametrize(
+    "exists",
+    [
+        True,
+        False,
+    ],
+)
+def test_load_superkeypoints_diagram(monkeypatch, tmp_path, exists):
+    """Test loading of superkeypoints diagram with and without the file present."""
+    module_dir = tmp_path / "module"
+    assets_dir = module_dir / "assets"
+    assets_dir.mkdir(parents=True)
+
+    super_animal = "fake"
+    jpg_path = assets_dir / f"{super_animal}.jpg"
+
+    if exists:
+        Image.new("RGB", (10, 10), "white").save(jpg_path)
+
+    # Patch module __file__
+    fake_file = module_dir / "_reader_fake.py"
+    fake_file.write_text("# fake")
+    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_file))
+
+    if exists:
+        array, meta, layer_type = _reader._load_superkeypoints_diagram(super_animal)
+        assert layer_type == "images"
+        assert meta == {"root": ""}
+        assert tuple(array.shape[-3:-1]) == (10, 10)
+    else:
+        with pytest.raises(FileNotFoundError):
+            _reader._load_superkeypoints_diagram(super_animal)
