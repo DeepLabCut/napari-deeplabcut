@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Sequence
 from enum import Enum, EnumMeta
 from itertools import cycle
@@ -118,30 +117,11 @@ def merge_multiple_scorers(
     return df
 
 
-def to_os_dir_sep(path: str) -> str:
-    """
-    Replace all directory separators in `path` with `os.path.sep`.
-    Function originally written by @pyzun:
-    https://github.com/DeepLabCut/napari-DeepLabCut/pull/13
-
-    Raises
-    ------
-    ValueError: if `path` contains both UNIX and Windows directory separators.
-
-    """
-    win_sep, unix_sep = "\\", "/"
-
-    # On UNIX systems, `win_sep` is a valid character in directory and file
-    # names. This function fails if both are present.
-    if win_sep in path and unix_sep in path:
-        raise ValueError(f'"{path}" may not contain both "{win_sep}" and "{unix_sep}"!')
-
-    sep = win_sep if win_sep in path else unix_sep
-
-    return os.path.sep.join(path.split(sep))
-
-
 def guarantee_multiindex_rows(df):
+    """Ensure that DataFrame rows are a MultiIndex of path components.
+    Legacy DLC data may use an index with pathto/video/file.png strings as Index.
+    The new format uses a MultiIndex with each path component as a level.
+    """
     # Make paths platform-agnostic if they are not already
     if not isinstance(df.index, pd.MultiIndex):  # Backwards compatibility
         path = df.index[0]

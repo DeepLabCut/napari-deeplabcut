@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -19,12 +19,182 @@ def test_unsorted_unique_string():
     assert list(out) == ["c", "b", "d", "a"]
 
 
-def test_encode_categories():
+def _expected_unique(categories, *, is_path, do_sort):
+    """Compute expected unique list according to encode_categories semantics."""
+    if is_path:
+        cats = [misc.canonicalize_path(c) for c in categories]
+    else:
+        cats = list(categories)
+
+    # stable unique in first-seen order
+    unique = list(dict.fromkeys(cats))
+
+    if do_sort:
+        # mimic natural sort used in misc.encode_categories
+        from natsort import natsorted
+
+        unique = natsorted(unique)
+
+    return cats, unique
+
+
+def _expected_inds(cats, unique):
+    m = {k: i for i, k in enumerate(unique)}
+    return np.array([m[c] for c in cats], dtype=int)
+
+
+@pytest.mark.parametrize("return_map", [False, True])
+@pytest.mark.parametrize("is_path", [False, True])
+@pytest.mark.parametrize("do_sort", [False, True])
+def test_encode_categories_all_branches_basic(return_map, is_path, do_sort):
+    """
+    Full branch coverage across return_map/is_path/do_sort
+    """
     categories = list("abcdabcd")
-    inds, map_ = misc.encode_categories(categories, return_map=True)
-    assert list(inds) == [0, 1, 2, 3, 0, 1, 2, 3]
-    assert map_ == dict(zip(list("abcd"), range(4), strict=False))
+
+    cats, unique_expected = _expected_unique(categories, is_path=is_path, do_sort=do_sort)
+    inds_expected = _expected_inds(cats, unique_expected)
+
+    if return_map:
+        inds, unique = misc.encode_categories(categories, return_map=True, is_path=is_path, do_sort=do_sort)
+        assert isinstance(unique, list)
+        assert unique == unique_expected
+        assert np.array_equal(inds, inds_expected)
+    else:
+        inds = misc.encode_categories(categories, return_map=False, is_path=is_path, do_sort=do_sort)
+        assert np.array_equal(inds, inds_expected)
+
+    # dtype guarantee
+    assert isinstance(inds_expected, np.ndarray)
+    if return_map:
+        assert isinstance(inds, np.ndarray)
+        assert inds.dtype == int
+
+
+@pytest.mark.parametrize("do_sort", [False, True])
+def test_encode_categories_return_map_consistency(do_sort):
+    """
+    Ensures inds returned with return_map=False matches inds from return_map=True
+    (for the same is_path/do_sort settings).
+    """
+    categories = ["b", "a", "b", "a", "c"]
+
+    inds_a, unique = misc.encode_categories(categories, return_map=True, is_path=False, do_sort=do_sort)
+    inds_b = misc.encode_categories(categories, return_map=False, is_path=False, do_sort=do_sort)
+    assert np.array_equal(inds_a, inds_b)
+
+    # sanity: unique produces a valid mapping
+    m = {k: i for i, k in enumerate(unique)}
+    assert list(inds_a) == [m[c] for c in categories]
+
+
+def test_encode_categories_do_sort_changes_indexing():
+    """
+    Verifies the behavioral difference between do_sort=True and do_sort=False.
+    """
+    categories = ["b", "a", "b", "a"]
+
+    inds_sorted, unique_sorted = misc.encode_categories(categories, return_map=True, is_path=False, do_sort=True)
+    assert unique_sorted == ["a", "b"]
+    assert list(inds_sorted) == [1, 0, 1, 0]
+
+    inds_unsorted, unique_unsorted = misc.encode_categories(categories, return_map=True, is_path=False, do_sort=False)
+    assert unique_unsorted == ["b", "a"]  # first-seen stable order
+    assert list(inds_unsorted) == [0, 1, 0, 1]
+
+
+def test_encode_categories_natural_sort_img2_before_img10():
+    """
+    Tests natural sorting (natsort): img2 comes before img10 when do_sort=True.
+    """
+    categories = ["img10.png", "img2.png", "img1.png"]
+
+    inds, unique = misc.encode_categories(categories, return_map=True, is_path=False, do_sort=True)
+    assert unique == ["img1.png", "img2.png", "img10.png"]
+
+    m = {k: i for i, k in enumerate(unique)}
+    assert list(inds) == [m["img10.png"], m["img2.png"], m["img1.png"]]
+
+
+@pytest.mark.parametrize(
+    "categories",
+    [
+        # mixed OS separators
+        [r"C:\data\frames\test\img001.png", r"/data/frames/test/img002.png", r"C:\data\frames\test\img001.png"],
+        # Path objects
+        [Path("/data/frames/test/img010.png"), Path("/data/frames/test/img002.png")],
+    ],
+)
+def test_encode_categories_path_canonicalization(categories):
+    """
+    Ensures canonicalization normalizes separators and retains the last components
+    (default canonicalize_path n=3).
+    """
+    inds, unique = misc.encode_categories(categories, return_map=True, is_path=True, do_sort=True)
+
+    # Canonical keys should use POSIX separators and keep last 3 components.
+    # e.g. frames/test/img001.png
+    assert all("\\" not in u for u in unique)
+    assert all(len(Path(u).parts) <= 3 for u in unique)
+
+    # inds should reference the unique list correctly
+    m = {k: i for i, k in enumerate(unique)}
+    canon = [misc.canonicalize_path(c) for c in categories]
+    assert list(inds) == [m[c] for c in canon]
+
+
+def test_encode_categories_is_path_false_does_not_canonicalize():
+    """
+    If is_path=False, we do not canonicalize.
+    Mixed separators remain distinct categories.
+    """
+    categories = [r"frames\test\img001.png", "frames/test/img001.png"]
+    inds, unique = misc.encode_categories(categories, return_map=True, is_path=False, do_sort=False)
+
+    assert unique == categories  # distinct, first-seen order preserved
+    assert list(inds) == [0, 1]
+
+
+def test_encode_categories_empty_input():
+    """
+    Empty categories should return an empty indices array (and empty unique list if requested).
+    """
+    categories = []
     inds = misc.encode_categories(categories, return_map=False)
+    assert isinstance(inds, np.ndarray)
+    assert inds.dtype == int
+    assert inds.size == 0
+
+    inds2, unique = misc.encode_categories(categories, return_map=True)
+    assert inds2.size == 0
+    assert unique == []
+
+
+@pytest.mark.parametrize("is_path", [False, True])
+@pytest.mark.parametrize("do_sort", [False, True])
+def test_encode_categories_numeric_categories(is_path, do_sort):
+    """
+    Non-string categories should still work.
+    When is_path=True, canonicalize_path() falls back to str(p) on exceptions.
+    """
+    categories = [10, 2, 10, 3]
+
+    inds, unique = misc.encode_categories(categories, return_map=True, is_path=is_path, do_sort=do_sort)
+
+    # unique elements should be stringified if is_path=True (due to canonicalize_path fallback)
+    if is_path:
+        assert all(isinstance(u, str) for u in unique)
+    else:
+        # could be ints directly
+        assert all(isinstance(u, int) for u in unique)
+
+    # verify mapping consistency
+    m = {k: i for i, k in enumerate(unique)}
+    if is_path:
+        cats = [misc.canonicalize_path(c) for c in categories]
+    else:
+        cats = categories
+    assert list(inds) == [m[c] for c in cats]
 
 
 def test_merge_multiple_scorers_no_likelihood(fake_keypoints):
@@ -50,20 +220,6 @@ def test_merge_multiple_scorers(fake_keypoints):
     df = misc.merge_multiple_scorers(df)
     pd.testing.assert_index_equal(df.columns, fake_keypoints.columns)
     assert not df.isna().any(axis=None)
-
-
-@pytest.mark.parametrize(
-    "path",
-    ["/home/to/fake/path", "C:\\Users\\with\\fake\\name"],
-)
-def test_to_os_dir_sep(path):
-    sep_wrong = "\\" if os.path.sep == "/" else "/"
-    assert sep_wrong not in misc.to_os_dir_sep(path)
-
-
-def test_to_os_dir_sep_invalid():
-    with pytest.raises(ValueError):
-        misc.to_os_dir_sep("/home\\home")
 
 
 def test_guarantee_multiindex_rows():
