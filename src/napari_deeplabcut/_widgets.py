@@ -621,6 +621,9 @@ class KeypointControls(QWidget):
         self._trail_cb.stateChanged.connect(self._show_trails)
         self._trails = None
 
+        self._refreshing_trails = False
+        self._trails_sig = None  # used to detect changes
+
         self._mpl_docked = False
         self._matplotlib_canvas = KeypointMatplotlibCanvas(self.viewer)
         self._show_traj_plot_cb = QCheckBox("Show trajectories", parent=self)
@@ -674,6 +677,10 @@ class KeypointControls(QWidget):
         display_shortcuts_action = QAction("&Shortcuts", self)
         display_shortcuts_action.triggered.connect(self.display_shortcuts)
         self.viewer.window.help_menu.addAction(display_shortcuts_action)
+
+        # Initialize color and label modes
+        self.color_mode = self._color_mode
+        self.label_mode = self._label_mode
 
         # Hide some unused viewer buttons
         # NOTE (future) do we truly want to disable these ? Tracking util may need to create new points layers
@@ -827,35 +834,100 @@ class KeypointControls(QWidget):
         show = self._view_scheme_cb.isChecked()
         self._color_scheme_display.setVisible(show)
 
+    def _trails_signature(self, pts_layer: Points) -> dict:
+        """A small signature to detect when trails must be rebuilt."""
+        return {
+            "points_layer_id": id(pts_layer),
+            "color_mode": str(self._color_mode),
+            # colormap changes trigger rebuild
+            "colormap_name": pts_layer.metadata.get("colormap_name"),
+            # detect data changes
+            "n_vertices": int(getattr(pts_layer.data, "shape", [0])[0]) if pts_layer.data is not None else 0,
+        }
+
+    def _apply_color_mode_to_points_layer(self, layer: Points) -> None:
+        """Apply current color mode to a specific Points layer (no mode changes)."""
+        if not layer.metadata:
+            return
+        face_color_mode = "label" if self._color_mode == keypoints.ColorMode.BODYPART else "id"
+        layer.face_color = face_color_mode
+        layer.face_color_cycle = layer.metadata["face_color_cycles"][face_color_mode]
+        layer.events.face_color()
+
+    def _remove_trails_layer(self) -> None:
+        """Remove trails without triggering the UI uncheck side effects."""
+        if self._trails is None:
+            return
+        self._refreshing_trails = True
+        try:
+            self.viewer.layers.remove(self._trails)
+        except Exception:
+            pass
+        finally:
+            self._trails = None
+            self._refreshing_trails = False
+
+    def _refresh_trails(self) -> None:
+        """Force a rebuild of trails if checkbox is on."""
+        if not self._trail_cb.isChecked():
+            return
+        self._remove_trails_layer()
+        self._create_trails()
+
     def _show_trails(self, state):
-        if Qt.CheckState(state) != Qt.CheckState.Checked:
+        checked = Qt.CheckState(state) == Qt.CheckState.Checked
+
+        if not checked:
             if self._trails is not None:
                 self._trails.visible = False
             return
 
+        # Need at least one store / points layer
+        if not self._stores:
+            return
+        store = list(self._stores.values())[0]
+        pts_layer = store.layer
+        if pts_layer is None:
+            return
+
+        # If trails missing, create
+        if self._trails is None:
+            self._create_trails()
+            return
+
+        # If trails exist but were created under another color mode, recreate
+        # (simple and robust)
+        sig = (id(pts_layer), str(self._color_mode), pts_layer.metadata.get("colormap_name"))
+        if getattr(self, "_trails_sig", None) != sig:
+            self._refresh_trails()
+            return
+
+        self._trails.visible = True
+
+    def _create_trails(self):
         # Always rebuild when first shown
         if self._trails is None:
             store = list(self._stores.values())[0]
             pts_layer = store.layer
 
-            # --- Determine properties present on Points layer
+            # Determine properties present on Points layer
             ids = pts_layer.properties.get("id")
             labels = pts_layer.properties.get("label")
             if labels is None or len(labels) == 0:
                 return
 
-            # --- Multi-animal?
+            # Multi-animal?
             is_multi = ids is not None and len(ids) and isinstance(ids[0], str) and ids[0] != ""
 
-            # --- Choose the property used for coloring (categories → colors)
+            # Choose the property used for coloring (categories → colors)
             color_prop = "id" if (self.color_mode == str(keypoints.ColorMode.INDIVIDUAL) and is_multi) else "label"
             categories_for_color = pts_layer.properties[color_prop]
 
-            # --- Stable unique order for the *color* categories
+            # Stable unique order for the *color* categories
             uniq_color = list(dict.fromkeys(map(str, categories_for_color)))
             n_color = len(uniq_color)
 
-            # --- Build palette from DLC config cycles (fallback to tab20 for gaps)
+            # Build palette from DLC config cycles (fallback to tab20 for gaps)
             face_cycles = pts_layer.metadata.get("face_color_cycles", {})
             cycle_dict = face_cycles.get(color_prop, {})  # {name: color}
             color_list = []
@@ -872,7 +944,7 @@ class KeypointControls(QWidget):
                 palette = plt.get_cmap("tab20").colors
                 color_list = [palette[i % len(palette)] for i in range(n_color)]
 
-            # → RGBA in 0..1
+            # RGBA in [0,1]
             colors_rgba = []
             for c in color_list:
                 c = np.asarray(c, dtype=float)
@@ -883,7 +955,7 @@ class KeypointControls(QWidget):
                 colors_rgba.append(c)
             colors_rgba = np.asarray(colors_rgba, dtype=float)
 
-            # → Controls in [0,1], length == number of colors (special-case n=1)
+            # Controls in [0,1]
             if n_color == 1:
                 controls = np.array([0.0, 1.0], dtype=float)
                 colors_rgba = np.vstack([colors_rgba[0], colors_rgba[0]])
@@ -915,22 +987,23 @@ class KeypointControls(QWidget):
             # Property to color by: normalized numeric codes of categories_for_color
             color_index = {u: i for i, u in enumerate(uniq_color)}
             codes = np.array([color_index[str(u)] for u in categories_for_color], dtype=int)
-            codes01 = (codes / float(max(n_color - 1, 1))).astype(float)
+            codes_norm = (codes / float(max(n_color - 1, 1))).astype(float)
 
-            props = {f"{color_prop}_code01": codes01}
+            props = {f"{color_prop}_codes": codes_norm}
 
             self._trails = self.viewer.add_tracks(
                 tracks_data,
                 properties=props,
-                color_by=f"{color_prop}_code01",
-                colormaps_dict={f"{color_prop}_code01": categorical_cmap},
+                color_by=f"{color_prop}_codes",
+                colormaps_dict={f"{color_prop}_codes": categorical_cmap},
                 tail_length=50,
                 head_length=50,
                 tail_width=6,
                 name="trails",
             )
-
-        self._trails.visible = True
+            self._trails.metadata = self._trails.metadata or {}
+            self._trails.metadata["_dlc_trails_signature"] = self._trails_signature(pts_layer)
+            self._trails.visible = True
 
     def _form_video_action_menu(self):
         group_box = QGroupBox("Video")
@@ -1040,7 +1113,7 @@ class KeypointControls(QWidget):
             btn.setToolTip(keypoints.TOOLTIPS[mode])
             group.addButton(btn, i)
             layout.addWidget(btn)
-        group.button(1).setChecked(True)
+        # group.button(1).setChecked(True)
         group_box.setLayout(layout)
         self._layout.addWidget(group_box)
 
@@ -1058,7 +1131,7 @@ class KeypointControls(QWidget):
             btn = QRadioButton(mode.lower())
             group.addButton(btn, i)
             layout.addWidget(btn)
-        group.button(1).setChecked(True)
+        # group.button(1).setChecked(True)
         group_box.setLayout(layout)
         self._layout.addWidget(group_box)
 
@@ -1309,6 +1382,14 @@ class KeypointControls(QWidget):
             layer.bind_key("Down", store.next_keypoint, overwrite=True)
             layer.bind_key("Up", store.prev_keypoint, overwrite=True)
             layer.face_color_mode = "cycle"
+
+            # Make sure the Points layer matches current mode immediately (startup fix)
+            self._apply_color_mode_to_points_layer(layer)
+
+            # If trails are enabled already, refresh them too
+            if self._trail_cb.isChecked() and self._trails is not None:
+                self._refresh_trails()
+
             self._form_dropdown_menus(store)
 
             self._images_meta.update(
@@ -1382,6 +1463,12 @@ class KeypointControls(QWidget):
             if paths is None:
                 self.video_widget.setVisible(False)
         elif isinstance(layer, Tracks):
+            # If we are internally refreshing trails, do NOT touch the checkboxes.
+            if getattr(self, "_refreshing_trails", False):
+                self._trails = None
+                return
+
+            # User removed tracks (or external removal) → reset UI
             self._trail_cb.setChecked(False)
             self._show_traj_plot_cb.setChecked(False)
             self._trails = None
@@ -1419,6 +1506,9 @@ class KeypointControls(QWidget):
                 layer.face_color_cycle = face_color_cycle_maps[face_color_prop]
                 layer.events.face_color()
                 self._update_color_scheme()
+
+        if self._trail_cb.isChecked() and self._trails is not None:
+            self._refresh_trails()
 
     @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):
@@ -1461,7 +1551,6 @@ class KeypointControls(QWidget):
         else:
             face_color_mode = "id"
 
-        # Update Points layers immediately (as you already do)
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata:
                 layer.face_color = face_color_mode
@@ -1476,19 +1565,9 @@ class KeypointControls(QWidget):
 
         self._update_color_scheme()
 
-        # --- NEW: refresh trails if they exist & checkbox is on
-        if getattr(self, "_trails", None) is not None and self._trail_cb.isChecked():
-            vis = self._trails.visible
-            # Remove and rebuild with new color mode
-            try:
-                self.viewer.layers.remove(self._trails)
-            except Exception:
-                pass
-            self._trails = None
-            # Force rebuild
-            self._show_trails(Qt.CheckState.Checked)
-            if self._trails is not None:
-                self._trails.visible = vis
+        # Refresh trails if they exist & checkbox is on
+        if self._trail_cb.isChecked():
+            self._refresh_trails()
 
     def _is_multianimal(self, layer) -> bool:
         is_multi = False
