@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Sequence
 from enum import Enum, EnumMeta
 from itertools import cycle
 from pathlib import Path
+from typing import TypeVar, overload
 
 import numpy as np
 import pandas as pd
 from napari.utils import colormaps
+
+T = TypeVar("T")
 
 
 def find_project_config_path(labeled_data_path: str) -> str:
@@ -211,3 +214,79 @@ class CycleEnum(Enum, metaclass=CycleEnumMeta):
 
     def __str__(self):
         return self.value
+
+
+@overload
+def find_layer(
+    layers: Iterable[object],
+    layer_type: type[T],
+    *,
+    predicate: Callable[[T], bool] | None = None,
+    default: T | None = None,
+) -> T | None: ...
+
+
+def find_layer(
+    layers: Iterable[object],
+    layer_type: type[T],
+    *,
+    predicate: Callable[[T], bool] | None = None,
+    default: T | None = None,
+) -> T | None:
+    """
+    Return the first layer in `layers` that is an instance of `layer_type`.
+
+    Parameters
+    ----------
+    layers:
+        Any iterable of layer-like objects (e.g. viewer.layers).
+    layer_type:
+        The class/type to match (e.g. napari.layers.Image).
+    predicate:
+        Optional filter called on matching layers.
+    default:
+        Value returned if no match is found.
+
+    Returns
+    -------
+    The first matching layer, else `default`.
+    """
+    for layer in layers:
+        if isinstance(layer, layer_type):
+            if predicate is None or predicate(layer):
+                return layer
+    return default
+
+
+def find_layers(
+    layers: Iterable[object],
+    layer_type: type[T],
+    *,
+    predicate: Callable[[T], bool] | None = None,
+) -> list[T]:
+    """
+    Return all layers in `layers` that are instances of `layer_type`.
+    """
+    out: list[T] = []
+    for layer in layers:
+        if isinstance(layer, layer_type):
+            if predicate is None or predicate(layer):
+                out.append(layer)
+    return out
+
+
+def find_layers_of_types(
+    layers: Iterable[object],
+    layer_types: Iterable[type[T]],
+    *,
+    predicate: Callable[[T], bool] | None = None,
+) -> list[T]:
+    """
+    Return all layers in `layers` that are instances of any of `layer_types`.
+    """
+    out: list[T] = []
+    for layer in layers:
+        if any(isinstance(layer, layer_type) for layer_type in layer_types):
+            if predicate is None or predicate(layer):
+                out.append(layer)
+    return out
