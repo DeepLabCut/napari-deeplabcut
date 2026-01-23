@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable, Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import cv2
@@ -74,6 +75,7 @@ def get_folder_parser(path):
     layers = []
 
     images = _filter_extensions(Path(path).iterdir(), valid_extensions=SUPPORTED_IMAGES)
+
 
     if not images:
         raise OSError(f"No supported images were found in {path} with extensions {SUPPORTED_IMAGES}.")
