@@ -541,19 +541,8 @@ class KeypointMatplotlibCanvas(QWidget):
             # Plot trajectories
             self._lines = {}
             for keypoint in self.df.columns.get_level_values("bodyparts").unique():
-                y_sel = self.df.xs(
-                    (keypoint, "y"),
-                    axis=1,
-                    level=["bodyparts", "coords"],
-                )
-                if y_sel.empty:
-                    continue
-                # Convert to numpy and enforce "one trajectory per keypoint"
-                y = np.atleast_1d(y_sel.to_numpy().squeeze())
-                if y.ndim != 1:
-                    raise ValueError(f"Expected 1D y trajectory for keypoint={keypoint!r}, got shape={y.shape}")
-                x = np.arange(y.size)
-
+                y = self.df.xs((keypoint, "y"), axis=1, level=["bodyparts", "coords"]).to_numpy().squeeze()
+                x = np.arange(len(y))
                 color = points_layer.metadata["face_color_cycles"]["label"][keypoint]
                 lines = self.ax.plot(x, y, color=color, label=keypoint)
                 self._lines[keypoint] = lines
