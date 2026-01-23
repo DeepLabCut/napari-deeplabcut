@@ -541,8 +541,19 @@ class KeypointMatplotlibCanvas(QWidget):
             # Plot trajectories
             self._lines = {}
             for keypoint in self.df.columns.get_level_values("bodyparts").unique():
-                y = self.df.xs((keypoint, "y"), axis=1, level=["bodyparts", "coords"]).to_numpy().squeeze()
-                x = np.arange(len(y))
+                y_sel = self.df.xs(
+                    (keypoint, "y"),
+                    axis=1,
+                    level=["bodyparts", "coords"],
+                )
+                if y_sel.empty:
+                    continue
+                # Convert to numpy and enforce "one trajectory per keypoint"
+                y = np.atleast_1d(y_sel.to_numpy().squeeze())
+                if y.ndim != 1:
+                    raise ValueError(f"Expected 1D y trajectory for keypoint={keypoint!r}, got shape={y.shape}")
+                x = np.arange(y.size)
+
                 color = points_layer.metadata["face_color_cycles"]["label"][keypoint]
                 lines = self.ax.plot(x, y, color=color, label=keypoint)
                 self._lines[keypoint] = lines
@@ -838,7 +849,7 @@ class KeypointControls(QWidget):
             predicate=lambda lyr: lyr.metadata.get("tables") is not None,
         )
         data = getattr(points_layer, "data", None)
-        if points_layer is None or data is None or not data.any():
+        if points_layer is None or data is None or not data.size > 0:
             return
 
         xy = points_layer.data[:, 1:3]
@@ -846,7 +857,7 @@ class KeypointControls(QWidget):
         xy_ref = np.c_[[val for val in superkpts_dict.values()]]
         neighbors = keypoints._find_nearest_neighbors(xy, xy_ref)
         found = neighbors != -1
-        if not found.any():
+        if not found.size > 0:
             return
 
         project_path = points_layer.metadata["project"]
@@ -973,7 +984,7 @@ class KeypointControls(QWidget):
         layer = find_layer(
             self.viewer.layers,
             Shapes,
-            predicate=lambda lyr: "rectangle" in lyr.shape_type,
+            predicate=lambda lyr: getattr(lyr, "shape_type", None) and "rectangle" in lyr.shape_type,
         )
         if layer is not None:
             try:

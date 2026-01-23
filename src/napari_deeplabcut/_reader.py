@@ -229,7 +229,10 @@ def read_hdf(filename: str) -> list[LayerData]:
         nrows = df.shape[0]
         data = np.empty((nrows, 3))
         image_paths = df["level_0"]
-        if is_numeric_dtype(getattr(image_paths, "dtype", np.asarray(image_paths).dtype)):
+        dtype = getattr(image_paths, "dtype", None)
+        if dtype is None:
+            dtype = np.asarray(image_paths).dtype
+        if is_numeric_dtype(dtype):
             image_inds = image_paths.values
             paths2inds = []
         else:
