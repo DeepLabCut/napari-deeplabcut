@@ -17,24 +17,27 @@ logger = logging.getLogger(__name__)
 def canonicalize_path(p: str | Path, n: int = 3) -> str:
     """Return canonical POSIX path built from the last n path components.
 
-    Notes
-    -----
-    - Uses pathlib parsing for platform-native separators.
-    - Always normalizes backslashes to forward slashes in the returned string.
-    - If pathlib cannot parse `p`, falls back to `str(p)`.
+    This is platform-agnostic: it normalizes both Windows (`\\`) and POSIX (`/`)
+    separators *before* splitting, then returns a POSIX-joined tail of length `n`.
+
+    Examples
+    --------
+    - "C:\\data\\frames\\test\\img001.png" -> "frames/test/img001.png" (n=3)
+    - "/home/user/frames/test/img001.png" -> "frames/test/img001.png" (n=3)
     """
     try:
-        parts = Path(p).parts
-        return str(Path(*parts[-n:])).replace("\\", "/")
-    except (TypeError, OSError) as e:
-        # Expected failures: p not path-like, or odd OS/path handling.
-        logger.debug(
-            "Failed to canonicalize path %r with pathlib (%s). Falling back to str().",
-            p,
-            type(e).__name__,
-            exc_info=True,
-        )
-        return str(p).replace("\\", "/")
+        s = str(p)
+    except Exception as e:
+        logger.debug("Failed to stringify path %r (%s).", p, type(e).__name__, exc_info=True)
+        return ""
+
+    s = s.replace("\\", "/")
+    s = s.rstrip("/")
+    parts = [part for part in s.split("/") if part and part != "."]
+
+    if not parts:
+        return ""
+    return "/".join(parts[-n:])
 
 
 def remap_array(values, idx_map):

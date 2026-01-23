@@ -31,12 +31,9 @@ def test_canonicalize_path():
     assert misc.canonicalize_path(p, n=10) == "a/b/c"
     p = Path("a/b/c/d.txt")
     assert misc.canonicalize_path(p, n=3) == "b/c/d.txt"
-    # Path("") becomes ".", so parts = (".",)
-    assert misc.canonicalize_path("") == "."
-    assert misc.canonicalize_path(".") == "."
-    # On POSIX, Path("/").parts == ("/",)
-    # Path(*parts[-n:]) -> Path("/") -> str("/") -> "/"
-    assert misc.canonicalize_path("/") == "/"
+    assert misc.canonicalize_path("") == ""
+    assert misc.canonicalize_path(".") == ""
+    assert misc.canonicalize_path("/") == ""
     p = "a/b/c/"
     # Path("a/b/c/") collapses trailing slash; last 3 parts are a/b/c
     assert misc.canonicalize_path(p, n=3) == "a/b/c"
