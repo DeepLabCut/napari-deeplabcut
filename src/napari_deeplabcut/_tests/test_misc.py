@@ -48,16 +48,15 @@ def test_canonicalize_path():
 
 
 def test_canonicalize_path_converts_backslashes():
-    # Important: behavior depends on Path.parts semantics of the running OS.
+    # Always normalize separators to POSIX style
     p = r"a\b\c\file.png"
     out = misc.canonicalize_path(p, n=3)
-
-    # Always normalize separators to POSIX style
     assert "\\" not in out
 
-    # Portable expected result: mirror "last n parts" logic + normalization
-    parts = Path(p).parts
-    expected = str(Path(*parts[-3:])).replace("\\", "/")
+    # Compute expected using the same logic as canonicalize_path
+    s = p.replace("\\", "/").rstrip("/")
+    parts = [part for part in s.split("/") if part and part != "."]
+    expected = "/".join(parts[-3:]) if parts else ""
     assert out == expected
 
 
