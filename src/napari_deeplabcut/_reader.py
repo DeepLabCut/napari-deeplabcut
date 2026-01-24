@@ -253,7 +253,7 @@ def read_images(path: str | Path | list[str | Path]):
 
     # Multiple images → lazy-imread stack
     if len(filepaths) > 1:
-        relative_paths = [str(Path(*fp.parts[-3:])) for fp in filepaths]
+        relative_paths = [misc.canonicalize_path(fp, 3) for fp in filepaths]
         params = {
             "name": "images",
             "metadata": {
@@ -269,7 +269,7 @@ def read_images(path: str | Path | list[str | Path]):
     params = {
         "name": "images",
         "metadata": {
-            "paths": [str(Path(*image_path.parts[-3:]))],
+            "paths": [misc.canonicalize_path(image_path, 3)],
             "root": str(image_path.parent),
         },
     }
@@ -404,8 +404,11 @@ def read_hdf(filename: str) -> list[LayerData]:
         else:
             image_inds, paths2inds = misc.encode_categories(
                 image_paths,
-                return_map=True,
+                is_path=True,
+                return_unique=True,
+                do_sort=True,
             )
+
         data[:, 0] = image_inds
         data[:, 1:] = df[["y", "x"]].to_numpy()
         metadata = _populate_metadata(
