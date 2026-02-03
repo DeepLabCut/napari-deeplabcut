@@ -15,5 +15,5 @@ package = true
 [tool.setuptools_scm]
 write_to = "src/napari_deeplabcut/_version.py"
 
-[tool.pytest.ini_options]
-qt_api = "pyside6"
+# [tool.pytest.ini_options]
+# qt_api = "pyside6"

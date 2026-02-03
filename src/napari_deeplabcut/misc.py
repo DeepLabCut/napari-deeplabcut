@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/misc.py
 from __future__ import annotations
 
 import logging
@@ -25,6 +26,8 @@ def canonicalize_path(p: str | Path, n: int = 3) -> str:
     - "C:\\data\\frames\\test\\img001.png" -> "frames/test/img001.png" (n=3)
     - "/home/user/frames/test/img001.png" -> "frames/test/img001.png" (n=3)
     """
+    if n <= 0:
+        raise ValueError("n must be a positive integer")
     try:
         s = str(p)
     except Exception as e:
@@ -33,7 +36,7 @@ def canonicalize_path(p: str | Path, n: int = 3) -> str:
 
     s = s.replace("\\", "/")
     s = s.rstrip("/")
-    parts = [part for part in s.split("/") if part and part != "."]
+    parts = [part for part in s.split("/") if part and part != "." and part != ".."]
 
     if not parts:
         return ""

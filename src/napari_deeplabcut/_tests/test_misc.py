@@ -1,3 +1,5 @@
+# test_misc.py
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -7,65 +9,66 @@ import pytest
 from napari_deeplabcut import _reader, misc
 
 
-def test_unsorted_unique_numeric():
-    seq = [4, 3, 2, 1, 0, 1, 2, 3, 4, 5]
+# ----------------------------
+# unsorted_unique tests
+# ----------------------------
+@pytest.mark.parametrize(
+    "seq, expected",
+    [
+        ([4, 3, 2, 1, 0, 1, 2, 3, 4, 5], [4, 3, 2, 1, 0, 5]),
+        (["c", "b", "d", "b", "a", "b"], ["c", "b", "d", "a"]),
+        # Add more edge cases as needed (e.g., tuples, mixed types if desired)
+    ],
+)
+def test_unsorted_unique(seq, expected):
     out = misc.unsorted_unique(seq)
-    assert list(out) == [4, 3, 2, 1, 0, 5]
+    assert list(out) == expected
 
 
-def test_unsorted_unique_string():
-    seq = ["c", "b", "d", "b", "a", "b"]
-    out = misc.unsorted_unique(seq)
-    assert list(out) == ["c", "b", "d", "a"]
+# ----------------------------
+# canonicalize_path tests
+# ----------------------------
+@pytest.mark.parametrize(
+    "p, n, expected",
+    [
+        # basic POSIX cases
+        ("root/sub1/sub2/file.png", 3, "sub1/sub2/file.png"),
+        ("root/sub/file.png", 2, "sub/file.png"),
+        ("root/sub/file.png", 1, "file.png"),
+        ("a/b/c", 10, "a/b/c"),
+        (Path("a/b/c/d.txt"), 3, "b/c/d.txt"),
+        ("", 3, ""),
+        (".", 3, ""),
+        ("..", 3, ""),
+        ("/", 3, ""),
+        ("a/b/c/", 3, "a/b/c"),
+        # n <= 0 raises ValueError
+        ("a/b/c", 0, ValueError),
+        ("a/b/c/d", -1, ValueError),
+        # non-string coercion
+        (123, 3, "123"),
+        # Windows-style backslashes normalized to POSIX; last 3 components kept
+        (r"a\b\c\file.png", 3, "b/c/file.png"),
+        # Mixed separators: double backslash becomes empty path component after replace -> filtered out
+        (r"frames\\test\video0/img001.png", 3, "test/video0/img001.png"),
+    ],
+)
+def test_canonicalize_path_cases(p, n, expected):
+    # If expected is an Exception class, assert it is raised
+    is_exc_class = inspect.isclass(expected) and issubclass(expected, Exception)
+    if is_exc_class:
+        with pytest.raises(expected):
+            misc.canonicalize_path(p, n=n)
+        return
 
-
-# Tests for new OS-agnostic path canonicalization in misc.canonicalize_path and misc.encode_categories
-def test_canonicalize_path():
-    p = "root/sub1/sub2/file.png"
-    assert misc.canonicalize_path(p) == "sub1/sub2/file.png"
-    p = "root/sub/file.png"
-    assert misc.canonicalize_path(p, n=2) == "sub/file.png"
-    p = "root/sub/file.png"
-    assert misc.canonicalize_path(p, n=1) == "file.png"
-    p = "a/b/c"
-    assert misc.canonicalize_path(p, n=10) == "a/b/c"
-    p = Path("a/b/c/d.txt")
-    assert misc.canonicalize_path(p, n=3) == "b/c/d.txt"
-    assert misc.canonicalize_path("") == ""
-    assert misc.canonicalize_path(".") == ""
-    assert misc.canonicalize_path("/") == ""
-    p = "a/b/c/"
-    # Path("a/b/c/") collapses trailing slash; last 3 parts are a/b/c
-    assert misc.canonicalize_path(p, n=3) == "a/b/c"
-    # parts[-0:] is equivalent to parts[:], so full path returned
-    p = "a/b/c"
-    assert misc.canonicalize_path(p, n=0) == "a/b/c"
-    p = "a/b/c/d"
-    assert misc.canonicalize_path(p, n=-1) == "b/c/d"
-    # Path(123) raises TypeError -> fallback to str(p)
-    out = misc.canonicalize_path(123, n=3)  # type: ignore[arg-type]
-    assert out == "123"
-
-
-def test_canonicalize_path_converts_backslashes():
-    # Always normalize separators to POSIX style
-    p = r"a\b\c\file.png"
-    out = misc.canonicalize_path(p, n=3)
-    assert "\\" not in out
-
-    # Compute expected using the same logic as canonicalize_path
-    s = p.replace("\\", "/").rstrip("/")
-    parts = [part for part in s.split("/") if part and part != "."]
-    expected = "/".join(parts[-3:]) if parts else ""
+    out = misc.canonicalize_path(p, n=n)
     assert out == expected
 
 
-def test_canonicalize_path_mixed_separators_normalized_to_posix():
-    # '/' splits into parts on POSIX; '\ ' stays within a component but gets replaced.
-    p = r"frames\\test\video0/img001.png"
-    out = misc.canonicalize_path(p, n=3)
+def test_canonicalize_path_converts_and_drops_backslashes():
+    # Dedicated check that backslashes are removed
+    out = misc.canonicalize_path(r"a\b\c\file.png", n=3)
     assert "\\" not in out
-    assert out.endswith("video0/img001.png")
 
 
 def test_canonicalize_path_exception_fallback_still_replaces_backslashes():
@@ -78,7 +81,9 @@ def test_canonicalize_path_exception_fallback_still_replaces_backslashes():
     assert "\\" not in out
 
 
-# encode_categories tests utils
+# ----------------------------
+# encode_categories helpers (kept for existing tests)
+# ----------------------------
 def _expected_unique(categories, *, is_path, do_sort):
     """Compute expected unique list according to encode_categories semantics."""
     if is_path:
@@ -103,6 +108,9 @@ def _expected_inds(cats, unique):
     return np.array([m[c] for c in cats], dtype=int)
 
 
+# ----------------------------
+# encode_categories tests
+# ----------------------------
 @pytest.mark.parametrize("return_map", [False, True])
 @pytest.mark.parametrize("is_path", [False, True])
 @pytest.mark.parametrize("do_sort", [False, True])
@@ -259,6 +267,43 @@ def test_encode_categories_numeric_categories(is_path, do_sort):
     assert list(inds) == [m[c] for c in cats]
 
 
+# ----------------------------
+# encode_categories explicit parametric truth table
+# ----------------------------
+@pytest.mark.parametrize(
+    "categories, is_path, do_sort, expected_unique, expected_inds",
+    [
+        # Non-path, unsorted stable order
+        (["b", "a", "b", "a"], False, False, ["b", "a"], [0, 1, 0, 1]),
+        # Non-path, natural sort
+        (["b", "a", "b", "a"], False, True, ["a", "b"], [1, 0, 1, 0]),
+        # Path canonicalization collapses to the same last-3 tail
+        (
+            [r"frames\test\img001.png", "/user/x/frames/test/img001.png"],
+            True,
+            False,
+            ["frames/test/img001.png"],
+            [0, 0],
+        ),
+        # Path canonicalization + natural sort with different tails
+        (
+            ["/a/b/c/d/e.png", r"C:\a\b\c\f.png"],
+            True,
+            True,
+            ["b/c/f.png", "c/d/e.png"],  # natsorted order
+            [1, 0],
+        ),  # indices map to the natsorted unique list
+    ],
+)
+def test_encode_categories_parametric_explicit(categories, is_path, do_sort, expected_unique, expected_inds):
+    inds, unique = misc.encode_categories(categories, return_unique=True, is_path=is_path, do_sort=do_sort)
+    assert unique == expected_unique
+    assert list(inds) == expected_inds
+
+
+# ----------------------------
+# merge_multiple_scorers tests
+# ----------------------------
 def test_merge_multiple_scorers_no_likelihood(fake_keypoints):
     temp = fake_keypoints.copy(deep=True)
     temp.columns = temp.columns.set_levels(["you"], level="scorer")
@@ -284,6 +329,9 @@ def test_merge_multiple_scorers(fake_keypoints):
     assert not df.isna().any(axis=None)
 
 
+# ----------------------------
+# guarantee_multiindex_rows tests
+# ----------------------------
 def test_guarantee_multiindex_rows():
     fake_index = [f"labeled-data/subfolder_{i}/image_{j}" for i in range(3) for j in range(10)]
     df = pd.DataFrame(index=fake_index)
@@ -297,6 +345,9 @@ def test_guarantee_multiindex_rows():
     assert df.index.to_list() == frame_numbers
 
 
+# ----------------------------
+# build_color_cycle tests
+# ----------------------------
 @pytest.mark.parametrize("n_colors", range(1, 11))
 def test_build_color_cycle(n_colors):
     color_cycle = misc.build_color_cycle(n_colors)
@@ -305,6 +356,9 @@ def test_build_color_cycle(n_colors):
     assert len(set(map(tuple, color_cycle))) == n_colors
 
 
+# ----------------------------
+# DLCHeader tests
+# ----------------------------
 def test_dlc_header():
     n_animals = 2
     n_keypoints = 3
@@ -339,6 +393,9 @@ def test_dlc_header_from_config_multi(config_path):
     assert header.individuals != [""]
 
 
+# ----------------------------
+# CycleEnum tests
+# ----------------------------
 def test_cycle_enum():
     enum = misc.CycleEnum("Test", list("AB"))
     assert next(enum).value == "a"
