@@ -1,6 +1,7 @@
+# src/napari_deeplabcut/misc.py
 from __future__ import annotations
 
-import os
+import logging
 from collections.abc import Sequence
 from enum import Enum, EnumMeta
 from itertools import cycle
@@ -9,6 +10,61 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from napari.utils import colormaps
+from natsort import natsorted
+
+logger = logging.getLogger(__name__)
+
+
+def canonicalize_path(p: str | Path, n: int = 3) -> str:
+    """Return canonical POSIX path built from the last n path components.
+
+    This is platform-agnostic: it normalizes both Windows (`\\`) and POSIX (`/`)
+    separators *before* splitting, then returns a POSIX-joined tail of length `n`.
+
+    Examples
+    --------
+    - "C:\\data\\frames\\test\\img001.png" -> "frames/test/img001.png" (n=3)
+    - "/home/user/frames/test/img001.png" -> "frames/test/img001.png" (n=3)
+    """
+    if n <= 0:
+        raise ValueError("n must be a positive integer")
+    try:
+        s = str(p)
+    except Exception as e:
+        logger.debug("Failed to stringify path %r (%s).", p, type(e).__name__, exc_info=True)
+        return ""
+
+    s = s.replace("\\", "/")
+    s = s.rstrip("/")
+    parts = [part for part in s.split("/") if part and part != "." and part != ".."]
+
+    if not parts:
+        return ""
+    return "/".join(parts[-n:])
+
+
+def remap_array(values, idx_map):
+    """
+    Remap integer frame indices using a mapping, safe for empty arrays.
+
+    Args:
+        values: Array-like of integer indices (e.g., a NumPy array) to be remapped.
+        idx_map: Mapping from original integer indices to new integer indices.
+
+    Returns:
+        A NumPy array of integer indices where each element of ``values`` is
+        replaced by ``idx_map[value]`` when present in the mapping; if a value
+        is not found in ``idx_map``, it is left unchanged. Empty input arrays
+        are returned unchanged.
+    """
+    values = values.astype(int, copy=False)
+
+    if values.size == 0:
+        return values  # important: allow empty arrays!
+
+    # Build array of mapped values, falling back to identity
+    mapped = np.fromiter((idx_map.get(v, v) for v in values), dtype=values.dtype, count=len(values))
+    return mapped
 
 
 def find_project_config_path(labeled_data_path: str) -> str:
@@ -33,12 +89,34 @@ def unsorted_unique(array: Sequence) -> np.ndarray:
     return np.asarray(array)[np.sort(inds)]
 
 
-def encode_categories(categories: list[str], return_map: bool = False) -> list[int] | tuple[list[int], dict]:
-    unique_cat = unsorted_unique(categories)
-    map_ = dict(zip(unique_cat, range(len(unique_cat)), strict=False))
-    inds = np.vectorize(map_.get)(categories)
-    if return_map:
-        return inds, map_
+def encode_categories(categories: Sequence, return_unique: bool = False, is_path: bool = True, do_sort: bool = True):
+    """
+    Convert a list of categories (typically filenames) into integer indices
+
+    Args:
+        categories: list of categories (strings or numbers)
+        return_unique: if True, also returns a list of unique categories
+        is_path: if True, canonicalize categories as paths
+        do_sort: if True, sort unique categories naturally
+
+    Returns:
+        inds: array of integer indices corresponding to categories
+        unique_cat: list of unique categories (if return_unique is True)
+    """
+    # Canonicalize all categories (important!)
+    if is_path:
+        categories = [canonicalize_path(c) for c in categories]
+
+    # Determine unique values in stable order, but natural-sorted
+    unique_cat = list(dict.fromkeys(categories))
+    if do_sort:
+        unique_cat = natsorted(unique_cat)
+    map_ = {k: i for i, k in enumerate(unique_cat)}
+
+    inds = np.array([map_[c] for c in categories], dtype=int)
+
+    if return_unique:
+        return inds, unique_cat
     return inds
 
 
@@ -74,30 +152,11 @@ def merge_multiple_scorers(
     return df
 
 
-def to_os_dir_sep(path: str) -> str:
-    """
-    Replace all directory separators in `path` with `os.path.sep`.
-    Function originally written by @pyzun:
-    https://github.com/DeepLabCut/napari-DeepLabCut/pull/13
-
-    Raises
-    ------
-    ValueError: if `path` contains both UNIX and Windows directory separators.
-
-    """
-    win_sep, unix_sep = "\\", "/"
-
-    # On UNIX systems, `win_sep` is a valid character in directory and file
-    # names. This function fails if both are present.
-    if win_sep in path and unix_sep in path:
-        raise ValueError(f'"{path}" may not contain both "{win_sep}" and "{unix_sep}"!')
-
-    sep = win_sep if win_sep in path else unix_sep
-
-    return os.path.sep.join(path.split(sep))
-
-
 def guarantee_multiindex_rows(df):
+    """Ensure that DataFrame rows are a MultiIndex of path components.
+    Legacy DLC data may use an index with pathto/video/file.png strings as Index.
+    The new format uses a MultiIndex with each path component as a level.
+    """
     # Make paths platform-agnostic if they are not already
     if not isinstance(df.index, pd.MultiIndex):  # Backwards compatibility
         path = df.index[0]

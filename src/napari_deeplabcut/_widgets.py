@@ -57,9 +57,10 @@ from napari_deeplabcut._reader import (
 from napari_deeplabcut._writer import _form_df, _write_config, _write_image
 from napari_deeplabcut.misc import (
     build_color_cycles,
+    canonicalize_path,
     encode_categories,
     guarantee_multiindex_rows,
-    to_os_dir_sep,
+    remap_array,
 )
 
 Tip = namedtuple("Tip", ["msg", "pos"])
@@ -362,12 +363,14 @@ class KeypointMatplotlibCanvas(QWidget):
     Uses keypoints from a specified range of frames to plot them on a t-y axis.
     """
 
+    # FIXME : y axis should be reversed due to napari using top-left as origin
     def __init__(self, napari_viewer, parent=None):
         super().__init__(parent=parent)
 
         self.viewer = napari_viewer
         with mplstyle.context(self.mpl_style_sheet_path):
             self.canvas = FigureCanvas()
+            self.canvas.figure.set_size_inches(4, 2, forward=True)
             self.canvas.figure.set_layout_engine("constrained")
             self.ax = self.canvas.figure.subplots()
         self.toolbar = NapariNavigationToolbar(self.canvas, parent=self)
@@ -714,6 +717,7 @@ class KeypointControls(QWidget):
 
         try:
             window.add_dock_widget(self._matplotlib_canvas, name="Trajectory plot", area="right", tabify=False)
+            self._matplotlib_canvas.canvas.draw_idle()
             self._matplotlib_canvas.hide()
             self._mpl_docked = True
         except Exception as e:
@@ -824,29 +828,48 @@ class KeypointControls(QWidget):
         self._color_scheme_display.setVisible(show)
 
     def _show_trails(self, state):
-        if Qt.CheckState(state) == Qt.CheckState.Checked:
-            if self._trails is None:
-                store = list(self._stores.values())[0]
-                categories = store.layer.properties["id"]
-                if not categories[0]:  # Single animal data
-                    categories = store.layer.properties["label"]
-                inds = encode_categories(categories)
-                temp = np.c_[inds, store.layer.data]
-                cmap = "viridis"
-                for layer in self.viewer.layers:
-                    if isinstance(layer, Points) and layer.metadata:
-                        cmap = layer.metadata["colormap_name"]
-                self._trails = self.viewer.add_tracks(
-                    temp,
-                    tail_length=50,
-                    head_length=50,
-                    tail_width=6,
-                    name="trails",
-                    colormap=cmap,
-                )
-            self._trails.visible = True
-        elif self._trails is not None:
-            self._trails.visible = False
+        if Qt.CheckState(state) != Qt.CheckState.Checked:
+            if self._trails is not None:
+                self._trails.visible = False
+            return
+
+        if self._trails is None:
+            store = list(self._stores.values())[0]
+
+            # Determine coloring mode
+            mode = "label"
+            if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL):
+                mode = "id"
+
+            categories = store.layer.properties.get(mode)
+            # Check for single animal data
+            if categories is None or (mode == "id" and (not categories[0])):
+                mode = "label"
+                categories = store.layer.properties["label"]
+
+            inds = encode_categories(categories, is_path=False, do_sort=False)
+
+            # Build Tracks data
+            temp = np.c_[inds, store.layer.data]
+            cmap = "viridis"
+            for layer in self.viewer.layers:
+                if isinstance(layer, Points):
+                    colormap_name = layer.metadata.get("colormap_name")
+                    if colormap_name:
+                        cmap = colormap_name
+                        break
+
+            # 5) Create Tracks layer
+            self._trails = self.viewer.add_tracks(
+                temp,
+                colormap=cmap,
+                tail_length=50,
+                head_length=50,
+                tail_width=6,
+                name="trails",
+            )
+
+        self._trails.visible = True
 
     def _form_video_action_menu(self):
         group_box = QGroupBox("Video")
@@ -902,7 +925,8 @@ class KeypointControls(QWidget):
                     },
                 )
                 df = df.iloc[ind : ind + 1]
-                df.index = pd.MultiIndex.from_tuples([Path(output_path).parts[-3:]])
+                canon = canonicalize_path(output_path, 3)
+                df.index = pd.MultiIndex.from_tuples([tuple(canon.split("/"))])
                 filepath = os.path.join(image_layer.metadata["root"], "machinelabels-iter0.h5")
                 if Path(filepath).is_file():
                     df_prev = pd.read_hdf(filepath)
@@ -1009,35 +1033,140 @@ class KeypointControls(QWidget):
                 )
 
     def _remap_frame_indices(self, layer):
-        if not self._images_meta.get("paths"):
-            return
+        """
+        Best-effort remap of time/frame indices in non-Image layers to match current Image order.
 
-        new_paths = [to_os_dir_sep(p) for p in self._images_meta["paths"]]
-        paths = layer.metadata.get("paths")
-        if paths is not None and np.any(layer.data):
-            paths_map = dict(zip(range(len(paths)), map(to_os_dir_sep, paths), strict=False))
-            # Discard data if there are missing frames
-            missing = [i for i, path in paths_map.items() if path not in new_paths]
-            if missing:
-                if isinstance(layer.data, list):
-                    inds_to_remove = [i for i, verts in enumerate(layer.data) if verts[0, 0] in missing]
-                else:
-                    inds_to_remove = np.flatnonzero(np.isin(layer.data[:, 0], missing))
-                layer.selected_data = inds_to_remove
-                layer.remove_selected()
-                for i in missing:
-                    paths_map.pop(i)
+        Safety principles:
+        - Never delete user data automatically (only remap what is safe).
+        - Only write back to layer.data after successful transformation.
+        - Always sync layer.metadata with self._images_meta when possible.
+        """
+        try:
+            # Need new image paths to define the reference order
+            new_paths_raw = self._images_meta.get("paths")
+            if not new_paths_raw:
+                return
 
-            # Check now whether there are new frames
-            temp = {k: new_paths.index(v) for k, v in paths_map.items()}
+            # Determine layer's stored paths
+            md = layer.metadata or {}
+            old_paths_raw = md.get("paths") or []
+            # Always sync basic metadata (even if we can't remap)
+            try:
+                layer.metadata.update(self._images_meta)
+            except Exception:
+                pass
+
+            if not old_paths_raw:
+                return
+
+            # Try different canonicalization depths to find overlap
+            depth_used = None
+            for depth in (3, 2, 1):
+                new_keys = [canonicalize_path(p, depth) for p in new_paths_raw]
+                old_keys = [canonicalize_path(p, depth) for p in old_paths_raw]
+                overlap = set(new_keys) & set(old_keys)
+                if overlap:
+                    depth_used = depth
+                    break
+
+            if depth_used is None:
+                logging.warning(
+                    "Cannot remap %s: no path overlap found for all attempted matchings",
+                    getattr(layer, "name", str(layer)),
+                )
+                # logging.debug("Old keys (sample): %s... | New keys (sample): %s...", old_keys[:5], new_keys[:5])
+                # logging.debug("Old basename sample: %s", [Path(p).name for p in old_paths_raw[:5]])
+                # logging.debug("New basename sample: %s", [Path(p).name for p in new_paths_raw[:5]])
+                return
+
+            if old_keys == new_keys:
+                return
+
+            # Build map: canonical key -> new frame index
+            key_to_new_idx = {k: i for i, k in enumerate(new_keys)}
+
+            # Determine which column is time/frame
+            time_col = 1 if isinstance(layer, Tracks) else 0
+
             data = layer.data
-            if isinstance(data, list):
+            if data is None:
+                return
+
+            # Napari layers differ: Points/Tracks are ndarray-like; Shapes is list-like
+            is_list_like = isinstance(data, list)
+
+            # Build an "old index -> new index" dict when we can map safely
+            # We only map old indices that correspond to an old canonical key present in new_keys.
+            idx_map = {}
+            for old_idx, k in enumerate(old_keys):
+                new_idx = key_to_new_idx.get(k)
+                if new_idx is not None:
+                    idx_map[old_idx] = new_idx
+
+            if not idx_map:
+                # No overlap at all; safest is to do nothing.
+                logging.warning(
+                    f"Cannot remap {getattr(layer, 'name', str(layer))}:"
+                    " no overlap between layer paths and current image paths.",
+                )
+                # logging.debug(f"Old keys (sample): {old_keys[:5]}... | New keys (sample): {new_keys[:5]}...")
+                return
+
+            if is_list_like:
+                # Shapes-like: list of vertices arrays
+                new_data = []
                 for verts in data:
-                    verts[:, 0] = np.vectorize(temp.get)(verts[:, 0])
+                    arr = np.asarray(verts)
+                    if arr.size == 0:
+                        new_data.append(arr)
+                        continue
+
+                    arr2 = arr.copy()
+                    t = arr2[:, time_col]
+
+                    # If t isn't integer-like, attempt safe conversion
+                    try:
+                        t_int = np.asarray(t).astype(int, copy=False)
+                    except Exception:
+                        # Can't interpret time column; keep shape as-is
+                        new_data.append(arr2)
+                        continue
+
+                    arr2[:, time_col] = remap_array(t_int, idx_map)
+                    new_data.append(arr2)
+
+                layer.data = new_data
+
             else:
-                data[:, 0] = np.vectorize(temp.get)(data[:, 0])
-            layer.data = data
-        layer.metadata.update(self._images_meta)
+                arr = np.asarray(data)
+                if arr.size == 0:
+                    return
+                if arr.ndim < 2 or arr.shape[1] <= time_col:
+                    return
+
+                arr2 = arr.copy()
+                t = arr2[:, time_col]
+
+                # Handle NaNs/float time indices safely
+                # (If conversion fails, we skip remap.)
+                try:
+                    t_int = np.asarray(t).astype(int, copy=False)
+                except Exception:
+                    logging.warning(
+                        f"Cannot remap {getattr(layer, 'name', str(layer))}: "
+                        "time column could not be converted to int.",
+                    )
+                    return
+
+                arr2[:, time_col] = remap_array(t_int, idx_map)
+                layer.data = arr2
+
+        except Exception:
+            logging.exception(
+                f"Failed to remap frame indices for layer {getattr(layer, 'name', str(layer))}",
+            )
+            # Intentionally do not raise, simply warn and skip remapping
+            return
 
     def on_insert(self, event):
         layer = event.source[-1]
