@@ -65,27 +65,36 @@ def write_hdf(filename, data, metadata):
     file, _ = os.path.splitext(filename)  # currently unused
     df_new = _form_df(data, metadata)
 
-    meta = metadata.get("metadata", {})  # layer.metadata dict
-    name = metadata.get("name", "")
-    root = meta.get("root")
+    layer_meta = metadata.get("metadata")
+    if not isinstance(layer_meta, dict):
+        layer_meta = {}
 
-    # Fallback: infer root from paths if missing (common when layers were created by non-DLC readers)
-    if not root:
-        paths = meta.get("paths")
-        if paths:
-            try:
-                root = str(Path(paths[0]).expanduser().resolve().parent)
-            except Exception:
-                root = None
+    layer_name = metadata.get("name", "")
+
+    # root may be nested or top-level depending on napari/version/reader path
+    root = layer_meta.get("root") or metadata.get("root")
+
+    # paths may be nested or top-level too
+    paths = layer_meta.get("paths") or metadata.get("paths")
+
+    # Fallback: infer root from paths if still missing
+    if not root and paths:
+        try:
+            root = str(Path(paths[0]).expanduser().resolve().parent)
+        except Exception:
+            root = None
 
     if not root:
-        raise KeyError("root (missing from layer metadata; cannot determine where to write CollectedData*.h5).")
+        raise KeyError(
+            "root (missing from writer metadata; cannot determine where to write CollectedData*.h5). "
+            "Expected either metadata['metadata']['root'] or metadata['root'] or inferable from paths."
+        )
 
     # Determine output path early (may be updated below in "machine" branch)
-    out_name = name
+    out_name = layer_name
     out_path = os.path.join(root, out_name + ".h5")
 
-    if "machine" in name:
+    if "machine" in layer_name:
         # ---- existing behavior for refined predictions ----
         df_new.drop("likelihood", axis=1, level="coords", inplace=True, errors="ignore")
         header = misc.DLCHeader(df_new.columns)

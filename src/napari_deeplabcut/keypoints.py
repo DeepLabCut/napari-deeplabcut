@@ -192,6 +192,10 @@ class KeypointStore:
 def _add(store, coord):
     coord = np.atleast_2d(coord)
 
+    # Controls may be missing if metadata was replaced/filtered.
+    controls = (store.layer.metadata or {}).get("controls", None)
+    label_mode = getattr(controls, "_label_mode", None)
+
     if store.current_keypoint not in store.annotated_keypoints:
         # 1) append data
         store.layer.data = np.append(store.layer.data, coord, axis=0)
@@ -229,14 +233,16 @@ def _add(store, coord):
 
         store.layer.properties = props
 
-    elif store.layer.metadata["controls"]._label_mode is LabelMode.QUICK:
+    elif label_mode is LabelMode.QUICK:
         ind = store.annotated_keypoints.index(store.current_keypoint)
         data = store.layer.data
         data[np.flatnonzero(store.current_mask)[ind]] = coord.squeeze()
         store.layer.data = data
 
     store.layer.selected_data = set()
-    if store.layer.metadata["controls"]._label_mode is LabelMode.LOOP:
+
+    # If controls are missing, behave like the default mode (advance keypoint)
+    if label_mode is LabelMode.LOOP:
         store.layer.events.query_next_frame()
     else:
         store.next_keypoint()

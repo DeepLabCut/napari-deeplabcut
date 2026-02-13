@@ -937,6 +937,48 @@ class KeypointControls(QWidget):
             # Never fail adoption due to UI private API differences
             pass
 
+    def _sync_points_layers_from_images_meta(self) -> None:
+        """
+        Ensure all existing Points layers have the core DLC metadata keys needed for saving:
+        - root
+        - paths
+        - shape
+        - name
+
+        IMPORTANT: update metadata in place (do NOT reassign ly.metadata), so we don't
+        accidentally drop non-serializable objects like 'controls'.
+        """
+        root = self._images_meta.get("root")
+        paths = self._images_meta.get("paths")
+        shape = self._images_meta.get("shape")
+        name = self._images_meta.get("name")
+
+        if not any([root, paths, shape, name]):
+            return
+
+        for ly in list(self.viewer.layers):
+            if not isinstance(ly, Points):
+                continue
+
+            # Ensure metadata dict exists
+            if ly.metadata is None:
+                ly.metadata = {}
+
+            md = ly.metadata  # keep same object
+
+            updates = {}
+            if root and not md.get("root"):
+                updates["root"] = root
+            if paths and not md.get("paths"):
+                updates["paths"] = paths
+            if shape is not None and not md.get("shape"):
+                updates["shape"] = shape
+            if name and not md.get("name"):
+                updates["name"] = name
+
+            if updates:
+                md.update(updates)
+
     def _ensure_mpl_canvas_docked(self) -> None:
         """
         Dock the Matplotlib canvas as a napari dock widget, exactly once,
@@ -1461,6 +1503,11 @@ class KeypointControls(QWidget):
                 self._images_meta["shape"] = shape
             if root:
                 self._images_meta["root"] = root
+            self._sync_points_layers_from_images_meta()
+            logging.debug(
+                "Synced points layers with new image metadata: %s",
+                {k: v for k, v in self._images_meta.items() if v is not None and not (isinstance(v, str) and v == "")},
+            )
 
             # Always keep a human-readable name
             self._images_meta["name"] = layer.name
@@ -1510,6 +1557,10 @@ class KeypointControls(QWidget):
 
             store = keypoints.KeypointStore(self.viewer, layer)
             self._stores[layer] = store
+            if not layer.metadata.get("root") and self._images_meta.get("root"):
+                layer.metadata["root"] = self._images_meta["root"]
+            if not layer.metadata.get("paths") and self._images_meta.get("paths"):
+                layer.metadata["paths"] = self._images_meta["paths"]
             # TODO Set default dir of the save file dialog
             if root := layer.metadata.get("root"):
                 update_save_history(root)
