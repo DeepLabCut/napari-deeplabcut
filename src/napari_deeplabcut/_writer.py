@@ -1,6 +1,7 @@
 """Writers for DeepLabCut data formats."""
 
 # src/napari_deeplabcut/_writer.py
+import logging
 import os
 from datetime import datetime
 from itertools import groupby
@@ -16,6 +17,8 @@ from skimage.util import img_as_ubyte
 from napari_deeplabcut import misc
 from napari_deeplabcut._reader import _load_config
 from napari_deeplabcut.ui.dialogs import _maybe_confirm_overwrite
+
+logger = logging.getLogger(__name__)
 
 
 def _write_config(config_path: str, params: dict):
@@ -62,9 +65,21 @@ def write_hdf(filename, data, metadata):
     file, _ = os.path.splitext(filename)  # currently unused
     df_new = _form_df(data, metadata)
 
-    meta = metadata["metadata"]
-    name = metadata["name"]
-    root = meta["root"]
+    meta = metadata.get("metadata", {})  # layer.metadata dict
+    name = metadata.get("name", "")
+    root = meta.get("root")
+
+    # Fallback: infer root from paths if missing (common when layers were created by non-DLC readers)
+    if not root:
+        paths = meta.get("paths")
+        if paths:
+            try:
+                root = str(Path(paths[0]).expanduser().resolve().parent)
+            except Exception:
+                root = None
+
+    if not root:
+        raise KeyError("root (missing from layer metadata; cannot determine where to write CollectedData*.h5).")
 
     # Determine output path early (may be updated below in "machine" branch)
     out_name = name
@@ -84,7 +99,13 @@ def write_hdf(filename, data, metadata):
         if gt_file:
             # Refined predictions must be merged into existing GT file
             gt_path = os.path.join(root, gt_file)
-            df_gt = pd.read_hdf(gt_path, key="keypoints")
+            try:
+                df_gt = pd.read_hdf(gt_path, key="keypoints")
+            except (KeyError, ValueError):
+                logger.warning(
+                    f"Existing GT file {gt_file} does not contain 'keypoints' key. Attempting to read entire file."
+                )
+                df_gt = pd.read_hdf(gt_path)
             new_scorer = df_gt.columns.get_level_values("scorer")[0]
             header.scorer = new_scorer
             df_new.columns = header.columns
