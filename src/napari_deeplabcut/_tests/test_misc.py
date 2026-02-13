@@ -403,3 +403,47 @@ def test_cycle_enum():
     assert next(enum).value == "a"
     assert next(enum).value == "b"
     assert enum["a"] == enum.A
+
+
+def test_conflict_stats_counts_pairs_and_images():
+    from napari_deeplabcut.ui.dialogs import _conflict_stats
+
+    idx = pd.Index(["imgA.png", "imgB.png"], name="image")
+    cols = pd.Index(["bodypart1", "bodypart2"], name="bodyparts")
+    key_conflict = pd.DataFrame(
+        [[True, False], [True, True]],
+        index=idx,
+        columns=cols,
+        dtype=bool,
+    )
+
+    n_pairs, n_images = _conflict_stats(key_conflict)
+    assert n_pairs == 3  # (imgA,bp1) + (imgB,bp1) + (imgB,bp2)
+    assert n_images == 2  # imgA and imgB
+
+
+def test_build_overwrite_warning_text_includes_counts_and_image_keypoint_examples():
+    from napari_deeplabcut.ui.dialogs import _build_overwrite_warning_text
+
+    # Use tuple index to mimic DLC-style path tuples
+    idx = pd.MultiIndex.from_tuples([("labeled-data", "test", "img000.png"), ("labeled-data", "test", "img001.png")])
+    cols = pd.Index(["bodypart1", "bodypart2"], name="bodyparts")
+
+    key_conflict = pd.DataFrame(
+        [[True, False], [False, True]],
+        index=idx,
+        columns=cols,
+        dtype=bool,
+    )
+
+    summary, details = _build_overwrite_warning_text(key_conflict, max_items=10)
+
+    assert "2 existing keypoint" in summary
+    assert "across 2 image" in summary
+
+    # Must show image and keypoint in details
+    assert "img000.png" in details
+    assert "img001.png" in details
+    assert "bodypart1" in details
+    assert "bodypart2" in details
+    assert "→" in details or "->" in details

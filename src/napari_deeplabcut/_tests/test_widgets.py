@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/_tests/test_widgets.py
 import os
 import types
 
