@@ -953,27 +953,42 @@ class KeypointControls(QWidget):
         shape = self._images_meta.get("shape")
         name = self._images_meta.get("name")
 
-        if not any([root, paths, shape, name]):
+        def _has_value(v) -> bool:
+            """Truth-safe non-empty check that won't crash on numpy arrays."""
+            if v is None:
+                return False
+            if isinstance(v, str):
+                return v != ""
+            # lists/tuples/np arrays/pandas Index etc.
+            try:
+                return len(v) > 0
+            except Exception:
+                # scalars, objects without len -> treat as present
+                return True
+
+        if not (_has_value(root) or _has_value(paths) or _has_value(shape) or _has_value(name)):
             return
 
         for ly in list(self.viewer.layers):
             if not isinstance(ly, Points):
                 continue
 
-            # Ensure metadata dict exists
             if ly.metadata is None:
                 ly.metadata = {}
-
-            md = ly.metadata  # keep same object
+            md = ly.metadata  # update in place
 
             updates = {}
-            if root and not md.get("root"):
+
+            if _has_value(root) and not _has_value(md.get("root")):
                 updates["root"] = root
-            if paths and not md.get("paths"):
+
+            if _has_value(paths) and not _has_value(md.get("paths")):
                 updates["paths"] = paths
-            if shape is not None and not md.get("shape"):
+
+            if _has_value(shape) and not _has_value(md.get("shape")):
                 updates["shape"] = shape
-            if name and not md.get("name"):
+
+            if _has_value(name) and not _has_value(md.get("name")):
                 updates["name"] = name
 
             if updates:
