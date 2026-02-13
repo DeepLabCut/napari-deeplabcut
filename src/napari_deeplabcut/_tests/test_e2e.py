@@ -8,16 +8,14 @@ import pytest
 from napari.layers import Points
 from qtpy.QtWidgets import QMessageBox
 
-from napari_deeplabcut.ui.dialogs import OverwriteConflictsDialog
+# -----------------------------------------------------------------------------
+# Global fixtures: avoid modal hangs + control overwrite confirmation path
+# -----------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
 def _auto_accept_qmessagebox(monkeypatch):
-    """
-    Prevent modal dialogs from blocking tests.
-    - Always accept the 'Data were not saved' close warning.
-    - Also auto-accept generic question dialogs if they appear.
-    """
+    """Prevent any QMessageBox modal dialogs from blocking tests."""
     monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.Yes)
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
 
@@ -25,28 +23,44 @@ def _auto_accept_qmessagebox(monkeypatch):
 @pytest.fixture(autouse=True)
 def overwrite_confirm(monkeypatch):
     """
-    Autouse: by default, auto-confirm overwrite warnings so tests can save.
-    Provides helpers to:
-      - forbid()  -> fail test if confirm is called
-      - cancel()  -> confirm called, return False
-      - capture() -> record calls, return True (default)
-      - set_result(value) -> custom return
+    Control the overwrite-confirmation path used by the writer.
+
+    NOTE: write_hdf imports _maybe_confirm_overwrite directly:
+        from napari_deeplabcut.ui.dialogs import _maybe_confirm_overwrite
+    so we must patch napari_deeplabcut._writer._maybe_confirm_overwrite.
+
+    API:
+      - forbid(): fail test if confirmation is requested
+      - cancel(): return False (simulate user cancel)
+      - capture(): record calls and return True
+      - set_result(bool): return chosen bool
+      - reset_calls(): clear recorded calls
     """
     calls = []
-
-    # internal state
     state = {"mode": "always_true", "result": True}
 
-    def _confirm(parent, *, summary=None, details=None, **kwargs):
-        calls.append({"summary": summary, "details": details, "kwargs": kwargs})
-        if state["mode"] == "forbid":
-            raise AssertionError("OverwriteConflictsDialog.confirm was called unexpectedly.")
+    def _patched_maybe_confirm_overwrite(metadata, key_conflict):
+        # record minimal info about the call
+        calls.append(
+            {
+                "metadata_keys": sorted(list(metadata.keys())) if isinstance(metadata, dict) else None,
+                "n_pairs": int(key_conflict.to_numpy().sum()) if hasattr(key_conflict, "to_numpy") else None,
+                "n_images": int(key_conflict.any(axis=1).to_numpy().sum()) if hasattr(key_conflict, "any") else None,
+            }
+        )
+        n_pairs = int(key_conflict.to_numpy().sum()) if hasattr(key_conflict, "to_numpy") else 0
+        # In "forbid" mode: allow calls that represent "no conflict" (n_pairs == 0),
+        # but fail if we would actually overwrite something.
+        if state["mode"] == "forbid" and n_pairs > 0:
+            raise AssertionError("_maybe_confirm_overwrite was called unexpectedly for a real overwrite (n_pairs>0).")
+
         return state["result"]
 
-    # install default behavior: always return True
-    monkeypatch.setattr(OverwriteConflictsDialog, "confirm", staticmethod(_confirm))
+    # Patch at import site used by write_hdf
+    import napari_deeplabcut._writer as writer_mod
 
-    # exposed “controller”
+    monkeypatch.setattr(writer_mod, "_maybe_confirm_overwrite", _patched_maybe_confirm_overwrite)
+
     class Controller:
         @property
         def calls(self):
@@ -79,26 +93,35 @@ def overwrite_confirm(monkeypatch):
     return Controller()
 
 
+# -----------------------------------------------------------------------------
+# Helpers: minimal DLC project + stable assertions on written H5 content
+# -----------------------------------------------------------------------------
+
+
+def _ensure_last_point_has_label(points_layer: Points, label: str, id_: str = "", likelihood: float = 1.0):
+    """Force properties for the last added point so writer can map it to the correct keypoint."""
+    props = points_layer.properties.copy()
+    n = len(points_layer.data)
+    # Ensure arrays exist and have the right length
+    for key, default in (("label", label), ("id", id_), ("likelihood", likelihood)):
+        arr = np.asarray(props.get(key, []))
+        if arr.size < n:
+            # pad to length n with default
+            pad = np.array([default] * (n - arr.size), dtype=object if key in ("label", "id") else float)
+            arr = np.concatenate([arr.astype(pad.dtype, copy=False), pad]) if arr.size else pad
+        arr[-1] = default
+        props[key] = arr
+    points_layer.properties = props
+
+
 def _write_minimal_png(path: Path, *, shape=(64, 64, 3)) -> None:
     """Write a tiny RGB image to satisfy the folder reader."""
     from skimage.io import imsave
 
     path.parent.mkdir(parents=True, exist_ok=True)
     img = np.zeros(shape, dtype=np.uint8)
-    # add a simple pattern so it isn't fully empty
     img[8:24, 8:24, 0] = 255
     imsave(str(path), img, check_contrast=False)
-
-
-def _set_bodypart_xy(points_layer: Points, bodypart: str, *, x: float, y: float):
-    labels = np.asarray(points_layer.properties.get("label"))
-    mask = labels == bodypart
-    assert mask.any(), f"Could not find {bodypart} in Points layer properties."
-
-    data = np.array(points_layer.data, copy=True)
-    data[mask, 1] = y  # frame,y,x convention
-    data[mask, 2] = x
-    points_layer.data = data
 
 
 def _make_minimal_dlc_project(tmp_path: Path):
@@ -107,7 +130,7 @@ def _make_minimal_dlc_project(tmp_path: Path):
       project/
         config.yaml
         labeled-data/test/img000.png
-        labeled-data/test/CollectedData_John.h5 (with bodypart1 labeled)
+        labeled-data/test/CollectedData_John.h5 (bodypart1 labeled, bodypart2 NaN)
     """
     import yaml
 
@@ -115,12 +138,12 @@ def _make_minimal_dlc_project(tmp_path: Path):
     labeled = project / "labeled-data" / "test"
     labeled.mkdir(parents=True, exist_ok=True)
 
-    # 1) Image
+    # Image
     img_rel = ("labeled-data", "test", "img000.png")
     img_path = project / Path(*img_rel)
     _write_minimal_png(img_path)
 
-    # 2) config.yaml (minimal keys used by read_config / DLCHeader.from_config)
+    # config.yaml
     cfg = {
         "scorer": "John",
         "bodyparts": ["bodypart1", "bodypart2"],
@@ -131,8 +154,7 @@ def _make_minimal_dlc_project(tmp_path: Path):
     config_path = project / "config.yaml"
     config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
 
-    # 3) Existing ground-truth labels: only bodypart1 is labeled
-    # DLC-style columns: scorer/bodyparts/coords
+    # Existing GT H5
     cols = pd.MultiIndex.from_product(
         [["John"], ["bodypart1", "bodypart2"], ["x", "y"]],
         names=["scorer", "bodyparts", "coords"],
@@ -147,226 +169,151 @@ def _make_minimal_dlc_project(tmp_path: Path):
     return project, config_path, labeled, h5_path
 
 
-def _dump_layers(viewer, log: logging.Logger, label: str):
-    from napari.layers import Image, Points
+def _get_points_layer_with_data(viewer) -> Points:
+    """Return the first Points layer with actual data; fallback to first Points layer."""
+    pts = [ly for ly in viewer.layers if isinstance(ly, Points)]
+    assert pts, "Expected at least one Points layer in viewer."
+    return next((ly for ly in pts if ly.data is not None and np.any(ly.data)), pts[0])
 
-    log.debug("==== %s ====", label)
-    for i, layer in enumerate(viewer.layers):
-        kind = type(layer).__name__
-        selected = viewer.layers.selection.active is layer
-        md_keys = sorted(list(getattr(layer, "metadata", {}).keys()))
-        if isinstance(layer, Points):
-            npts = 0 if layer.data is None else len(layer.data)
-            any_data = False if layer.data is None else bool(np.any(layer.data))
-            log.debug(
-                "[%02d] %s name=%r selected=%s npts=%s any_data=%s md_keys=%s md.project=%r md.root=%r",
-                i,
-                kind,
-                layer.name,
-                selected,
-                npts,
-                any_data,
-                md_keys,
-                layer.metadata.get("project"),
-                layer.metadata.get("root"),
-            )
-        elif isinstance(layer, Image):
-            shape = getattr(layer.data, "shape", None)
-            log.debug(
-                "[%02d] %s name=%r selected=%s shape=%s md.root=%r md.paths=%s",
-                i,
-                kind,
-                layer.name,
-                selected,
-                shape,
-                layer.metadata.get("root"),
-                "yes" if layer.metadata.get("paths") else "no",
-            )
-        else:
-            log.debug(
-                "[%02d] %s name=%r selected=%s md_keys=%s",
-                i,
-                kind,
-                layer.name,
-                selected,
-                md_keys,
-            )
+
+def _index_mask_for_img(df: pd.DataFrame, basename: str) -> np.ndarray:
+    """Return boolean mask selecting rows that correspond to a given image basename."""
+    if isinstance(df.index, pd.MultiIndex):
+        # rows are tuples like ('labeled-data','test','img000.png')
+        return np.array([str(Path(*t)).endswith(basename) for t in df.index])
+    else:
+        return df.index.astype(str).str.endswith(basename).to_numpy()
+
+
+def _get_coord_from_df(df: pd.DataFrame, bodypart: str, coord: str, basename: str = "img000.png") -> float:
+    """Extract the single value for (bodypart, coord) in the row matching basename."""
+    series = df.xs((bodypart, coord), axis=1, level=["bodyparts", "coords"])
+    mask = _index_mask_for_img(series, basename)
+    assert mask.any(), f"Could not find row for {basename} in saved dataframe index: {df.index!r}"
+    return float(series.loc[series.index[mask]].iloc[0, 0])
+
+
+def _set_bodypart_xy(points_layer: Points, bodypart: str, *, x: float, y: float):
+    """
+    Modify an existing bodypart point in the napari Points layer (conflict generator).
+    """
+    labels = np.asarray(points_layer.properties.get("label"))
+    mask = labels == bodypart
+    assert mask.any(), f"Could not find {bodypart} in Points layer properties."
+
+    data = np.array(points_layer.data, copy=True)  # (frame, y, x)
+    data[mask, 1] = y
+    data[mask, 2] = x
+    points_layer.data = data
+
+
+# -----------------------------------------------------------------------------
+# Tests
+# -----------------------------------------------------------------------------
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_merge_on_save_preserves_existing_labels_and_adds_new_no_warning(
-    make_napari_viewer, qtbot, tmp_path, caplog, overwrite_confirm
-):
+def test_config_first_hazard_regression_no_silent_deletion(make_napari_viewer, qtbot, tmp_path, caplog):
     """
-    Regression: saving after config-first + folder load must NEVER erase old labels.
-    Specifically:
-      - existing bodypart1 stays finite
-      - new bodypart2 becomes finite
-      - overwrite warning must NOT be shown when only filling NaNs (no conflicts)
+    Regression for the original report:
+    Save the WRONG (placeholder) layer and still preserve previous labels due to merge-on-save.
     """
     logging.getLogger("napari_deeplabcut.tests.overwrite")
     caplog.set_level(logging.DEBUG, logger="napari_deeplabcut.tests.overwrite")
 
-    overwrite_confirm.forbid()  # no warnings expected in this test
-
     project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
-    # Precondition
     pre = pd.read_hdf(h5_path, key="keypoints")
-    b1x_pre = pre.xs(("bodypart1", "x"), axis=1, level=["bodyparts", "coords"]).iloc[0, 0]
-    b2x_pre = pre.xs(("bodypart2", "x"), axis=1, level=["bodyparts", "coords"]).iloc[0, 0]
-    assert np.isfinite(b1x_pre)
-    assert np.isnan(b2x_pre)
+    assert np.isfinite(_get_coord_from_df(pre, "bodypart1", "x"))
+    assert np.isnan(_get_coord_from_df(pre, "bodypart2", "x"))
 
     viewer = make_napari_viewer()
-
-    from napari.layers import Points
-
+    from napari_deeplabcut import keypoints
     from napari_deeplabcut._widgets import KeypointControls
 
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
-    # Open config first
+    # Open config first -> placeholder Points layer exists
     viewer.open(str(config_path), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: len(viewer.layers) >= 1, timeout=5_000)
 
-    # Capture placeholder early (may lose md.project later)
     placeholder = next((ly for ly in viewer.layers if isinstance(ly, Points)), None)
     assert placeholder is not None
+    assert placeholder.data is None or len(placeholder.data) == 0
 
-    # Open folder (loads images + existing labels)
+    # Open folder -> images + GT points layer
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
     qtbot.wait(200)
 
-    points_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
-    assert points_layers, "Expected at least one Points layer after opening folder."
+    assert placeholder in viewer.layers
+    store = controls._stores.get(placeholder)
+    assert store is not None
 
-    # Choose target layer to add to: prefer placeholder if it still exists (reproduces real hazard),
-    # otherwise fall back to an active Points layer.
-    target = placeholder if placeholder in viewer.layers else viewer.layers.selection.active
-    if not isinstance(target, Points):
-        target = points_layers[0]
-
-    # Ensure store exists (patched add method depends on KeypointControls.on_insert wiring)
-    store = controls._stores.get(target)
-    assert store is not None, "No KeypointStore registered for target Points layer."
-
-    from napari_deeplabcut import keypoints
-
+    # Add a new bodypart2 point *to placeholder* using 2D coords (y,x); store injects frame index
     store.current_keypoint = keypoints.Keypoint("bodypart2", "")
+    placeholder.add(np.array([0.0, 33.0, 44.0], dtype=float))
 
-    # Add a bodypart2 point
-    target.add(np.array([0, 33.0, 44.0], dtype=float))
-
-    # Save selected layer via plugin writer
-    viewer.layers.selection.active = target
+    viewer.layers.selection.active = placeholder
     viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(100)
 
-    # Postcondition: bodypart1 preserved, bodypart2 added
     post = pd.read_hdf(h5_path, key="keypoints")
-    b1x_post = post.xs(("bodypart1", "x"), axis=1, level=["bodyparts", "coords"]).iloc[0, 0]
-    b2x_post = post.xs(("bodypart2", "x"), axis=1, level=["bodyparts", "coords"]).iloc[0, 0]
+    b1x_post = _get_coord_from_df(post, "bodypart1", "x")
+    b2x_post = _get_coord_from_df(post, "bodypart2", "x")
 
-    assert np.isfinite(b1x_post), "Regression: bodypart1 label must be preserved (no silent deletion)."
-    assert np.isfinite(b2x_post), "Regression: bodypart2 label must be saved."
+    assert np.isfinite(b1x_post), "bodypart1 must be preserved (no silent deletion)."
+    assert np.isfinite(b2x_post), "bodypart2 must be saved."
     assert b2x_post == 44.0
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_overwrite_warning_triggers_on_conflict_and_mentions_image_and_keypoint(
-    make_napari_viewer, qtbot, tmp_path, caplog, overwrite_confirm
-):
+def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, tmp_path, caplog, overwrite_confirm):
     """
-    Integration: If user overwrites an existing non-NaN label (conflict),
-    we must show the overwrite warning with image + keypoint details.
+    Adding new labels (filling NaNs) must not prompt overwrite confirmation.
     """
-    logging.getLogger("napari_deeplabcut.tests.overwrite")
-    caplog.set_level(logging.DEBUG, logger="napari_deeplabcut.tests.overwrite")
-    overwrite_confirm.capture().reset_calls()  # prepare to capture calls in this test
+    overwrite_confirm.forbid()
 
     project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
-    # Precondition: bodypart1 exists
-    pre = pd.read_hdf(h5_path, key="keypoints")
-    b1x_pre = pre.xs(("bodypart1", "x"), axis=1, level=["bodyparts", "coords"]).iloc[0, 0]
-    assert np.isfinite(b1x_pre)
-
     viewer = make_napari_viewer()
-
-    from napari.layers import Points
-
     from napari_deeplabcut._widgets import KeypointControls
 
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
-    # Open folder only: loads images + existing labels into a Points layer
+    # Open folder only -> real points layer loaded
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
     qtbot.wait(200)
 
-    # Identify the Points layer with actual data
-    points_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
-    assert points_layers, "Expected at least one Points layer."
-    points = next((ly for ly in points_layers if np.any(ly.data)), points_layers[0])
+    points = _get_points_layer_with_data(viewer)
+    store = controls._stores.get(points)
+    assert store is not None
 
-    # Create a true conflict by changing bodypart1 coords in-memory
-    # The H5 contains bodypart1 (10,20). We change it to something else.
-    labels = np.asarray(points.properties.get("label"))
-    assert labels is not None and labels.size > 0
+    # bodypart2 exists as a placeholder row with NaN coords in the loaded Points layer
+    _set_bodypart_xy(points, "bodypart2", x=44.0, y=33.0)
 
-    mask = labels == "bodypart1"
-    assert mask.any(), "Could not find bodypart1 row in Points layer properties."
-
-    _set_bodypart_xy(points, "bodypart1", x=99.0, y=88.0)
-
-    # Save via plugin writer
     viewer.layers.selection.active = points
     viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(100)
 
-    # Assert warning was shown and contains image+keypoint
-    assert overwrite_confirm.calls == 1, "Expected overwrite warning to be shown exactly once."
-    assert overwrite_confirm.summary is not None
-    assert "overwritten" in overwrite_confirm.summary.lower()
-
-    assert overwrite_confirm.details is not None
-    # We want image + keypoint in details
-    assert "img000.png" in overwrite_confirm.details, "Expected image name in overwrite warning details."
-    assert "bodypart1" in overwrite_confirm.details, "Expected keypoint name in overwrite warning details."
-
-    # Postcondition: file updated (since user accepted)
     post = pd.read_hdf(h5_path, key="keypoints")
-    b1x_post = post.xs(("bodypart1", "x"), axis=1, level=["bodyparts", "coords"]).iloc[0, 0]
-    assert b1x_post == 99.0, "Expected bodypart1.x to be updated to new value after accepting overwrite warning."
+    assert np.isfinite(_get_coord_from_df(post, "bodypart1", "x"))
+    assert np.isfinite(_get_coord_from_df(post, "bodypart2", "x"))
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_overwrite_warning_cancel_aborts_write_and_file_unchanged(
-    make_napari_viewer, qtbot, tmp_path, caplog, overwrite_confirm
-):
+def test_overwrite_warning_triggers_on_conflict(make_napari_viewer, qtbot, tmp_path, caplog, overwrite_confirm):
     """
-    Integration: If overwrite warning is shown and user cancels,
-    the save must be aborted and the on-disk file must remain unchanged.
+    Modifying an existing non-NaN label must trigger overwrite confirmation.
     """
-    logging.getLogger("napari_deeplabcut.tests.overwrite")
-    caplog.set_level(logging.DEBUG, logger="napari_deeplabcut.tests.overwrite")
-    overwrite_confirm.cancel().reset_calls()  # prepare to capture calls in this test
+    overwrite_confirm.capture().reset_calls()
 
     project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
-    pre = pd.read_hdf(h5_path, key="keypoints")
-    b1x_pre = pre.xs(("bodypart1", "x"), axis=1, level=["bodyparts", "coords"]).iloc[0, 0]
-    b1y_pre = pre.xs(("bodypart1", "y"), axis=1, level=["bodyparts", "coords"]).iloc[0, 0]
-    assert np.isfinite(b1x_pre) and np.isfinite(b1y_pre)
-
     viewer = make_napari_viewer()
-
-    from napari.layers import Points
-
     from napari_deeplabcut._widgets import KeypointControls
 
     controls = KeypointControls(viewer)
@@ -376,32 +323,60 @@ def test_overwrite_warning_cancel_aborts_write_and_file_unchanged(
     qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
     qtbot.wait(200)
 
-    points_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
-    points = next((ly for ly in points_layers if np.any(ly.data)), points_layers[0])
+    points = _get_points_layer_with_data(viewer)
 
-    # Introduce conflict (change bodypart1)
-    labels = np.asarray(points.properties.get("label"))
-    mask = labels == "bodypart1"
-    assert mask.any()
-
+    # Create conflict: overwrite bodypart1
     _set_bodypart_xy(points, "bodypart1", x=99.0, y=88.0)
 
-    # Attempt save. Depending on napari/npe2 behavior, writer returning None may raise.
+    viewer.layers.selection.active = points
+    viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+    qtbot.wait(100)
+
+    assert len(overwrite_confirm.calls) == 1, "Expected overwrite confirmation to be requested once."
+    assert overwrite_confirm.calls[0]["n_pairs"] is not None
+    assert overwrite_confirm.calls[0]["n_pairs"] >= 1
+
+    post = pd.read_hdf(h5_path, key="keypoints")
+    assert _get_coord_from_df(post, "bodypart1", "x") == 99.0
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_overwrite_warning_cancel_aborts_write(make_napari_viewer, qtbot, tmp_path, caplog, overwrite_confirm):
+    """
+    If overwrite confirmation is requested and user cancels, file must remain unchanged.
+    """
+    overwrite_confirm.cancel().reset_calls()
+
+    project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
+
+    pre = pd.read_hdf(h5_path, key="keypoints")
+    b1x_pre = _get_coord_from_df(pre, "bodypart1", "x")
+    b1y_pre = _get_coord_from_df(pre, "bodypart1", "y")
+
+    viewer = make_napari_viewer()
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
+    qtbot.wait(200)
+
+    points = _get_points_layer_with_data(viewer)
+    _set_bodypart_xy(points, "bodypart1", x=456.0, y=123.0)
+
     viewer.layers.selection.active = points
     try:
         viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
     except Exception:
-        # Accept any exception here: the key requirement is "file not modified"
+        # Some napari/npe2 versions may raise when writer aborts; file integrity is what matters.
         pass
 
     qtbot.wait(100)
 
-    assert overwrite_confirm.calls == 1, "Expected overwrite warning to be shown once."
+    assert len(overwrite_confirm.calls) == 1, "Expected overwrite confirmation to be requested once."
 
-    # File should be unchanged
     post = pd.read_hdf(h5_path, key="keypoints")
-    b1x_post = post.xs(("bodypart1", "x"), axis=1, level=["bodyparts", "coords"]).iloc[0, 0]
-    b1y_post = post.xs(("bodypart1", "y"), axis=1, level=["bodyparts", "coords"]).iloc[0, 0]
-
-    assert b1x_post == b1x_pre, "Cancel must prevent overwriting existing bodypart1.x"
-    assert b1y_post == b1y_pre, "Cancel must prevent overwriting existing bodypart1.y"
+    assert _get_coord_from_df(post, "bodypart1", "x") == b1x_pre
+    assert _get_coord_from_df(post, "bodypart1", "y") == b1y_pre

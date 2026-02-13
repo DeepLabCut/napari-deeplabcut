@@ -141,7 +141,8 @@ def write_hdf(filename, data, metadata):
     df_out.to_csv(out_path.replace(".h5", ".csv"))
 
     # Mark the session as saved if KeypointControls was attached to the layer metadata
-    controls = metadata.get("controls")
+    layer_meta = metadata.get("metadata", {})
+    controls = layer_meta.get("controls")
     if controls is not None:
         controls._is_saved = True
         # Guard UI updates (tests/headless may not have Qt widgets)

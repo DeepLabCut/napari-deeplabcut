@@ -190,17 +190,38 @@ class KeypointStore:
 
 
 def _add(store, coord):
+    # Ensure we always append a row-shaped coordinate
+    coord = np.atleast_2d(coord)
+
     if store.current_keypoint not in store.annotated_keypoints:
-        store.layer.data = np.append(
-            store.layer.data,
-            np.atleast_2d(coord),
-            axis=0,
-        )
+        # 1) append data
+        store.layer.data = np.append(store.layer.data, coord, axis=0)
+
+        # 2) append properties to match the new point row
+        props = store.layer.properties.copy()
+
+        # Ensure required keys exist
+        for k in ("label", "id", "likelihood"):
+            if k not in props:
+                props[k] = np.array([], dtype=object)
+
+        # Append values for the new point(s)
+        # coord may contain multiple rows, so repeat values as needed
+        n_new = coord.shape[0]
+        kp = store.current_keypoint
+        props["label"] = np.append(props["label"], np.array([kp.label] * n_new, dtype=object))
+        props["id"] = np.append(props["id"], np.array([kp.id] * n_new, dtype=object))
+        # Likelihood: default 1.0 for manual points
+        props["likelihood"] = np.append(props["likelihood"], np.ones(n_new, dtype=float))
+
+        store.layer.properties = props
+
     elif store.layer.metadata["controls"]._label_mode is LabelMode.QUICK:
         ind = store.annotated_keypoints.index(store.current_keypoint)
         data = store.layer.data
-        data[np.flatnonzero(store.current_mask)[ind]] = coord
+        data[np.flatnonzero(store.current_mask)[ind]] = coord.squeeze()
         store.layer.data = data
+
     store.layer.selected_data = set()
     if store.layer.metadata["controls"]._label_mode is LabelMode.LOOP:
         store.layer.events.query_next_frame()
