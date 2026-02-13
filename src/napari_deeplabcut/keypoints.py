@@ -190,29 +190,42 @@ class KeypointStore:
 
 
 def _add(store, coord):
-    # Ensure we always append a row-shaped coordinate
     coord = np.atleast_2d(coord)
 
     if store.current_keypoint not in store.annotated_keypoints:
         # 1) append data
         store.layer.data = np.append(store.layer.data, coord, axis=0)
 
-        # 2) append properties to match the new point row
+        # 2) append/align properties to match number of points
+        kp = store.current_keypoint
+        n_new = coord.shape[0]
+        n_total = len(store.layer.data)
+        n_old = n_total - n_new
+
         props = store.layer.properties.copy()
 
-        # Ensure required keys exist
-        for k in ("label", "id", "likelihood"):
-            if k not in props:
-                props[k] = np.array([], dtype=object)
+        def _as_array(key, dtype):
+            arr = props.get(key, None)
+            if arr is None:
+                return np.array([], dtype=dtype)
+            return np.asarray(arr, dtype=dtype)
 
-        # Append values for the new point(s)
-        # coord may contain multiple rows, so repeat values as needed
-        n_new = coord.shape[0]
-        kp = store.current_keypoint
-        props["label"] = np.append(props["label"], np.array([kp.label] * n_new, dtype=object))
-        props["id"] = np.append(props["id"], np.array([kp.id] * n_new, dtype=object))
-        # Likelihood: default 1.0 for manual points
-        props["likelihood"] = np.append(props["likelihood"], np.ones(n_new, dtype=float))
+        # Existing values truncated/padded to n_old, then append new rows
+        label_arr = _as_array("label", object)[:n_old]
+        id_arr = _as_array("id", object)[:n_old]
+        lik_arr = _as_array("likelihood", float)[:n_old]
+
+        # If any are shorter than n_old, pad (rare but safe)
+        if label_arr.size < n_old:
+            label_arr = np.concatenate([label_arr, np.array([kp.label] * (n_old - label_arr.size), dtype=object)])
+        if id_arr.size < n_old:
+            id_arr = np.concatenate([id_arr, np.array([kp.id] * (n_old - id_arr.size), dtype=object)])
+        if lik_arr.size < n_old:
+            lik_arr = np.concatenate([lik_arr, np.ones(n_old - lik_arr.size, dtype=float)])
+
+        props["label"] = np.concatenate([label_arr, np.array([kp.label] * n_new, dtype=object)])
+        props["id"] = np.concatenate([id_arr, np.array([kp.id] * n_new, dtype=object)])
+        props["likelihood"] = np.concatenate([lik_arr, np.ones(n_new, dtype=float)])
 
         store.layer.properties = props
 

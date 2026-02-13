@@ -98,22 +98,6 @@ def overwrite_confirm(monkeypatch):
 # -----------------------------------------------------------------------------
 
 
-def _ensure_last_point_has_label(points_layer: Points, label: str, id_: str = "", likelihood: float = 1.0):
-    """Force properties for the last added point so writer can map it to the correct keypoint."""
-    props = points_layer.properties.copy()
-    n = len(points_layer.data)
-    # Ensure arrays exist and have the right length
-    for key, default in (("label", label), ("id", id_), ("likelihood", likelihood)):
-        arr = np.asarray(props.get(key, []))
-        if arr.size < n:
-            # pad to length n with default
-            pad = np.array([default] * (n - arr.size), dtype=object if key in ("label", "id") else float)
-            arr = np.concatenate([arr.astype(pad.dtype, copy=False), pad]) if arr.size else pad
-        arr[-1] = default
-        props[key] = arr
-    points_layer.properties = props
-
-
 def _write_minimal_png(path: Path, *, shape=(64, 64, 3)) -> None:
     """Write a tiny RGB image to satisfy the folder reader."""
     from skimage.io import imsave
