@@ -74,6 +74,9 @@ def _filter_extensions(
 def get_folder_parser(path):
     if not path or not Path(path).is_dir():
         return None
+
+    if not _looks_like_dlc_folder(path):
+        return None
     layers = []
 
     images = _filter_extensions(Path(path).iterdir(), valid_extensions=SUPPORTED_IMAGES)
@@ -217,6 +220,19 @@ def _lazy_imread(
             "Cannot stack images with different shapes using NumPy. "
             "Ensure all images have the same shape or set stack=False."
         ) from e
+
+
+def _looks_like_dlc_folder(path: str) -> bool:
+    p = Path(path)
+    if not p.exists() or not p.is_dir():
+        return False
+    # Must either be inside labeled-data OR contain a CollectedData/machinelabels file
+    if any(part.lower() == "labeled-data" for part in p.parts):
+        return True
+    for pat in ("CollectedData*.h5", "CollectedData*.csv", "machinelabels*.h5", "machinelabels*.csv"):
+        if any(p.glob(pat)):
+            return True
+    return False
 
 
 # Read images from a list of files or a glob/string path
