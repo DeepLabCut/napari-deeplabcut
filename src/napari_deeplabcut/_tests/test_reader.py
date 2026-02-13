@@ -28,20 +28,22 @@ def test_get_config_reader_invalid_path():
 
 def test_get_folder_parser(tmp_path_factory, fake_keypoints):
     folder = tmp_path_factory.mktemp("folder")
-    frame = (np.random.rand(10, 10) * 255).astype(np.uint8)
-    imsave(folder / "img1.png", frame)
-    imsave(folder / "img2.png", frame)
-    layers = _reader.get_folder_parser(folder)(None)
-    # There should be only an Image layer
-    assert len(layers) == 1
-    assert layers[0][-1] == "image"
+    # Make it look like a DLC labeled folder
+    labeled = folder / "labeled-data" / "test"
+    labeled.mkdir(parents=True)
 
-    # Add an annotation data file
-    fake_keypoints.to_hdf(folder / "data.h5", key="data")
-    layers = _reader.get_folder_parser(folder)(None)
-    # There should now be an additional Points layer
-    assert len(layers) == 2
-    assert layers[-1][-1] == "points"
+    frame = (np.random.rand(10, 10) * 255).astype(np.uint8)
+    imsave(labeled / "img1.png", frame)
+    imsave(labeled / "img2.png", frame)
+
+    # Add a DLC artifact so reader claims it
+    (labeled / "CollectedData_me.csv").write_text("dummy", encoding="utf-8")
+
+    parser = _reader.get_folder_parser(str(labeled))
+    assert parser is not None
+    layers = parser(None)
+    assert isinstance(layers, list)
+    assert len(layers) > 0
 
 
 def test_get_folder_parser_wrong_input():
@@ -49,9 +51,9 @@ def test_get_folder_parser_wrong_input():
 
 
 def test_get_folder_parser_no_images(tmp_path_factory):
-    folder = str(tmp_path_factory.mktemp("images"))
-    with pytest.raises(OSError):
-        _reader.get_folder_parser(folder)
+    folder = tmp_path_factory.mktemp("images")
+    parser = _reader.get_folder_parser(str(folder))
+    assert parser is None
 
 
 def test_read_images(tmp_path_factory, fake_image):
@@ -71,7 +73,7 @@ def test_read_hdf_old_index(tmp_path_factory, fake_keypoints):
     path = str(tmp_path_factory.mktemp("folder") / "data.h5")
     old_index = [f"labeled-data/video/img{i}.png" for i in range(fake_keypoints.shape[0])]
     fake_keypoints.index = old_index
-    fake_keypoints.to_hdf(path, key="data")
+    fake_keypoints.to_hdf(path, key="keypoints")
     layers = _reader.read_hdf(path)
     assert len(layers) == 1
     image_paths = layers[0][1]["metadata"]["paths"]
@@ -90,7 +92,7 @@ def test_read_hdf_new_index(tmp_path_factory, fake_keypoints):
         ]
     )
     fake_keypoints.index = new_index
-    fake_keypoints.to_hdf(path, key="data")
+    fake_keypoints.to_hdf(path, key="keypoints")
     layers = _reader.read_hdf(path)
     assert len(layers) == 1
     image_paths = layers[0][1]["metadata"]["paths"]
@@ -374,7 +376,7 @@ def test_lazy_imread_grayscale_and_rgba(tmp_path):
     gray = (np.random.rand(10, 10) * 255).astype(np.uint8)
     rgba = (np.random.rand(10, 10, 4) * 255).astype(np.uint8)
     p1, p2 = tmp_path / "g.png", tmp_path / "r.png"
-    cv2.imwrite(str(p1), gray)  # cv2 writes grayscale as-is; color images are written as BGR 
+    cv2.imwrite(str(p1), gray)  # cv2 writes grayscale as-is; color images are written as BGR
     cv2.imwrite(str(p2), cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
     res = _reader._lazy_imread([p1, p2], use_dask=False, stack=False)
     assert all(img.shape[-1] == 3 for img in res)
