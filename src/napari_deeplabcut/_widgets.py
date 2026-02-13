@@ -68,6 +68,9 @@ from napari_deeplabcut.misc import (
 
 Tip = namedtuple("Tip", ["msg", "pos"])
 
+logger = logging.getLogger("napari-deeplabcut._widgets")
+logger.setLevel(logging.DEBUG)
+
 
 class Shortcuts(QDialog):
     """Opens a window displaying available napari-deeplabcut shortcuts"""
@@ -187,21 +190,79 @@ class Tutorial(QDialog):
         self.next_button.setEnabled(self._current_tip < len(self._tips) - 1)
 
 
-def _get_and_try_preferred_reader(
-    self,
-    dialog,
-    *args,
-):
+def _get_and_try_preferred_reader(self, dialog, *args):
+    """
+    Prefer DLC reader for DLC-looking paths (config.yaml or labeled-data folders),
+    otherwise fall back to builtins.
+    """
+    path = dialog._current_file
+
+    if _should_force_dlc_reader(path):
+        try:
+            self.viewer.open(path, plugin="napari-deeplabcut")
+            return
+        except Exception:
+            # fall through to builtins
+            pass
+
+    # Non-DLC (or DLC reader failed): use builtins
+    self.viewer.open(path, plugin="builtins")
+
+
+# ----------------------------
+# DLC path heuristics (shared)
+# ----------------------------
+
+
+def _is_config_yaml(path: str | Path) -> bool:
     try:
-        self.viewer.open(
-            dialog._current_file,
-            plugin="napari-deeplabcut",
-        )
-    except ValueError:
-        self.viewer.open(
-            dialog._current_file,
-            plugin="builtins",
-        )
+        p = Path(path)
+    except TypeError:
+        return False
+    return p.is_file() and p.name.lower() == "config.yaml"
+
+
+def _has_dlc_datafiles(folder: str | Path) -> bool:
+    """True if folder contains DLC label artifacts (CollectedData* or machinelabels*)."""
+    p = Path(folder)
+    if not p.exists() or not p.is_dir():
+        return False
+    for pat in ("CollectedData*.h5", "CollectedData*.csv", "machinelabels*.h5", "machinelabels*.csv"):
+        if any(p.glob(pat)):
+            return True
+    return False
+
+
+def _looks_like_dlc_labeled_folder(folder: str | Path) -> bool:
+    """
+    True if folder appears to be a DLC labeled-data subfolder or contains DLC label files.
+    Examples:
+      project/labeled-data/video1/
+      project/labeled-data/video1/CollectedData_*.h5
+    """
+    p = Path(folder)
+    if not p.exists() or not p.is_dir():
+        return False
+    # Strong signal: existing DLC artifacts
+    if _has_dlc_datafiles(p):
+        return True
+    # Weaker signal: it sits under a labeled-data directory
+    return any(part.lower() == "labeled-data" for part in p.parts)
+
+
+def _should_force_dlc_reader(paths: list[str] | tuple[str, ...] | str) -> bool:
+    """Decide whether we should force the napari-deeplabcut reader."""
+    if isinstance(paths, (str, Path)):
+        paths = [str(paths)]
+    if not paths:
+        return False
+    # If *any* path is a config.yaml -> DLC reader
+    if any(_is_config_yaml(p) for p in paths):
+        return True
+    # If *any* path is a folder that looks like DLC labeled-data -> DLC reader
+    if any(_looks_like_dlc_labeled_folder(p) for p in paths):
+        return True
+    return False
 
 
 # Hack to avoid napari's silly variable type guess,
@@ -568,6 +629,23 @@ class KeypointControls(QWidget):
             _get_and_try_preferred_reader,
             self.viewer.window.qt_viewer,
         )
+        # ----------------------------------------
+        # Force DLC reader for DLC-looking drag/drop
+        # ----------------------------------------
+        qt_viewer = self.viewer.window._qt_viewer
+        _orig_qt_open = qt_viewer._qt_open
+
+        def _qt_open_with_dlc_preference(
+            _self, filenames, stack=False, choose_plugin=False, plugin=None, layer_type=None, **kwargs
+        ):
+            # If user explicitly chose a plugin (Alt in drag/drop chooser), respect it.
+            if plugin is None and not choose_plugin and _should_force_dlc_reader(filenames):
+                plugin = "napari-deeplabcut"
+            return _orig_qt_open(
+                filenames, stack=stack, choose_plugin=choose_plugin, plugin=plugin, layer_type=layer_type, **kwargs
+            )
+
+        qt_viewer._qt_open = MethodType(_qt_open_with_dlc_preference, qt_viewer)
 
         status_bar = self.viewer.window._qt_window.statusBar()
         self.last_saved_label = QLabel("")
@@ -699,6 +777,165 @@ class KeypointControls(QWidget):
         # There are to my knowledge no other way that is as concise and clean
         # (Of course this will be a problem if we start using it everywhere so do not reuse lightly)
         QTimer.singleShot(10, self.silently_dock_matplotlib_canvas)
+
+        # If layers already exist (user loaded data before opening this widget),
+        # adopt them so keypoint controls take ownership immediately.
+        QTimer.singleShot(0, self._adopt_existing_layers)
+
+    def _adopt_existing_layers(self) -> None:
+        """
+        When the widget is opened after layers already exist, we need to
+        run the same initialization as if they had been inserted.
+        """
+        # Iterate over a snapshot, because on_insert may modify layer order
+        layers_snapshot = list(self.viewer.layers)
+
+        for idx, layer in enumerate(layers_snapshot):
+            self._adopt_layer(layer, idx)
+
+        # After adoption, refresh UI state
+        try:
+            active = self.viewer.layers.selection.active
+            if active is not None:
+                # Force the GUI to update visibility of menus, etc.
+                self.on_active_layer_change(Event(type_name="active", value=active))
+        except Exception:
+            pass
+
+    def _adopt_layer(self, layer, index: int) -> None:
+        """
+        Run the relevant portion of on_insert() for an already-existing layer.
+        This avoids duplicating your logic and prevents reliance on napari's Event object.
+        """
+        try:
+            if isinstance(layer, Image):
+                # Mimic image insertion side effects (metadata capture + reorder timer)
+                self._handle_existing_image_layer(layer, index)
+
+            elif isinstance(layer, Points):
+                # If this Points layer hasn't been wired yet, wire it
+                if layer not in self._stores:
+                    self._handle_existing_points_layer(layer)
+
+            # After handling each layer, attempt safe remap
+            if not isinstance(layer, Image):
+                self._remap_frame_indices(layer)
+
+        except Exception:
+            logging.exception("Failed to adopt existing layer %r", getattr(layer, "name", layer))
+
+    def _handle_existing_image_layer(self, layer: Image, index: int) -> None:
+        """
+        Safe version of the Image branch from on_insert().
+        Uses your inference logic so builtins-loaded images don't crash.
+        """
+        paths = (layer.metadata or {}).get("paths")
+        if paths is None and is_video(layer.name):
+            self.video_widget.setVisible(True)
+
+        root = self._infer_image_root(layer)
+        shape = None
+        try:
+            shape = layer.level_shapes[0]
+        except Exception:
+            pass
+
+        # Only update keys with non-empty values (never clobber with None)
+        if paths:
+            self._images_meta["paths"] = paths
+        if shape is not None:
+            self._images_meta["shape"] = shape
+        if root:
+            self._images_meta["root"] = root
+        self._images_meta["name"] = layer.name
+
+        # If the image layer isn't at bottom, keep your intended layer ordering
+        QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, index))
+
+    def _handle_existing_points_layer(self, layer: Points) -> None:
+        """
+        Safe version of the Points branch from on_insert(), for adoption.
+        """
+        store = keypoints.KeypointStore(self.viewer, layer)
+        self._stores[layer] = store
+        if layer.metadata.get("header") is None:
+            self.viewer.status = (
+                "This Points layer does not look like a DLC keypoints layer. "
+                "Please load via napari-deeplabcut (config.yaml / labeled-data folder)."
+            )
+            return
+
+        # Keep save history consistent
+        if root := layer.metadata.get("root"):
+            update_save_history(root)
+
+        layer.metadata["controls"] = self
+        layer.text.visible = False
+
+        # Bind keys and patch behaviors like on_insert()
+        layer.bind_key("M", self.cycle_through_label_modes)
+        layer.bind_key("F", self.cycle_through_color_modes)
+
+        func = partial(_paste_data, store=store)
+        layer._paste_data = MethodType(func, layer)
+        layer.add = MethodType(keypoints._add, store)
+
+        layer.events.add(query_next_frame=Event)
+        layer.events.query_next_frame.connect(store._advance_step)
+
+        layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
+        layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
+        layer.bind_key("Down", store.next_keypoint, overwrite=True)
+        layer.bind_key("Up", store.prev_keypoint, overwrite=True)
+
+        layer.face_color_mode = "cycle"
+
+        # Create the dropdown menus
+        self._form_dropdown_menus(store)
+
+        # Update images meta "project" only if truthy
+        proj = layer.metadata.get("project")
+        if proj:
+            self._images_meta["project"] = proj
+
+        # Enable GUI groups that are normally enabled on insert
+        self._radio_box.setEnabled(True)
+        self._color_grp.setEnabled(True)
+        self._trail_cb.setEnabled(True)
+        self._show_traj_plot_cb.setEnabled(True)
+
+        # Hide the color pickers, same as on_insert (guarded)
+        try:
+            controls = self.viewer.window.qt_viewer.dockLayerControls
+            point_controls = controls.widget().widgets[layer]
+
+            try:
+                face_color_controls = point_controls._face_color_control.face_color_edit
+                face_color_label = point_controls._face_color_control.face_color_label
+                face_color_controls.hide()
+                face_color_label.hide()
+            except AttributeError:
+                pass
+
+            try:
+                edge_color_controls = point_controls._border_color_control.border_color_edit
+                border_color_label = point_controls._border_color_control.border_color_edit_label
+                edge_color_controls.hide()
+                border_color_label.hide()
+            except AttributeError:
+                pass
+
+            try:
+                out_of_slice_controls = point_controls._out_slice_checkbox_control.out_of_slice_checkbox
+                out_of_slice_label = point_controls._out_slice_checkbox_control.out_of_slice_checkbox_label
+                out_of_slice_controls.hide()
+                out_of_slice_label.hide()
+            except AttributeError:
+                pass
+
+        except Exception:
+            # Never fail adoption due to UI private API differences
+            pass
 
     def _ensure_mpl_canvas_docked(self) -> None:
         """
@@ -1055,7 +1292,8 @@ class KeypointControls(QWidget):
             old_paths_raw = md.get("paths") or []
             # Always sync basic metadata (even if we can't remap)
             try:
-                layer.metadata.update(self._images_meta)
+                safe_meta = {k: v for k, v in self._images_meta.items() if v is not None and v != ""}
+                layer.metadata.update(safe_meta)
             except Exception:
                 pass
 
@@ -1171,6 +1409,34 @@ class KeypointControls(QWidget):
             # Intentionally do not raise, simply warn and skip remapping
             return
 
+    def _infer_image_root(self, layer: Image) -> str | None:
+        """
+        Best-effort inference of an Image layer's 'root' folder.
+        Works for layers created by napari-deeplabcut *or* napari builtins.
+        """
+        # 1) DLC reader already sets metadata["root"]
+        root = (layer.metadata or {}).get("root")
+        if root:
+            return str(root)
+
+        # 2) If metadata has "paths", use parent folder of first path
+        paths = (layer.metadata or {}).get("paths")
+        if paths:
+            try:
+                return str(Path(paths[0]).expanduser().resolve().parent)
+            except Exception:
+                pass
+
+        # 3) Use layer.source.path if present (napari keeps a source path sometimes)
+        try:
+            src = getattr(layer, "source", None)
+            if src is not None and getattr(src, "path", None):
+                return str(Path(src.path).expanduser().resolve().parent)
+        except Exception:
+            pass
+
+        return None
+
     def on_insert(self, event):
         layer = event.source[-1]
         logging.debug(f"Inserting Layer {layer}")
@@ -1178,15 +1444,26 @@ class KeypointControls(QWidget):
             paths = layer.metadata.get("paths")
             if paths is None and is_video(layer.name):
                 self.video_widget.setVisible(True)
+
             # Store the metadata and pass them on to the other layers
-            self._images_meta.update(
-                {
-                    "paths": paths,
-                    "shape": layer.level_shapes[0],
-                    "root": layer.metadata["root"],
-                    "name": layer.name,
-                }
-            )
+            paths = (layer.metadata or {}).get("paths")
+            root = self._infer_image_root(layer)
+            shape = None
+            try:
+                shape = layer.level_shapes[0]
+            except Exception:
+                shape = None
+
+            # Only update keys when we have real values (never clobber with None)
+            if paths:
+                self._images_meta["paths"] = paths
+            if shape is not None:
+                self._images_meta["shape"] = shape
+            if root:
+                self._images_meta["root"] = root
+
+            # Always keep a human-readable name
+            self._images_meta["name"] = layer.name
             # Delay layer sorting
             QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, event.index))
         elif isinstance(layer, Points):
@@ -1253,11 +1530,9 @@ class KeypointControls(QWidget):
             layer.face_color_mode = "cycle"
             self._form_dropdown_menus(store)
 
-            self._images_meta.update(
-                {
-                    "project": layer.metadata.get("project"),
-                }
-            )
+            proj = layer.metadata.get("project")
+            if proj:
+                self._images_meta["project"] = proj
             self._radio_box.setEnabled(True)
             self._color_grp.setEnabled(True)
             self._trail_cb.setEnabled(True)
