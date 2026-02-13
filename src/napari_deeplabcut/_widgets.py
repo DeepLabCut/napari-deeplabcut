@@ -1,3 +1,6 @@
+"""Main widget and controls for napari-deeplabcut, including the tutorial and shortcuts windows."""
+
+# src/napari_deeplabcut/_widgets.py
 import logging
 import os
 from collections import defaultdict, namedtuple

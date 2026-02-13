@@ -1,3 +1,6 @@
+"""Readers for DeepLabCut data formats."""
+
+# src/napari_deeplabcut/_reader.py
 import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
