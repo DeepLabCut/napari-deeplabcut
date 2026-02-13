@@ -8,6 +8,8 @@ import pytest
 from napari.layers import Points
 from qtpy.QtWidgets import QMessageBox
 
+from napari_deeplabcut._tests.conftest import store
+
 # -----------------------------------------------------------------------------
 # Global fixtures: avoid modal hangs + control overwrite confirmation path
 # -----------------------------------------------------------------------------
@@ -177,18 +179,29 @@ def _get_coord_from_df(df: pd.DataFrame, bodypart: str, coord: str, basename: st
     return float(series.loc[series.index[mask]].iloc[0, 0])
 
 
-def _set_bodypart_xy(points_layer: Points, bodypart: str, *, x: float, y: float):
+def _set_or_add_bodypart_xy(points_layer: Points, store, bodypart: str, *, x: float, y: float, frame: int = 0):
     """
-    Modify an existing bodypart point in the napari Points layer (conflict generator).
+    Cross-version helper:
+    - If the bodypart already exists as a row (possibly NaN placeholder), update it.
+    - Otherwise, add a new point for that bodypart via the store/Points.add.
     """
-    labels = np.asarray(points_layer.properties.get("label"))
+    labels = np.asarray(points_layer.properties.get("label", []), dtype=object)
     mask = labels == bodypart
-    assert mask.any(), f"Could not find {bodypart} in Points layer properties."
 
-    data = np.array(points_layer.data, copy=True)  # (frame, y, x)
-    data[mask, 1] = y
-    data[mask, 2] = x
-    points_layer.data = data
+    if mask.any():
+        # Update existing row
+        data = np.array(points_layer.data, copy=True)  # (frame, y, x)
+        data[mask, 1] = y
+        data[mask, 2] = x
+        points_layer.data = data
+        return
+
+    # No placeholder row exists (common on some stacks, e.g. Py3.10):
+    # Add a new point for the desired keypoint.
+    from napari_deeplabcut import keypoints
+
+    store.current_keypoint = keypoints.Keypoint(bodypart, "")
+    points_layer.add(np.array([float(frame), float(y), float(x)], dtype=float))
 
 
 # -----------------------------------------------------------------------------
@@ -277,7 +290,7 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
     assert store is not None
 
     # bodypart2 exists as a placeholder row with NaN coords in the loaded Points layer
-    _set_bodypart_xy(points, "bodypart2", x=44.0, y=33.0)
+    _set_or_add_bodypart_xy(points, store, "bodypart2", x=44.0, y=33.0)
 
     viewer.layers.selection.active = points
     viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
@@ -310,7 +323,7 @@ def test_overwrite_warning_triggers_on_conflict(make_napari_viewer, qtbot, tmp_p
     points = _get_points_layer_with_data(viewer)
 
     # Create conflict: overwrite bodypart1
-    _set_bodypart_xy(points, "bodypart1", x=99.0, y=88.0)
+    _set_or_add_bodypart_xy(points, store, "bodypart1", x=99.0, y=88.0)
 
     viewer.layers.selection.active = points
     viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
@@ -348,7 +361,7 @@ def test_overwrite_warning_cancel_aborts_write(make_napari_viewer, qtbot, tmp_pa
     qtbot.wait(200)
 
     points = _get_points_layer_with_data(viewer)
-    _set_bodypart_xy(points, "bodypart1", x=456.0, y=123.0)
+    _set_or_add_bodypart_xy(points, store, "bodypart1", x=456.0, y=123.0)
 
     viewer.layers.selection.active = points
     try:
