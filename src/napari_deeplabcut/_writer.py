@@ -15,7 +15,8 @@ from skimage.io import imsave
 from skimage.util import img_as_ubyte
 
 from napari_deeplabcut import misc
-from napari_deeplabcut._reader import _load_config
+from napari_deeplabcut.core.errors import MissingProvenanceError, UnresolvablePathError
+from napari_deeplabcut.core.metadata import parse_points_metadata, resolve_provenance_path
 from napari_deeplabcut.ui.dialogs import _maybe_confirm_overwrite
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,37 @@ def _form_df(points_data, metadata):
     return df
 
 
+def _resolve_output_path_from_metadata(metadata: dict) -> str | None:
+    """
+    Resolve the target .h5 path from PointsMetadata.io if available,
+    otherwise fall back to legacy `source_h5` if present.
+
+    Returns an absolute filesystem path string, or None if it cannot be resolved.
+    """
+    # `metadata` here is the napari writer metadata dict passed into write_hdf.
+    # It contains a nested `metadata` dict (layer.metadata).
+    layer_meta = metadata.get("metadata")
+    if not isinstance(layer_meta, dict):
+        layer_meta = {}
+
+    # 1) Preferred: PointsMetadata.io
+    pts = parse_points_metadata(layer_meta)
+    io = pts.io
+    if io is not None:
+        try:
+            p = resolve_provenance_path(io, root_anchor=io.project_root, allow_missing=True)
+            return str(p)
+        except (MissingProvenanceError, UnresolvablePathError):
+            pass
+
+    # 2) Legacy fallback: source_h5
+    src = layer_meta.get("source_h5")
+    if isinstance(src, str) and src:
+        return src
+
+    return None
+
+
 def write_hdf(filename, data, metadata):
     """
     Write DLC keypoints to disk.
@@ -70,9 +102,18 @@ def write_hdf(filename, data, metadata):
         layer_meta = {}
 
     layer_name = metadata.get("name", "")
-
+    # ------------------------------------------------------------
+    # NEW: resolve output path using provenance (PointsMetadata.io)
+    # ------------------------------------------------------------
+    out_path = _resolve_output_path_from_metadata(metadata)
     # root may be nested or top-level depending on napari/version/reader path
     root = layer_meta.get("root") or metadata.get("root")
+
+    # If provenance is unavailable, fall back to legacy root/name routing for now.
+    # (Later we will enforce deterministic abort on ambiguity.)
+    if not out_path:
+        out_name = layer_name
+        out_path = os.path.join(root, out_name + ".h5")
 
     # paths may be nested or top-level too
     paths = layer_meta.get("paths") or metadata.get("paths")
@@ -94,71 +135,37 @@ def write_hdf(filename, data, metadata):
     out_name = layer_name
     out_path = os.path.join(root, out_name + ".h5")
 
-    if "machine" in layer_name:
-        # ---- existing behavior for refined predictions ----
-        df_new.drop("likelihood", axis=1, level="coords", inplace=True, errors="ignore")
-        header = misc.DLCHeader(df_new.columns)
+    # Determine kind from PointsMetadata.io if present (do NOT infer from layer name).
+    pts = parse_points_metadata(layer_meta)
+    kind = getattr(getattr(pts, "io", None), "kind", None)
 
-        gt_file = ""
-        for file in os.listdir(root):
-            if file.startswith("CollectedData") and file.endswith("h5"):
-                gt_file = file
-                break
-
-        if gt_file:
-            # Refined predictions must be merged into existing GT file
-            gt_path = os.path.join(root, gt_file)
-            try:
-                df_gt = pd.read_hdf(gt_path, key="keypoints")
-            except (KeyError, ValueError):
-                logger.warning(
-                    f"Existing GT file {gt_file} does not contain 'keypoints' key. Attempting to read entire file."
-                )
-                df_gt = pd.read_hdf(gt_path)
-            new_scorer = df_gt.columns.get_level_values("scorer")[0]
-            header.scorer = new_scorer
-            df_new.columns = header.columns
-
-            # Keep existing concat + de-dupe approach
-            df_out = pd.concat((df_new, df_gt))
-            df_out = df_out[~df_out.index.duplicated(keep="first")]
-            out_name = os.path.splitext(gt_file)[0]
-            out_path = os.path.join(root, out_name + ".h5")
-        else:
-            # Let us fetch the config.yaml file to get the scorer name...
-            project_folder = Path(root).parents[1]
-            config = _load_config(str(project_folder / "config.yaml"))
-            new_scorer = config["scorer"]
-            header.scorer = new_scorer
-            df_new.columns = header.columns
-            out_name = f"CollectedData_{new_scorer}"
-            out_path = os.path.join(root, out_name + ".h5")
-
-            df_out = df_new
+    if str(kind) == "machine":
+        # ------------------------------------------------------------
+        # Machine outputs: save to their own target file only.
+        # No automatic merge into GT (policy).
+        # ------------------------------------------------------------
+        df_out = df_new
 
     else:
-        # ---- NEW: safe merge-on-save for ground truth ----
+        # ------------------------------------------------------------
+        # Ground-truth: safe merge-on-save
+        # ------------------------------------------------------------
         if os.path.exists(out_path):
             try:
                 df_old = pd.read_hdf(out_path, key="keypoints")
             except (KeyError, ValueError):
-                # Fall back in case older files used a different key or structure
                 df_old = pd.read_hdf(out_path)
 
             key_conflict = misc.keypoint_conflicts(df_old, df_new)
             if not _maybe_confirm_overwrite(metadata, key_conflict):
                 return None  # user cancelled save
 
-            # Merge in a non-destructive way:
-            # df_new wins where it has values; df_old fills where df_new is NaN.
             df_out = df_new.combine_first(df_old)
 
-            # Optional: ensure DLC header order is preserved (helps stability)
             try:
                 header = misc.DLCHeader(df_out.columns)
                 df_out = df_out.reindex(header.columns, axis=1)
             except Exception:
-                # If header inference fails, still save merged data.
                 pass
         else:
             df_out = df_new

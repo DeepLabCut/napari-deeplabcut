@@ -141,6 +141,8 @@ def has_dlc_datafiles(folder: str | Path) -> bool:
     - CollectedData*.h5 / .csv
     - machinelabels*.h5 / .csv
     """
+    # FUTURE NOTE @C-Achard 17/02/26: Do not hardcode these patterns
+    # and clearly expose these if data file formats change or expand.
     p = Path(folder)
     if not p.exists() or not p.is_dir():
         return False

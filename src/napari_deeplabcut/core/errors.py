@@ -6,6 +6,7 @@ failure modes (e.g., ambiguity) without relying on ad-hoc strings.
 No behavior changes are introduced by merely defining these exceptions.
 """
 
+# src/napari_deeplabcut/core/errors.py
 from __future__ import annotations
 
 

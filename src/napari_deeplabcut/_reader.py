@@ -17,6 +17,9 @@ from napari.types import LayerData
 from natsort import natsorted
 
 from napari_deeplabcut import misc
+from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.core.io import discover_annotations
+from napari_deeplabcut.core.paths import canonicalize_path, looks_like_dlc_labeled_folder
 
 SUPPORTED_IMAGES = ".jpg", ".jpeg", ".png"
 SUPPORTED_VIDEOS = ".mp4", ".mov", ".avi"
@@ -78,7 +81,7 @@ def get_folder_parser(path):
     if not path or not Path(path).is_dir():
         return None
 
-    if not _looks_like_dlc_folder(path):
+    if not looks_like_dlc_labeled_folder(path):
         return None
     layers = []
 
@@ -106,13 +109,37 @@ def get_folder_parser(path):
 
     image_layer = read_images(images)
     layers.extend(image_layer)
-    for file in Path(path).iterdir():
-        if file.name.endswith(".h5"):
-            try:
-                layers.extend(read_hdf(str(file)))
-                break  # one h5 per annotated video
-            except Exception as e:
-                raise RuntimeError(f"Could not read annotation data from {file}") from e
+
+    # ---------------------------------------------------------------------
+    # Deterministic, safe discovery: load ALL relevant H5 files in the folder.
+    # We explicitly avoid "first match wins" behavior.
+    # ---------------------------------------------------------------------
+    artifacts = discover_annotations(path)
+
+    h5_files = [a.h5_path for a in artifacts if a.h5_path is not None]
+    if not h5_files:
+        # No H5 artifacts found. Keep existing behavior: only images will load.
+        # (We do not attempt to load CSV-only here because policy is "H5 only".)
+        return lambda _: layers
+
+    errors: list[tuple[type, str, Exception]] = []
+    for h5 in h5_files:
+        try:
+            layers.extend(read_hdf(str(h5)))
+        except Exception as e:
+            # Don't silently skip: collect errors and fail deterministically
+            # if nothing else loads successfully.
+            logger.debug("Could not read annotation data from %s", h5, exc_info=True)
+            exc = (RuntimeError, f"Could not read annotation data from {h5}", e)
+            errors.append(exc)
+
+    # If we found H5 files but failed to load all of them, raise only if none loaded.
+    # This keeps folder-open robust when one artifact is corrupt.
+    n_points_layers = sum(1 for _, _, layer_type in layers if layer_type == "points")
+    if n_points_layers == 0 and errors:
+        exc_type, msg, cause = errors[0]
+        raise exc_type(msg) from cause
+
     return lambda _: layers
 
 
@@ -242,17 +269,13 @@ def _lazy_imread(
         ) from e
 
 
-def _looks_like_dlc_folder(path: str) -> bool:
-    p = Path(path)
-    if not p.exists() or not p.is_dir():
-        return False
-    # Must either be inside labeled-data OR contain a CollectedData/machinelabels file
-    if any(part.lower() == "labeled-data" for part in p.parts):
-        return True
-    for pat in ("CollectedData*.h5", "CollectedData*.csv", "machinelabels*.h5", "machinelabels*.csv"):
-        if any(p.glob(pat)):
-            return True
-    return False
+def _infer_annotation_kind_from_filename(p: Path) -> str | None:
+    name = p.name.lower()
+    if name.startswith("collecteddata"):
+        return AnnotationKind.GT.value
+    if name.startswith("machinelabels"):
+        return AnnotationKind.MACHINE.value
+    return None
 
 
 # Read images from a list of files or a glob/string path
@@ -458,10 +481,49 @@ def read_hdf(filename: str) -> list[LayerData]:
             paths=list(paths2inds),
             colormap=colormap,
         )
-        metadata["name"] = Path(filename).stem
-        metadata["metadata"]["root"] = str(Path(filename).parent)
-        # Store file name in case the layer's name is edited by the user
+        # Layer display name (presentation)
+        metadata["name"] = Path(file).stem
+
+        # Root folder where the annotation file lives (legacy behavior)
+        metadata["metadata"]["root"] = str(Path(file).parent)
+
+        # Store file name in case the layer's name is edited by the user (legacy behavior)
         metadata["metadata"]["name"] = metadata["name"]
+
+        # -----------------------------------------------------------------
+        # Authoritative source filename for safe routing/debug
+        # This is NOT the final IOProvenance model.
+        # -----------------------------------------------------------------
+        try:
+            metadata["metadata"]["source_h5"] = str(Path(file).expanduser().resolve())
+        except Exception:
+            metadata["metadata"]["source_h5"] = str(file)
+
+        metadata["metadata"]["source_h5_name"] = Path(file).name
+        metadata["metadata"]["source_h5_stem"] = Path(file).stem
+        # -----------------------------------------------------------------
+        # Minimal migration to PointsMetadata.io (stored as plain dict)
+        # Root anchor is configurable; for shared labeled-data folders, the
+        # safest default anchor is the annotation file's parent directory.
+        # -----------------------------------------------------------------
+        try:
+            anchor = str(Path(file).expanduser().resolve().parent)
+        except Exception:
+            anchor = str(Path(file).parent)
+
+        kind = _infer_annotation_kind_from_filename(Path(file))
+
+        # Store relpath as POSIX, relative to anchor. In this minimal step,
+        # this becomes simply the filename; later we can support deeper relpaths.
+        relposix = canonicalize_path(file, n=1)
+
+        metadata["metadata"]["io"] = {
+            "schema_version": 1,
+            "project_root": anchor,  # configurable root anchor
+            "source_relpath_posix": relposix,  # OS-agnostic relative path
+            "kind": kind,  # "gt" | "machine" | None
+            "dataset_key": "keypoints",
+        }
         layers.append((data, metadata, "points"))
     return layers
 

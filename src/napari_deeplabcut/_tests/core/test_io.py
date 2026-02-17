@@ -4,8 +4,8 @@ from pathlib import Path
 
 from napari_deeplabcut.config.models import AnnotationKind
 from napari_deeplabcut.core.io import (
-    discover_annotation_artifacts,
     discover_annotation_paths,
+    discover_annotations,
     iter_annotation_candidates,
 )
 
@@ -24,7 +24,7 @@ def test_discover_annotation_artifacts_groups_h5_and_csv(tmp_path: Path):
     _touch(tmp_path / "machinelabels-iter0.h5")
     _touch(tmp_path / "machinelabels-iter0.csv")
 
-    arts = discover_annotation_artifacts(tmp_path)
+    arts = discover_annotations(tmp_path)
     assert len(arts) == 3
 
     # Deterministic ordering by filename

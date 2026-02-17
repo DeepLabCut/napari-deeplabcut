@@ -756,9 +756,6 @@ def test_ambiguous_placeholder_save_aborts_when_multiple_gt_exist(
 
 
 @pytest.mark.usefixtures("qtbot")
-@pytest.mark.xfail(
-    strict=True, reason="Folder parser breaks after first h5; must load all or enforce deterministic selection."
-)
 def test_folder_open_loads_all_h5_when_multiple_exist(make_napari_viewer, qtbot, tmp_path):
     """
     Contract: Opening a labeled-data folder with multiple H5 files should not
@@ -777,3 +774,20 @@ def test_folder_open_loads_all_h5_when_multiple_exist(make_napari_viewer, qtbot,
     pts = [ly for ly in viewer.layers if isinstance(ly, Points)]
     # Expected: one points layer per H5 file (2 GT + 1 machine)
     assert len(pts) == 3, f"Expected 3 Points layers (2 GT + 1 machine), got {len(pts)}: {[p.name for p in pts]}"
+    # ------------------------------------------------------------------
+    # New assertion: each Points layer must carry authoritative source_h5
+    # matching the file it originated from (stable across layer renames).
+    # ------------------------------------------------------------------
+    expected_by_stem = {p.stem: str(p.expanduser().resolve()) for p in gt_paths}
+
+    for ly in pts:
+        assert "source_h5" in ly.metadata, f"Missing source_h5 in layer.metadata for {ly.name}"
+        # Ensure it points to the actual file for that layer stem
+        assert ly.metadata["source_h5"] == expected_by_stem[ly.name], (
+            f"Layer {ly.name} has wrong source_h5:\n"
+            f"  got: {ly.metadata['source_h5']}\n"
+            f"  expected: {expected_by_stem[ly.name]}"
+        )
+
+        assert "io" in (ly.metadata or {}), f"Missing io provenance dict in layer.metadata for {ly.name}"
+        assert ly.metadata["io"].get("source_relpath_posix"), f"io.source_relpath_posix missing for {ly.name}"

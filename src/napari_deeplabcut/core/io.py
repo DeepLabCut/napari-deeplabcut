@@ -23,6 +23,7 @@ CSV-only folders are supported (e.g. shared data without H5). We treat those as
 valid sources, with an optional inferred H5 companion if present.
 """
 
+# src/napari_deeplabcut/core/io.py
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -95,7 +96,7 @@ def _is_relevant_artifact(p: Path) -> bool:
 # -----------------------------------------------------------------------------
 
 
-def discover_annotation_artifacts(folder: str | Path) -> list[AnnotationArtifact]:
+def discover_annotations(folder: str | Path) -> list[AnnotationArtifact]:
     """Discover DLC annotation artifacts in a folder.
 
     Parameters
@@ -147,7 +148,7 @@ def discover_annotation_artifacts(folder: str | Path) -> list[AnnotationArtifact
 
 def discover_annotation_paths(folder: str | Path) -> list[Path]:
     """Convenience wrapper: return primary paths to open (H5 preferred else CSV)."""
-    return [a.primary_path for a in discover_annotation_artifacts(folder) if a.primary_path is not None]
+    return [a.primary_path for a in discover_annotations(folder) if a.primary_path is not None]
 
 
 def iter_annotation_candidates(paths: Iterable[str | Path]) -> list[Path]:
