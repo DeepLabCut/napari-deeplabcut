@@ -56,8 +56,9 @@ from napari_deeplabcut._reader import (
     _load_superkeypoints_diagram,
     is_video,
 )
-from napari_deeplabcut._writer import _form_df, _write_config, _write_image
+from napari_deeplabcut._writer import _form_df, _write_image
 from napari_deeplabcut.config.models import ImageMetadata, IOProvenance, PointsMetadata
+from napari_deeplabcut.core.io import write_config
 from napari_deeplabcut.core.metadata import (
     get_default_scorer,
     infer_image_root,
@@ -1107,7 +1108,7 @@ class KeypointControls(QWidget):
             )
         )
         cfg["SuperAnimalConversionTables"] = conversion_tables
-        _write_config(config_path, cfg)
+        write_config(config_path, cfg)
         self.viewer.status = "Mapping to superkeypoint set successfully saved"
 
     def start_tutorial(self):
@@ -1380,7 +1381,7 @@ class KeypointControls(QWidget):
                 if not video_name:
                     return
                 cfg["video_sets"][os.path.join(project_path, "videos", video_name)] = temp
-                _write_config(config_path, cfg)
+                write_config(config_path, cfg)
                 break
 
     def _form_dropdown_menus(self, store):

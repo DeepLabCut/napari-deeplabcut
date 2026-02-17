@@ -2,10 +2,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 import yaml
 from skimage.io import imread
 
 from napari_deeplabcut import _writer, misc
+from napari_deeplabcut.core import io as napari_dlc_io
+from napari_deeplabcut.core.errors import MissingProvenanceError
 
 rng = np.random.default_rng(42)
 
@@ -15,7 +18,7 @@ def test_write_config(tmp_path):
     cfg = {"a": 1, "b": 2}
     path = tmp_path / "config.yaml"
 
-    _writer._write_config(str(path), cfg)
+    napari_dlc_io.write_config(str(path), cfg)
 
     assert path.exists()
     text = path.read_text()
@@ -35,8 +38,6 @@ def test_write_image(tmp_path):
 
 
 #  Form_df — multi-animal + single-animal
-
-
 def _fake_metadata_for_df(df, paths):
     """Helper for metadata for _form_df.
 
@@ -75,6 +76,35 @@ def _fake_metadata_for_df(df, paths):
     return {
         "properties": props,
         "metadata": meta,
+    }
+
+
+def _add_source_io(metadata: dict, *, root: Path, kind: str, source_name: str) -> None:
+    """Attach minimal PointsMetadata.io dict to metadata['metadata']."""
+    md = metadata.setdefault("metadata", {})
+    md["io"] = {
+        "schema_version": 1,
+        "project_root": str(root),
+        "source_relpath_posix": source_name.replace("\\", "/"),
+        "kind": kind,  # "machine" or "gt"
+        "dataset_key": "keypoints",
+    }
+    # legacy migration compatibility (optional but good)
+    md["source_h5"] = str((root / source_name).resolve())
+    md["source_h5_name"] = source_name
+    md["source_h5_stem"] = Path(source_name).stem
+
+
+def _add_save_target(metadata: dict, *, root: Path, scorer: str) -> None:
+    """Attach promotion save_target (GT) to metadata['metadata']."""
+    md = metadata.setdefault("metadata", {})
+    md["save_target"] = {
+        "schema_version": 1,
+        "project_root": str(root),
+        "source_relpath_posix": f"CollectedData_{scorer}.h5",
+        "kind": "gt",
+        "dataset_key": "keypoints",
+        "scorer": scorer,
     }
 
 
@@ -187,26 +217,22 @@ def test_write_hdf_basic(tmp_path, fake_keypoints):
     assert len(df) == n_rows
 
 
-def test_write_hdf_machine_prediction_merge(tmp_path, fake_keypoints):
+def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, monkeypatch):
     """
-    Trigger the special 'machine' branch:
-      - metadata["name"] contains 'machine'
-      - an existing CollectedData*.h5 file exists
-      -> data should be merged
+    Promotion contract:
+      - source is machine/prediction (io.kind == "machine")
+      - save_target points to CollectedData_<scorer>.h5
+      - writer must MERGE safely into GT (not overwrite blindly),
+        and must NOT write back to prediction file.
     """
     root = tmp_path / "proj"
     root.mkdir()
 
-    # --- FIX: make GT index consistent with writer output (single-level MultiIndex) ---
-    gt = fake_keypoints.copy()
-    gt_idx = [f"img{i}.png" for i in gt.index]
-    gt.index = pd.MultiIndex.from_tuples([(x,) for x in gt_idx])  # ('img0.png',) etc.
-    gt_path = root / "CollectedData_me.h5"
-    gt.to_hdf(gt_path, key="data")
+    # Always allow overwrite confirmation in unit test
+    monkeypatch.setattr(_writer, "_maybe_confirm_overwrite", lambda *args, **kwargs: True)
 
     header = misc.DLCHeader(fake_keypoints.columns)
 
-    # Build per-row properties
     n_rows = len(fake_keypoints)
     from itertools import cycle, islice, product
 
@@ -216,7 +242,7 @@ def test_write_hdf_machine_prediction_merge(tmp_path, fake_keypoints):
     per_row_labels = [p[1] for p in sel]
 
     metadata = {
-        "name": "machine_predictions",
+        "name": "machinelabels-iter0",
         "properties": {
             "label": per_row_labels,
             "id": per_row_ids,
@@ -229,46 +255,51 @@ def test_write_hdf_machine_prediction_merge(tmp_path, fake_keypoints):
         },
     }
 
-    points = np.column_stack(
-        [
-            np.arange(n_rows),
-            rng.random(n_rows),
-            rng.random(n_rows),
-        ]
-    )
+    # Source provenance: machine/prediction file
+    _add_source_io(metadata, root=root, kind="machine", source_name="machinelabels-iter0.h5")
+
+    # Promotion target: existing GT
+    _add_save_target(metadata, root=root, scorer="me")
+
+    # Create existing GT file with key="keypoints" (writer expects this!)
+    gt_path = root / "CollectedData_me.h5"
+    fake_keypoints.to_hdf(gt_path, key="keypoints", mode="w")
+
+    # Create a machine file too; it must remain untouched
+    machine_path = root / "machinelabels-iter0.h5"
+    df_machine = pd.DataFrame(np.nan, index=[0], columns=fake_keypoints.columns)
+    df_machine.to_hdf(machine_path, key="keypoints", mode="w")
+    machine_before = pd.read_hdf(machine_path, key="keypoints")
+
+    points = np.column_stack([np.arange(n_rows), rng.random(n_rows), rng.random(n_rows)])
 
     fname = _writer.write_hdf("ignored.h5", points, metadata)
-    out_h5 = root / fname
+    assert fname == "CollectedData_me.h5"
 
-    df = pd.read_hdf(out_h5)
+    # GT should exist and be readable
+    df = pd.read_hdf(root / fname, key="keypoints")
+    assert isinstance(df, pd.DataFrame)
 
-    # merged data must include at least as many rows as the original
-    assert len(df) >= n_rows
-
-    # scorer should match original GT scorer
+    # Must still be scored as "me" after promotion
     assert df.columns.get_level_values("scorer")[0] == "me"
 
+    # Machine file must be unchanged
+    machine_after = pd.read_hdf(machine_path, key="keypoints")
+    pd.testing.assert_frame_equal(machine_before, machine_after)
 
-def test_write_hdf_machine_pred_no_gt(tmp_path, fake_keypoints):
-    """
-    Trigger machine branch, but **without** a CollectedData*.h5 file.
-    It should:
-       - load config.yaml to get scorer
-       - write under "CollectedData_{scorer}.h5"
-    """
-    project_root = tmp_path / "proj"
-    project_root.mkdir()
 
-    # The writer looks for config.yaml at Path(root).parents[1] / "config.yaml".
-    # With root = str(project_root), that is two levels above 'proj'.
-    cfg_path = project_root.parents[1] / "config.yaml"
-    cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text("scorer: alice")
+def test_write_hdf_machine_source_without_save_target_aborts(tmp_path, fake_keypoints):
+    """
+    New contract:
+    - machine/prediction sources must NEVER be written back.
+    - if save_target is missing, writer must abort deterministically.
+    """
+    root = tmp_path / "proj"
+    root.mkdir()
 
     header = misc.DLCHeader(fake_keypoints.columns)
-
-    # Build per-row properties
     n_rows = len(fake_keypoints)
+
     from itertools import cycle, islice, product
 
     pairs = list(product(header.individuals, header.bodyparts))
@@ -277,7 +308,7 @@ def test_write_hdf_machine_pred_no_gt(tmp_path, fake_keypoints):
     per_row_labels = [p[1] for p in sel]
 
     metadata = {
-        "name": "machine_predictions",
+        "name": "machinelabels-iter0",
         "properties": {
             "label": per_row_labels,
             "id": per_row_ids,
@@ -286,28 +317,72 @@ def test_write_hdf_machine_pred_no_gt(tmp_path, fake_keypoints):
         "metadata": {
             "header": header,
             "paths": [f"img{i}.png" for i in range(n_rows)],
-            "root": str(project_root),
+            "root": str(root),
         },
     }
 
-    points = np.column_stack(
-        [
-            np.arange(n_rows),
-            rng.random(n_rows),
-            rng.random(n_rows),
-        ]
-    )
+    _add_source_io(metadata, root=root, kind="machine", source_name="machinelabels-iter0.h5")
+
+    points = np.column_stack([np.arange(n_rows), rng.random(n_rows), rng.random(n_rows)])
+
+    with pytest.raises(MissingProvenanceError):
+        _writer.write_hdf("ignored.h5", points, metadata)
+
+
+def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, monkeypatch):
+    """
+    Promotion contract:
+    - machine source + save_target => create/update CollectedData_<scorer>.h5
+    - scorer level should be rewritten to chosen scorer
+    - machine file must not be created/modified by writer
+    """
+    root = tmp_path / "proj"
+    root.mkdir()
+
+    monkeypatch.setattr(_writer, "_maybe_confirm_overwrite", lambda *args, **kwargs: True)
+
+    header = misc.DLCHeader(fake_keypoints.columns)
+    n_rows = len(fake_keypoints)
+
+    from itertools import cycle, islice, product
+
+    pairs = list(product(header.individuals, header.bodyparts))
+    sel = list(islice(cycle(pairs), n_rows))
+    per_row_ids = [p[0] for p in sel]
+    per_row_labels = [p[1] for p in sel]
+
+    metadata = {
+        "name": "machinelabels-iter0",
+        "properties": {
+            "label": per_row_labels,
+            "id": per_row_ids,
+            "likelihood": [1.0] * n_rows,
+        },
+        "metadata": {
+            "header": header,
+            "paths": [f"img{i}.png" for i in range(n_rows)],
+            "root": str(root),
+        },
+    }
+
+    _add_source_io(metadata, root=root, kind="machine", source_name="machinelabels-iter0.h5")
+    _add_save_target(metadata, root=root, scorer="alice")
+
+    points = np.column_stack([np.arange(n_rows), rng.random(n_rows), rng.random(n_rows)])
 
     fname = _writer.write_hdf("ignored.h5", points, metadata)
+    assert fname == "CollectedData_alice.h5"
 
-    # Should name file based on scorer
-    assert fname.startswith("CollectedData_alice")
+    out_h5 = root / fname
+    assert out_h5.exists()
 
-    out_h5 = project_root / fname
-    df = pd.read_hdf(out_h5)
-
-    # columns scorer should be "alice"
+    df = pd.read_hdf(out_h5, key="keypoints")
     assert df.columns.get_level_values("scorer")[0] == "alice"
+
+    # Ensure we still did NOT write back to a machine source file
+    assert not (root / "machinelabels-iter0.h5").exists(), (
+        "Writer should not create/overwrite prediction files during promotion."
+    )
 
 
 #  Write_masks — verify masks & vertices

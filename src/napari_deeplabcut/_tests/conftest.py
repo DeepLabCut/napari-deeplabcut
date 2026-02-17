@@ -11,7 +11,8 @@ from PIL import Image
 from qtpy.QtWidgets import QDockWidget
 from skimage.io import imsave
 
-from napari_deeplabcut import _writer, keypoints
+from napari_deeplabcut import keypoints
+from napari_deeplabcut.core import io as napari_dlc_io
 
 # os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
 
@@ -133,7 +134,7 @@ def config_path(tmp_path_factory):
         },
     }
     path = str(tmp_path_factory.mktemp("configs") / "config.yaml")
-    _writer._write_config(
+    napari_dlc_io.write_config(
         path,
         params=cfg,
     )

@@ -30,6 +30,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
 from natsort import natsorted
 
 from napari_deeplabcut.config.models import AnnotationKind
@@ -167,3 +168,13 @@ def iter_annotation_candidates(paths: Iterable[str | Path]) -> list[Path]:
 
     # Stable ordering
     return natsorted(out, key=lambda x: x.name)
+
+
+# -----------------------------------------------------------------------------
+#  Write configuration utilities
+# -----------------------------------------------------------------------------
+
+
+def write_config(config_path: str, params: dict):
+    with open(config_path, "w") as file:
+        yaml.safe_dump(params, file)
