@@ -145,13 +145,11 @@ def ensure_metadata_models(
 # -----------------------------------------------------------------------------
 # Parsing / round-tripping
 # -----------------------------------------------------------------------------
-
-
 def parse_points_metadata(md: Mapping[str, Any] | PointsMetadata | None) -> PointsMetadata:
     """Parse PointsMetadata from a napari layer.metadata mapping.
 
     This is a *best-effort* parser intended for migration safety.
-    It does not raise on unexpected keys.
+    It MUST be robust to napari runtime objects (e.g., misc.DLCHeader, Qt widgets).
     """
     if md is None:
         return PointsMetadata()
@@ -159,8 +157,21 @@ def parse_points_metadata(md: Mapping[str, Any] | PointsMetadata | None) -> Poin
         return md
 
     try:
-        # model_validate handles nested models (e.g. io) and respects extra='allow'.
-        return PointsMetadata.model_validate(dict(md))
+        raw = dict(md)
+
+        # Drop runtime-only / non-JSON fields that can break validation.
+        # We only need io/save_target/root/paths for routing decisions.
+        raw.pop("controls", None)
+
+        # `header` is often a misc.DLCHeader runtime object (not our DLCHeaderModel dict).
+        # Keep it in layer.metadata, but exclude it from model_validate.
+        raw.pop("header", None)
+
+        # face_color_cycles can contain numpy objects; keep out of model parse if needed.
+        # (Not strictly necessary, but safe.)
+        # raw.pop("face_color_cycles", None)
+
+        return PointsMetadata.model_validate(raw)
     except Exception:
         logger.debug(
             "Failed to parse PointsMetadata from dict; falling back to empty model.",

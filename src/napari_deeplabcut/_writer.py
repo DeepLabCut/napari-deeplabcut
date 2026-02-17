@@ -21,6 +21,17 @@ from napari_deeplabcut.ui.dialogs import _maybe_confirm_overwrite
 logger = logging.getLogger(__name__)
 
 
+def _kind_value(kind) -> str:
+    """Normalize kind to a stable lowercase string."""
+    if kind is None:
+        return ""
+    # Enum-like
+    v = getattr(kind, "value", None)
+    if isinstance(v, str):
+        return v
+    return str(kind).lower()
+
+
 def _set_df_scorer(df: pd.DataFrame, scorer: str) -> pd.DataFrame:
     """Return df with scorer level set to the given scorer (if present)."""
     scorer = (scorer or "").strip()
@@ -83,7 +94,7 @@ def _resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str 
     io = pts.io
     st = pts.save_target
 
-    source_kind = str(getattr(io, "kind", "")) if io is not None else ""
+    source_kind = _kind_value(getattr(io, "kind", None) if io is not None else "")
 
     # Promotion target wins
     if st is not None:
@@ -195,6 +206,16 @@ def write_hdf(filename, data, metadata):
             if not _maybe_confirm_overwrite(metadata, key_conflict):
                 return None  # user cancelled save
 
+            # Ensure both dataframes have compatible index types before merging
+            try:
+                misc.guarantee_multiindex_rows(df_new)
+            except Exception:
+                pass
+            try:
+                misc.guarantee_multiindex_rows(df_old)
+            except Exception:
+                pass
+
             df_out = df_new.combine_first(df_old)
 
             try:
@@ -207,6 +228,12 @@ def write_hdf(filename, data, metadata):
     else:
         # For now: any non-GT destination simply overwrites its target
         df_out = df_new
+
+    # Guarantee consistent index again after merge (belt and suspenders)
+    try:
+        misc.guarantee_multiindex_rows(df_out)
+    except Exception:
+        pass
 
     # Sort before writing
     df_out.sort_index(inplace=True)
