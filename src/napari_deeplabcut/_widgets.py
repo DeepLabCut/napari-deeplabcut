@@ -18,7 +18,6 @@ import napari
 import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_qtagg import FigureCanvas, NavigationToolbar2QT
-from napari._qt.widgets.qt_welcome import QtWelcomeLabel
 from napari.layers import Image, Points, Shapes, Tracks
 from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
@@ -26,7 +25,7 @@ from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
 from qtpy.QtCore import QPoint, QSettings, QSize, Qt, QTimer, Signal
-from qtpy.QtGui import QAction, QCursor, QIcon, QPainter
+from qtpy.QtGui import QAction, QCursor, QIcon
 from qtpy.QtSvgWidgets import QSvgWidget
 from qtpy.QtWidgets import (
     QButtonGroup,
@@ -44,8 +43,6 @@ from qtpy.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
-    QStyle,
-    QStyleOption,
     QVBoxLayout,
     QWidget,
 )
@@ -574,44 +571,34 @@ class KeypointControls(QWidget):
         self.viewer.layers.events.inserted.connect(self.on_insert)
         self.viewer.layers.events.removed.connect(self.on_remove)
 
-        self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
-            _get_and_try_preferred_reader,
-            self.viewer.window.qt_viewer,
-        )
+        # self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
+        #     _get_and_try_preferred_reader,
+        #     self.viewer.window.qt_viewer,
+        # )
         # Project data
         self._project_path: str | None = None
 
         # ----------------------------------------
         # Force DLC reader for DLC-looking drag/drop
         # ----------------------------------------
-        qt_viewer = self.viewer.window._qt_viewer
-        _orig_qt_open = qt_viewer._qt_open
+        # _orig_qt_open = qt_viewer._qt_open
 
-        def _qt_open_with_dlc_preference(
-            _self, filenames, stack=False, choose_plugin=False, plugin=None, layer_type=None, **kwargs
-        ):
-            # If user explicitly chose a plugin (Alt in drag/drop chooser), respect it.
-            if plugin is None and not choose_plugin and should_force_dlc_reader(filenames):
-                plugin = "napari-deeplabcut"
-            return _orig_qt_open(
-                filenames, stack=stack, choose_plugin=choose_plugin, plugin=plugin, layer_type=layer_type, **kwargs
-            )
+        # def _qt_open_with_dlc_preference(
+        #     _self, filenames, stack=False, choose_plugin=False, plugin=None, layer_type=None, **kwargs
+        # ):
+        #     # If user explicitly chose a plugin (Alt in drag/drop chooser), respect it.
+        #     if plugin is None and not choose_plugin and should_force_dlc_reader(filenames):
+        #         plugin = "napari-deeplabcut"
+        #     return _orig_qt_open(
+        #         filenames, stack=stack, choose_plugin=choose_plugin, plugin=plugin, layer_type=layer_type, **kwargs
+        #     )
 
-        qt_viewer._qt_open = MethodType(_qt_open_with_dlc_preference, qt_viewer)
+        # qt_viewer._qt_open = MethodType(_qt_open_with_dlc_preference, qt_viewer)
 
         status_bar = self.viewer.window._qt_window.statusBar()
         self.last_saved_label = QLabel("")
         self.last_saved_label.hide()
         status_bar.addPermanentWidget(self.last_saved_label)
-
-        # Hack napari's Welcome overlay to show more relevant instructions
-        overlay = self.viewer.window._qt_viewer._welcome_widget
-        welcome_widget = overlay.layout().itemAt(1).widget()
-        welcome_widget.deleteLater()
-        w = QtWelcomeWidget(None)
-        overlay._overlay = w
-        overlay.addWidget(w)
-        # overlay._overlay.sig_dropped.connect(overlay.sig_dropped)
 
         self._color_mode = keypoints.ColorMode.default()
         self._label_mode = keypoints.LabelMode.default()
@@ -1451,8 +1438,8 @@ class KeypointControls(QWidget):
             self._sync_points_layers_from_image_meta()
 
             logger.debug(
-                "Synced points layers with new image metadata: %s",
-                self._image_meta.model_dump_json(exclude_none=True),
+                "Synced points layers with new image metadata: %r",
+                self._image_meta,
             )
 
             # Delay layer sorting
@@ -1821,116 +1808,6 @@ def create_dropdown_menu(store, items, attr):
 
     menu.currentIndexChanged.connect(item_changed)
     return menu
-
-
-# WelcomeWidget modified from:
-# https://github.com/napari/napari/blob/a72d512972a274380645dae16b9aa93de38c3ba2/napari/_qt/widgets/qt_welcome.py#L28
-class QtWelcomeWidget(QWidget):
-    """Welcome widget to display initial information and shortcuts to user."""
-
-    sig_dropped = Signal("QEvent")
-
-    def __init__(self, parent):
-        super().__init__(parent)
-
-        # Create colored icon using theme
-        self._image = QLabel()
-        self._image.setObjectName("logo_silhouette")
-        self._image.setMinimumSize(300, 300)
-        self._label = QtWelcomeLabel(
-            """
-            Drop a folder from within a DeepLabCut's labeled-data directory,
-            and,  if labeling from scratch,
-            the corresponding project's config.yaml file.
-            """
-        )
-
-        # Widget setup
-        self.setAutoFillBackground(True)
-        self.setAcceptDrops(True)
-        self._image.setAlignment(Qt.AlignCenter)
-        self._label.setAlignment(Qt.AlignCenter)
-
-        # Layout
-        text_layout = QVBoxLayout()
-        text_layout.addWidget(self._label)
-
-        layout = QVBoxLayout()
-        layout.addStretch()
-        layout.setSpacing(30)
-        layout.addWidget(self._image)
-        layout.addLayout(text_layout)
-        layout.addStretch()
-
-        self.setLayout(layout)
-
-    def paintEvent(self, event):
-        """Override Qt method.
-
-        Parameters
-        ----------
-        event : qtpy.QtCore.QEvent
-            Event from the Qt context.
-        """
-        option = QStyleOption()
-        option.initFrom(self)
-        p = QPainter(self)
-        self.style().drawPrimitive(QStyle.PE_Widget, option, p, self)
-
-    def _update_property(self, prop, value):
-        """Update properties of widget to update style.
-
-        Parameters
-        ----------
-        prop : str
-            Property name to update.
-        value : bool
-            Property value to update.
-        """
-        self.setProperty(prop, value)
-        self.style().unpolish(self)
-        self.style().polish(self)
-
-    def dragEnterEvent(self, event):
-        """Override Qt method.
-
-        Provide style updates on event.
-
-        Parameters
-        ----------
-        event : qtpy.QtCore.QEvent
-            Event from the Qt context.
-        """
-        self._update_property("drag", True)
-        if event.mimeData().hasUrls():
-            event.accept()
-        else:
-            event.ignore()
-
-    def dragLeaveEvent(self, event):
-        """Override Qt method.
-
-        Provide style updates on event.
-
-        Parameters
-        ----------
-        event : qtpy.QtCore.QEvent
-            Event from the Qt context.
-        """
-        self._update_property("drag", False)
-
-    def dropEvent(self, event):
-        """Override Qt method.
-
-        Provide style updates on event and emit the drop event.
-
-        Parameters
-        ----------
-        event : qtpy.QtCore.QEvent
-            Event from the Qt context.
-        """
-        self._update_property("drag", False)
-        self.sig_dropped.emit(event)
 
 
 class ClickableLabel(QLabel):

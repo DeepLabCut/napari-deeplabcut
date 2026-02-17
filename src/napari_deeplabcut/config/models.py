@@ -84,6 +84,18 @@ class ImageMetadata(BaseModel):
     shape: tuple[int, ...] | None = None
     name: str | None = None
 
+    def __repr__(self) -> str:
+        # Only show non-None fields, truncate long lists
+        fields = []
+        for k in ("kind", "name", "root", "shape", "paths"):
+            v = getattr(self, k)
+            if v is not None:
+                if k == "paths":
+                    if isinstance(v, list):
+                        v = f"[{len(v)} paths]"
+                fields.append(f"{k}={v!r}")
+        return f"ImageMetadata({', '.join(fields)})"
+
 
 class PointsMetadata(BaseModel):
     """
