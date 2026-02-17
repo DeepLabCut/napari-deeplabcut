@@ -778,7 +778,8 @@ def test_folder_open_loads_all_h5_when_multiple_exist(make_napari_viewer, qtbot,
     # New assertion: each Points layer must carry authoritative source_h5
     # matching the file it originated from (stable across layer renames).
     # ------------------------------------------------------------------
-    expected_by_stem = {p.stem: str(p.expanduser().resolve()) for p in gt_paths}
+    all_expected = list(gt_paths) + ([machine_path] if machine_path is not None else [])
+    expected_by_stem = {p.stem: str(p.expanduser().resolve()) for p in all_expected}
 
     for ly in pts:
         assert "source_h5" in ly.metadata, f"Missing source_h5 in layer.metadata for {ly.name}"

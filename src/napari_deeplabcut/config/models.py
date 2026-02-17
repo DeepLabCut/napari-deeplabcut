@@ -114,6 +114,7 @@ class PointsMetadata(BaseModel):
     project: str | None = None
     header: DLCHeaderModel | None = None
     io: IOProvenance | None = None
+    save_target: IOProvenance | None = None
 
     face_color_cycles: dict[str, dict[str, Any]] | None = None
     colormap_name: str | None = None
