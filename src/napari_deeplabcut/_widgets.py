@@ -58,9 +58,14 @@ from napari_deeplabcut._reader import (
     is_video,
 )
 from napari_deeplabcut._writer import _form_df, _write_config, _write_image
+from napari_deeplabcut.config.models import ImageMetadata, PointsMetadata
+from napari_deeplabcut.core.metadata import infer_image_root, sync_points_from_image
+from napari_deeplabcut.core.paths import (
+    canonicalize_path,
+    should_force_dlc_reader,
+)
 from napari_deeplabcut.misc import (
     build_color_cycles,
-    canonicalize_path,
     encode_categories,
     guarantee_multiindex_rows,
     remap_array,
@@ -197,7 +202,7 @@ def _get_and_try_preferred_reader(self, dialog, *args):
     """
     path = dialog._current_file
 
-    if _should_force_dlc_reader(path):
+    if should_force_dlc_reader(path):
         try:
             self.viewer.open(path, plugin="napari-deeplabcut")
             return
@@ -207,62 +212,6 @@ def _get_and_try_preferred_reader(self, dialog, *args):
 
     # Non-DLC (or DLC reader failed): use builtins
     self.viewer.open(path, plugin="builtins")
-
-
-# ----------------------------
-# DLC path heuristics (shared)
-# ----------------------------
-
-
-def _is_config_yaml(path: str | Path) -> bool:
-    try:
-        p = Path(path)
-    except TypeError:
-        return False
-    return p.is_file() and p.name.lower() == "config.yaml"
-
-
-def _has_dlc_datafiles(folder: str | Path) -> bool:
-    """True if folder contains DLC label artifacts (CollectedData* or machinelabels*)."""
-    p = Path(folder)
-    if not p.exists() or not p.is_dir():
-        return False
-    for pat in ("CollectedData*.h5", "CollectedData*.csv", "machinelabels*.h5", "machinelabels*.csv"):
-        if any(p.glob(pat)):
-            return True
-    return False
-
-
-def _looks_like_dlc_labeled_folder(folder: str | Path) -> bool:
-    """
-    True if folder appears to be a DLC labeled-data subfolder or contains DLC label files.
-    Examples:
-      project/labeled-data/video1/
-      project/labeled-data/video1/CollectedData_*.h5
-    """
-    p = Path(folder)
-    if not p.exists() or not p.is_dir():
-        return False
-    # Strong signal: existing DLC artifacts
-    if _has_dlc_datafiles(p):
-        return True
-    # Weaker signal: it sits under a labeled-data directory
-    return any(part.lower() == "labeled-data" for part in p.parts)
-
-
-def _should_force_dlc_reader(paths: list[str] | tuple[str, ...] | str) -> bool:
-    """Decide whether we should force the napari-deeplabcut reader."""
-    if isinstance(paths, (str, Path)):
-        paths = [str(paths)]
-    if not paths:
-        return False
-    # If *any* path is a config.yaml -> DLC reader
-    if any(_is_config_yaml(p) for p in paths):
-        return True
-    # If *any* path is a folder that looks like DLC labeled-data -> DLC reader
-    if any(_looks_like_dlc_labeled_folder(p) for p in paths):
-        return True
-    return False
 
 
 # Hack to avoid napari's silly variable type guess,
@@ -629,6 +578,9 @@ class KeypointControls(QWidget):
             _get_and_try_preferred_reader,
             self.viewer.window.qt_viewer,
         )
+        # Project data
+        self._project_path: str | None = None
+
         # ----------------------------------------
         # Force DLC reader for DLC-looking drag/drop
         # ----------------------------------------
@@ -639,7 +591,7 @@ class KeypointControls(QWidget):
             _self, filenames, stack=False, choose_plugin=False, plugin=None, layer_type=None, **kwargs
         ):
             # If user explicitly chose a plugin (Alt in drag/drop chooser), respect it.
-            if plugin is None and not choose_plugin and _should_force_dlc_reader(filenames):
+            if plugin is None and not choose_plugin and should_force_dlc_reader(filenames):
                 plugin = "napari-deeplabcut"
             return _orig_qt_open(
                 filenames, stack=stack, choose_plugin=choose_plugin, plugin=plugin, layer_type=layer_type, **kwargs
@@ -676,7 +628,7 @@ class KeypointControls(QWidget):
         # Storage for extra image metadata that are relevant to other layers.
         # These are updated anytime images are added to the Viewer
         # and passed on to the other layers upon creation.
-        self._images_meta = dict()
+        self._image_meta = ImageMetadata()
 
         # Add some more controls
         self._layout = QVBoxLayout(self)
@@ -833,23 +785,12 @@ class KeypointControls(QWidget):
         if paths is None and is_video(layer.name):
             self.video_widget.setVisible(True)
 
-        root = self._infer_image_root(layer)
-        shape = None
-        try:
-            shape = layer.level_shapes[0]
-        except Exception:
-            pass
+        # Update authoritative image meta
+        self._update_image_meta_from_layer(layer)
 
-        # Only update keys with non-empty values (never clobber with None)
-        if paths:
-            self._images_meta["paths"] = paths
-        if shape is not None:
-            self._images_meta["shape"] = shape
-        if root:
-            self._images_meta["root"] = root
-        self._images_meta["name"] = layer.name
+        # Sync points layers from image meta
+        self._sync_points_layers_from_image_meta()
 
-        # If the image layer isn't at bottom, keep your intended layer ordering
         QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, index))
 
     def _handle_existing_points_layer(self, layer: Points) -> None:
@@ -896,7 +837,7 @@ class KeypointControls(QWidget):
         # Update images meta "project" only if truthy
         proj = layer.metadata.get("project")
         if proj:
-            self._images_meta["project"] = proj
+            self._image_meta.project = proj
 
         # Enable GUI groups that are normally enabled on insert
         self._radio_box.setEnabled(True)
@@ -936,63 +877,6 @@ class KeypointControls(QWidget):
         except Exception:
             # Never fail adoption due to UI private API differences
             pass
-
-    def _sync_points_layers_from_images_meta(self) -> None:
-        """
-        Ensure all existing Points layers have the core DLC metadata keys needed for saving:
-        - root
-        - paths
-        - shape
-        - name
-
-        IMPORTANT: update metadata in place (do NOT reassign ly.metadata), so we don't
-        accidentally drop non-serializable objects like 'controls'.
-        """
-        root = self._images_meta.get("root")
-        paths = self._images_meta.get("paths")
-        shape = self._images_meta.get("shape")
-        name = self._images_meta.get("name")
-
-        def _has_value(v) -> bool:
-            """Truth-safe non-empty check that won't crash on numpy arrays."""
-            if v is None:
-                return False
-            if isinstance(v, str):
-                return v != ""
-            # lists/tuples/np arrays/pandas Index etc.
-            try:
-                return len(v) > 0
-            except Exception:
-                # scalars, objects without len -> treat as present
-                return True
-
-        if not (_has_value(root) or _has_value(paths) or _has_value(shape) or _has_value(name)):
-            return
-
-        for ly in list(self.viewer.layers):
-            if not isinstance(ly, Points):
-                continue
-
-            if ly.metadata is None:
-                ly.metadata = {}
-            md = ly.metadata  # update in place
-
-            updates = {}
-
-            if _has_value(root) and not _has_value(md.get("root")):
-                updates["root"] = root
-
-            if _has_value(paths) and not _has_value(md.get("paths")):
-                updates["paths"] = paths
-
-            if _has_value(shape) and not _has_value(md.get("shape")):
-                updates["shape"] = shape
-
-            if _has_value(name) and not _has_value(md.get("name")):
-                updates["name"] = name
-
-            if updates:
-                md.update(updates)
 
     def _ensure_mpl_canvas_docked(self) -> None:
         """
@@ -1120,6 +1004,89 @@ class KeypointControls(QWidget):
             self.viewer.layers.move_selected(ind, 0)
             self.viewer.layers.select_next()  # Auto-select the Points layer
 
+    # ------------------------------------------------------------------
+    # Metadata helpers (authoritative models + napari-friendly dict sync)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _layer_source_path(layer) -> str | None:
+        """Best-effort access to napari layer source path (may not exist)."""
+        try:
+            src = getattr(layer, "source", None)
+            p = getattr(src, "path", None) if src is not None else None
+            return str(p) if p else None
+        except Exception:
+            return None
+
+    def _update_image_meta_from_layer(self, layer: Image) -> None:
+        """
+        Update authoritative self._images_meta using an Image layer.
+        Also keep a dict-like subset synced for other layers (non-breaking).
+        """
+        md = layer.metadata or {}
+
+        paths = md.get("paths")
+        shape = None
+        try:
+            shape = layer.level_shapes[0]
+        except Exception:
+            shape = None
+
+        root = infer_image_root(
+            explicit_root=md.get("root"),
+            paths=paths,
+            source_path=self._layer_source_path(layer),
+        )
+
+        incoming = ImageMetadata(
+            paths=list(paths) if paths else None,
+            root=str(root) if root else None,
+            shape=tuple(shape) if shape is not None else None,
+            name=getattr(layer, "name", None),
+        )
+
+        # Merge without clobbering already-known values
+        # (same behavior as old "only set if non-empty")
+        base = self._image_meta
+        merged = base.model_copy(deep=True)
+        for field, value in incoming.model_dump().items():
+            if getattr(merged, field) in (None, "", []) and value not in (None, "", []):
+                setattr(merged, field, value)
+
+        self._image_meta = merged
+
+    def _sync_points_layers_from_image_meta(self) -> None:
+        """
+        Ensure all Points layers have core fields required for saving.
+        Updates layer.metadata IN PLACE to avoid dropping runtime attachments.
+        """
+        if self._image_meta is None:
+            return
+
+        for ly in list(self.viewer.layers):
+            if not isinstance(ly, Points):
+                continue
+
+            if ly.metadata is None:
+                ly.metadata = {}
+            md = ly.metadata  # mutate in place
+
+            # Validate points metadata *authoritatively* (but do not overwrite controls)
+            try:
+                pts_model = PointsMetadata(**md)
+            except Exception:
+                # If legacy metadata is malformed, don't crash; only fill missing keys
+                pts_model = PointsMetadata()
+
+            synced = sync_points_from_image(self._image_meta, pts_model)
+
+            # Only fill missing values; never clobber existing non-empty values
+            for key, value in synced.model_dump(exclude_none=True).items():
+                if key == "controls":
+                    continue
+                if md.get(key) in (None, "", []):
+                    md[key] = value
+
     def _show_color_scheme(self):
         show = self._view_scheme_cb.isChecked()
         self._color_scheme_display.setVisible(show)
@@ -1233,7 +1200,7 @@ class KeypointControls(QWidget):
                 df.to_hdf(filepath, key="df_with_missing")
 
     def _store_crop_coordinates(self, *args):
-        if not (project_path := self._images_meta.get("project")):
+        if not (project_path := self._project_path):
             return
         for layer in self.viewer.layers:
             if isinstance(layer, Shapes):
@@ -1250,7 +1217,10 @@ class KeypointControls(QWidget):
                 temp = {"crop": ", ".join(map(str, [x1, x2, y1, y2]))}
                 config_path = os.path.join(project_path, "config.yaml")
                 cfg = _load_config(config_path)
-                cfg["video_sets"][os.path.join(project_path, "videos", self._images_meta["name"])] = temp
+                video_name = self._image_meta.name
+                if not video_name:
+                    return
+                cfg["video_sets"][os.path.join(project_path, "videos", video_name)] = temp
                 _write_config(config_path, cfg)
                 break
 
@@ -1340,7 +1310,7 @@ class KeypointControls(QWidget):
         """
         try:
             # Need new image paths to define the reference order
-            new_paths_raw = self._images_meta.get("paths")
+            new_paths_raw = self._image_meta.paths
             if not new_paths_raw:
                 return
 
@@ -1349,7 +1319,7 @@ class KeypointControls(QWidget):
             old_paths_raw = md.get("paths") or []
             # Always sync basic metadata (even if we can't remap)
             try:
-                safe_meta = {k: v for k, v in self._images_meta.items() if v is not None and v != ""}
+                safe_meta = self._image_meta.model_dump(exclude_none=True)
                 layer.metadata.update(safe_meta)
             except Exception:
                 pass
@@ -1466,34 +1436,6 @@ class KeypointControls(QWidget):
             # Intentionally do not raise, simply warn and skip remapping
             return
 
-    def _infer_image_root(self, layer: Image) -> str | None:
-        """
-        Best-effort inference of an Image layer's 'root' folder.
-        Works for layers created by napari-deeplabcut *or* napari builtins.
-        """
-        # 1) DLC reader already sets metadata["root"]
-        root = (layer.metadata or {}).get("root")
-        if root:
-            return str(root)
-
-        # 2) If metadata has "paths", use parent folder of first path
-        paths = (layer.metadata or {}).get("paths")
-        if paths:
-            try:
-                return str(Path(paths[0]).expanduser().resolve().parent)
-            except Exception:
-                pass
-
-        # 3) Use layer.source.path if present (napari keeps a source path sometimes)
-        try:
-            src = getattr(layer, "source", None)
-            if src is not None and getattr(src, "path", None):
-                return str(Path(src.path).expanduser().resolve().parent)
-        except Exception:
-            pass
-
-        return None
-
     def on_insert(self, event):
         layer = event.source[-1]
         logging.debug(f"Inserting Layer {layer}")
@@ -1502,30 +1444,17 @@ class KeypointControls(QWidget):
             if paths is None and is_video(layer.name):
                 self.video_widget.setVisible(True)
 
-            # Store the metadata and pass them on to the other layers
-            paths = (layer.metadata or {}).get("paths")
-            root = self._infer_image_root(layer)
-            shape = None
-            try:
-                shape = layer.level_shapes[0]
-            except Exception:
-                shape = None
+            # Update authoritative image meta
+            self._update_image_meta_from_layer(layer)
 
-            # Only update keys when we have real values (never clobber with None)
-            if paths:
-                self._images_meta["paths"] = paths
-            if shape is not None:
-                self._images_meta["shape"] = shape
-            if root:
-                self._images_meta["root"] = root
-            self._sync_points_layers_from_images_meta()
-            logging.debug(
+            # Sync points layers metadata from image meta (non-breaking)
+            self._sync_points_layers_from_image_meta()
+
+            logger.debug(
                 "Synced points layers with new image metadata: %s",
-                {k: v for k, v in self._images_meta.items() if v is not None and not (isinstance(v, str) and v == "")},
+                self._image_meta.model_dump_json(exclude_none=True),
             )
 
-            # Always keep a human-readable name
-            self._images_meta["name"] = layer.name
             # Delay layer sorting
             QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, event.index))
         elif isinstance(layer, Points):
@@ -1572,10 +1501,10 @@ class KeypointControls(QWidget):
 
             store = keypoints.KeypointStore(self.viewer, layer)
             self._stores[layer] = store
-            if not layer.metadata.get("root") and self._images_meta.get("root"):
-                layer.metadata["root"] = self._images_meta["root"]
-            if not layer.metadata.get("paths") and self._images_meta.get("paths"):
-                layer.metadata["paths"] = self._images_meta["paths"]
+            if not layer.metadata.get("root") and self._image_meta.root:
+                layer.metadata["root"] = self._image_meta.root
+            if not layer.metadata.get("paths") and self._image_meta.paths:
+                layer.metadata["paths"] = self._image_meta.paths
             # TODO Set default dir of the save file dialog
             if root := layer.metadata.get("root"):
                 update_save_history(root)
@@ -1598,7 +1527,7 @@ class KeypointControls(QWidget):
 
             proj = layer.metadata.get("project")
             if proj:
-                self._images_meta["project"] = proj
+                self._project_path = proj
             self._radio_box.setEnabled(True)
             self._color_grp.setEnabled(True)
             self._trail_cb.setEnabled(True)
@@ -1660,7 +1589,7 @@ class KeypointControls(QWidget):
             self._show_traj_plot_cb.setEnabled(False)
             self.last_saved_label.hide()
         elif isinstance(layer, Image):
-            self._images_meta = dict()
+            self._image_meta = ImageMetadata()
             paths = layer.metadata.get("paths")
             if paths is None:
                 self.video_widget.setVisible(False)

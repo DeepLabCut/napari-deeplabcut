@@ -49,7 +49,7 @@ def test_store_crop_coordinates(viewer, images, config_path):
     viewer.layers.selection.add(images)
     _ = viewer.add_shapes(np.random.random((4, 3)), shape_type="rectangle")
     controls = _widgets.KeypointControls(viewer)
-    controls._images_meta = {
+    controls._image_meta = {
         "name": "fake_video",
         "project": os.path.dirname(config_path),
     }
