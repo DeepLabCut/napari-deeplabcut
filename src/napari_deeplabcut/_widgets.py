@@ -55,7 +55,7 @@ from napari_deeplabcut._reader import (
     is_video,
 )
 from napari_deeplabcut._writer import _form_df, _write_config, _write_image
-from napari_deeplabcut.config.models import ImageMetadata, PointsMetadata
+from napari_deeplabcut.config.models import ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.metadata import infer_image_root, sync_points_from_image
 from napari_deeplabcut.core.paths import (
     PathMatchPolicy,
@@ -764,6 +764,8 @@ class KeypointControls(QWidget):
         layer.metadata["controls"] = self
         layer.text.visible = False
 
+        self._ensure_io_from_source_h5(layer.metadata)
+
         # Bind keys and patch behaviors like on_insert()
         layer.bind_key("M", self.cycle_through_label_modes)
         layer.bind_key("F", self.cycle_through_color_modes)
@@ -775,6 +777,7 @@ class KeypointControls(QWidget):
         layer.events.add(query_next_frame=Event)
         layer.events.query_next_frame.connect(store._advance_step)
 
+        # FIXME @C-Achard duplicated code for now
         layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
         layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
         layer.bind_key("Down", store.next_keypoint, overwrite=True)
@@ -958,6 +961,47 @@ class KeypointControls(QWidget):
     # ------------------------------------------------------------------
     # Metadata helpers (authoritative models + napari-friendly dict sync)
     # ------------------------------------------------------------------
+    @staticmethod
+    def _ensure_io_from_source_h5(md: dict) -> None:
+        """
+        Migration helper: if io is missing but source_h5 exists, build io.
+        This keeps provenance stable even for legacy sessions/layers.
+        """
+        if not isinstance(md, dict):
+            return
+
+        # If io already present, never overwrite it
+        if md.get("io"):
+            return
+
+        src = md.get("source_h5")
+        if not isinstance(src, str) or not src:
+            return
+
+        try:
+            p = Path(src).expanduser().resolve()
+        except Exception:
+            p = Path(src)
+
+        # Anchor defaults to file parent (works for shared labeled-data folders)
+        anchor = str(p.parent)
+
+        # Infer kind from filename (NOT from layer name)
+        low = p.name.lower()
+        kind = None
+        if low.startswith("collecteddata"):
+            kind = "gt"
+        elif low.startswith("machinelabels"):
+            kind = "machine"
+
+        relposix = canonicalize_path(p, n=1)
+        io = IOProvenance(
+            project_root=anchor,
+            source_relpath_posix=relposix,
+            kind=kind,
+            dataset_key="keypoints",
+        )
+        md["io"] = io.model_dump(exclude_none=True)
 
     @staticmethod
     def _layer_source_path(layer) -> str | None:
@@ -1021,6 +1065,7 @@ class KeypointControls(QWidget):
             if ly.metadata is None:
                 ly.metadata = {}
             md = ly.metadata  # mutate in place
+            self._ensure_io_from_source_h5(md)
 
             # Validate points metadata *authoritatively* (but do not overwrite controls)
             try:
@@ -1369,6 +1414,8 @@ class KeypointControls(QWidget):
 
             if layer.metadata.get("tables", ""):
                 self._keypoint_mapping_button.show()
+
+            self._ensure_io_from_source_h5(layer.metadata)
 
             store = keypoints.KeypointStore(self.viewer, layer)
             self._stores[layer] = store

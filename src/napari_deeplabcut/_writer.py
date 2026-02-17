@@ -102,18 +102,9 @@ def write_hdf(filename, data, metadata):
         layer_meta = {}
 
     layer_name = metadata.get("name", "")
-    # ------------------------------------------------------------
-    # NEW: resolve output path using provenance (PointsMetadata.io)
-    # ------------------------------------------------------------
-    out_path = _resolve_output_path_from_metadata(metadata)
+
     # root may be nested or top-level depending on napari/version/reader path
     root = layer_meta.get("root") or metadata.get("root")
-
-    # If provenance is unavailable, fall back to legacy root/name routing for now.
-    # (Later we will enforce deterministic abort on ambiguity.)
-    if not out_path:
-        out_name = layer_name
-        out_path = os.path.join(root, out_name + ".h5")
 
     # paths may be nested or top-level too
     paths = layer_meta.get("paths") or metadata.get("paths")
@@ -131,9 +122,36 @@ def write_hdf(filename, data, metadata):
             "Expected either metadata['metadata']['root'] or metadata['root'] or inferable from paths."
         )
 
-    # Determine output path early (may be updated below in "machine" branch)
-    out_name = layer_name
-    out_path = os.path.join(root, out_name + ".h5")
+    # ------------------------------------------------------------
+    # Resolve output path using provenance (PointsMetadata.io) or source_h5.
+    # ------------------------------------------------------------
+    out_path = _resolve_output_path_from_metadata(metadata)
+
+    # ------------------------------------------------------------
+    # Policy: if provenance missing, auto-select exactly one GT candidate.
+    # Deterministic and safe: only when there is exactly one CollectedData*.h5.
+    # ------------------------------------------------------------
+    if not out_path:
+        candidates = sorted(Path(root).glob("CollectedData*.h5"))
+        if len(candidates) == 1:
+            out_path = str(candidates[0])
+
+    # Final fallback (legacy): name-based within root (temporary migration support)
+    if not out_path:
+        out_path = os.path.join(root, layer_name + ".h5")
+
+    # Determine kind from PointsMetadata.io if present (do NOT infer from layer name).
+    pts = parse_points_metadata(layer_meta)
+    kind = getattr(getattr(pts, "io", None), "kind", None)
+
+    # Migration fallback: if kind missing but we have a source filename, infer from filename.
+    if not kind:
+        src_name = layer_meta.get("source_h5_name") or ""
+        low = str(src_name).lower()
+        if low.startswith("machinelabels"):
+            kind = "machine"
+        elif low.startswith("collecteddata"):
+            kind = "gt"
 
     # Determine kind from PointsMetadata.io if present (do NOT infer from layer name).
     pts = parse_points_metadata(layer_meta)

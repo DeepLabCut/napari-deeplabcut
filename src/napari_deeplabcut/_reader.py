@@ -17,7 +17,7 @@ from napari.types import LayerData
 from natsort import natsorted
 
 from napari_deeplabcut import misc
-from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.config.models import AnnotationKind, IOProvenance
 from napari_deeplabcut.core.io import discover_annotations
 from napari_deeplabcut.core.paths import canonicalize_path, looks_like_dlc_labeled_folder
 
@@ -270,12 +270,55 @@ def _lazy_imread(
 
 
 def _infer_annotation_kind_from_filename(p: Path) -> str | None:
+    # FUTURE NOTE @C-Achard 17/02/26: Do not hardcode these patterns
+    # and clearly expose these if data file formats change or expand.
     name = p.name.lower()
     if name.startswith("collecteddata"):
         return AnnotationKind.GT.value
     if name.startswith("machinelabels"):
         return AnnotationKind.MACHINE.value
     return None
+
+
+def _attach_source_and_io(metadata: dict, file_path: Path) -> None:
+    """
+    Attach authoritative source info + minimal IOProvenance to the layer metadata dict.
+
+    - Keeps legacy source_h5 fields for migration.
+    - Stores IOProvenance as a plain dict under metadata['metadata']['io'].
+    - Uses core.paths.canonicalize_path for OS-agnostic relpaths.
+    """
+    meta = metadata.setdefault("metadata", {})
+
+    # --- legacy migration fields (still useful for debugging/backfill) ---
+    try:
+        src_abs = str(file_path.expanduser().resolve())
+    except Exception:
+        src_abs = str(file_path)
+
+    meta["source_h5"] = src_abs
+    meta["source_h5_name"] = file_path.name
+    meta["source_h5_stem"] = file_path.stem
+
+    # Root anchor: default to file parent (works when only labeled-data folder is shared)
+    try:
+        anchor = str(file_path.expanduser().resolve().parent)
+    except Exception:
+        anchor = str(file_path.parent)
+
+    kind = _infer_annotation_kind_from_filename(file_path)
+
+    # Relative path stored OS-agnostic (POSIX). With anchor=file parent, this is filename.
+    relposix = canonicalize_path(file_path, n=1)
+
+    io = IOProvenance(
+        project_root=anchor,
+        source_relpath_posix=relposix,
+        kind=kind,
+        dataset_key="keypoints",
+    )
+    # Store as plain dict so it round-trips safely in napari metadata
+    meta["io"] = io.model_dump(exclude_none=True)
 
 
 # Read images from a list of files or a glob/string path
@@ -315,7 +358,7 @@ def read_images(path: str | Path | list[str | Path]):
 
     # Multiple images → lazy-imread stack
     if len(filepaths) > 1:
-        relative_paths = [misc.canonicalize_path(fp, 3) for fp in filepaths]
+        relative_paths = [canonicalize_path(fp, 3) for fp in filepaths]
         params = {
             "name": "images",
             "metadata": {
@@ -331,7 +374,7 @@ def read_images(path: str | Path | list[str | Path]):
     params = {
         "name": "images",
         "metadata": {
-            "paths": [misc.canonicalize_path(image_path, 3)],
+            "paths": [canonicalize_path(image_path, 3)],
             "root": str(image_path.parent),
         },
     }
@@ -490,22 +533,6 @@ def read_hdf(filename: str) -> list[LayerData]:
         # Store file name in case the layer's name is edited by the user (legacy behavior)
         metadata["metadata"]["name"] = metadata["name"]
 
-        # -----------------------------------------------------------------
-        # Authoritative source filename for safe routing/debug
-        # This is NOT the final IOProvenance model.
-        # -----------------------------------------------------------------
-        try:
-            metadata["metadata"]["source_h5"] = str(Path(file).expanduser().resolve())
-        except Exception:
-            metadata["metadata"]["source_h5"] = str(file)
-
-        metadata["metadata"]["source_h5_name"] = Path(file).name
-        metadata["metadata"]["source_h5_stem"] = Path(file).stem
-        # -----------------------------------------------------------------
-        # Minimal migration to PointsMetadata.io (stored as plain dict)
-        # Root anchor is configurable; for shared labeled-data folders, the
-        # safest default anchor is the annotation file's parent directory.
-        # -----------------------------------------------------------------
         try:
             anchor = str(Path(file).expanduser().resolve().parent)
         except Exception:
@@ -524,6 +551,7 @@ def read_hdf(filename: str) -> list[LayerData]:
             "kind": kind,  # "gt" | "machine" | None
             "dataset_key": "keypoints",
         }
+        _attach_source_and_io(metadata, file)
         layers.append((data, metadata, "points"))
     return layers
 
