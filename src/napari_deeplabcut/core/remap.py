@@ -51,18 +51,15 @@ class RemapResult:
 
 def _remap_array(values: np.ndarray, idx_map: Mapping[int, int]) -> np.ndarray:
     """
-    Remap time indices in a data container.
+    Remap time indices in an array of indices.
 
     Parameters
     ----------
-    data:
-        Either:
-        - array-like (N, D) numeric
-        - list-like of vertex arrays (Shapes-like), each with (M, D)
-    time_col:
-        Which column contains time/frame indices.
+    values:
+        Array-like of integer time/frame indices to remap.
     idx_map:
         Mapping from old integer frame index -> new integer frame index.
+        Indices not present in the mapping are left unchanged.
     """
     values = np.asarray(values)
     if values.size == 0:

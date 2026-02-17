@@ -559,22 +559,6 @@ class KeypointControls(QWidget):
         # Project data
         self._project_path: str | None = None
 
-        # ----------------------------------------
-        # Force DLC reader for DLC-looking drag/drop
-        # ----------------------------------------
-        # _orig_qt_open = qt_viewer._qt_open
-
-        # def _qt_open_with_dlc_preference(
-        #     _self, filenames, stack=False, choose_plugin=False, plugin=None, layer_type=None, **kwargs
-        # ):
-        #     # If user explicitly chose a plugin (Alt in drag/drop chooser), respect it.
-        #     if plugin is None and not choose_plugin and should_force_dlc_reader(filenames):
-        #         plugin = "napari-deeplabcut"
-        #     return _orig_qt_open(
-        #         filenames, stack=stack, choose_plugin=choose_plugin, plugin=plugin, layer_type=layer_type, **kwargs
-        #     )
-
-        # qt_viewer._qt_open = MethodType(_qt_open_with_dlc_preference, qt_viewer)
 
         status_bar = self.viewer.window._qt_window.statusBar()
         self.last_saved_label = QLabel("")
