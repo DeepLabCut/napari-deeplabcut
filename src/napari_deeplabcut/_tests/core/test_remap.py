@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 
 from napari_deeplabcut.core.paths import PathMatchPolicy
@@ -237,3 +239,65 @@ def test_remap_time_indices_gracefully_handles_empty_and_none():
     res_empty = remap_time_indices(data=np.array([]), time_col=0, idx_map={0: 1})
     assert res_empty.changed is False
     assert res_empty.data is None
+
+
+def test_remap_warns_on_duplicate_canonical_keys(caplog):
+    caplog.set_level(logging.WARNING, logger="napari_deeplabcut.core.remap")
+
+    # Depth=2 canonical keys will be:
+    # old_keys = ["dup/img0.png", "dup/img0.png", "dup/img1.png"]
+    # new_keys = ["dup/img1.png", "dup/img0.png", "dup/img0.png"]
+    # -> not equal => remap path is taken
+    old_paths = [
+        "A/dup/img0.png",
+        "B/dup/img0.png",
+        "C/dup/img1.png",
+    ]
+    new_paths = [
+        "X/dup/img1.png",
+        "Y/dup/img0.png",
+        "Z/dup/img0.png",
+    ]
+
+    data = np.array(
+        [
+            [0.0, 1.0, 2.0],
+            [1.0, 3.0, 4.0],
+            [2.0, 5.0, 6.0],
+        ],
+        dtype=float,
+    )
+
+    res = remap_layer_data_by_paths(
+        data=data,
+        old_paths=old_paths,
+        new_paths=new_paths,
+        time_col=0,
+        policy=PathMatchPolicy.ORDERED_DEPTHS,
+    )
+
+    assert "Remap may be ambiguous/risky" in caplog.text
+    assert "Duplicate canonical keys" in caplog.text
+    assert any("Duplicate canonical keys" in w for w in res.warnings)
+
+
+def test_remap_warns_on_low_overlap_ratio(caplog):
+    caplog.set_level(logging.WARNING)
+
+    old_paths = ["x/y/img0.png", "x/y/img1.png", "x/y/img2.png", "x/y/img3.png"]
+    # same length, only one overlapping key
+    new_paths = ["x/y/img0.png", "x/y/img9.png", "x/y/img8.png", "x/y/img7.png"]
+
+    data = np.array([[0.0, 1.0, 2.0]], dtype=float)
+
+    res = remap_layer_data_by_paths(
+        data=data,
+        old_paths=old_paths,
+        new_paths=new_paths,
+        time_col=0,
+        policy=PathMatchPolicy.ORDERED_DEPTHS,
+    )
+
+    assert "Low path overlap ratio" in caplog.text
+    assert "Low mapping coverage" in caplog.text
+    assert any("Low path overlap ratio" in w for w in res.warnings)
