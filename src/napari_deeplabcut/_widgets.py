@@ -58,14 +58,14 @@ from napari_deeplabcut._writer import _form_df, _write_config, _write_image
 from napari_deeplabcut.config.models import ImageMetadata, PointsMetadata
 from napari_deeplabcut.core.metadata import infer_image_root, sync_points_from_image
 from napari_deeplabcut.core.paths import (
+    PathMatchPolicy,
     canonicalize_path,
-    should_force_dlc_reader,
 )
+from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.misc import (
     build_color_cycles,
     encode_categories,
     guarantee_multiindex_rows,
-    remap_array,
 )
 
 Tip = namedtuple("Tip", ["msg", "pos"])
@@ -190,25 +190,6 @@ class Tutorial(QDialog):
     def update_nav_buttons(self):
         self.prev_button.setEnabled(self._current_tip > 0)
         self.next_button.setEnabled(self._current_tip < len(self._tips) - 1)
-
-
-def _get_and_try_preferred_reader(self, dialog, *args):
-    """
-    Prefer DLC reader for DLC-looking paths (config.yaml or labeled-data folders),
-    otherwise fall back to builtins.
-    """
-    path = dialog._current_file
-
-    if should_force_dlc_reader(path):
-        try:
-            self.viewer.open(path, plugin="napari-deeplabcut")
-            return
-        except Exception:
-            # fall through to builtins
-            pass
-
-    # Non-DLC (or DLC reader failed): use builtins
-    self.viewer.open(path, plugin="builtins")
 
 
 # Hack to avoid napari's silly variable type guess,
@@ -824,7 +805,7 @@ class KeypointControls(QWidget):
         # Update images meta "project" only if truthy
         proj = layer.metadata.get("project")
         if proj:
-            self._image_meta.project = proj
+            self._project_path = proj
 
         # Enable GUI groups that are normally enabled on insert
         self._radio_box.setEnabled(True)
@@ -1296,131 +1277,51 @@ class KeypointControls(QWidget):
         - Always sync layer.metadata with self._images_meta when possible.
         """
         try:
-            # Need new image paths to define the reference order
-            new_paths_raw = self._image_meta.paths
-            if not new_paths_raw:
+            new_paths = self._image_meta.paths
+            if not new_paths:
                 return
 
-            # Determine layer's stored paths
             md = layer.metadata or {}
-            old_paths_raw = md.get("paths") or []
-            # Always sync basic metadata (even if we can't remap)
+            old_paths = md.get("paths") or []
+
+            # Always sync basic metadata from image meta (in place)
             try:
-                safe_meta = self._image_meta.model_dump(exclude_none=True)
-                layer.metadata.update(safe_meta)
+                layer.metadata.update(self._image_meta.model_dump(exclude_none=True))
             except Exception:
                 pass
 
-            if not old_paths_raw:
+            if not old_paths:
                 return
 
-            # Try different canonicalization depths to find overlap
-            depth_used = None
-            for depth in (3, 2, 1):
-                new_keys = [canonicalize_path(p, depth) for p in new_paths_raw]
-                old_keys = [canonicalize_path(p, depth) for p in old_paths_raw]
-                overlap = set(new_keys) & set(old_keys)
-                if overlap:
-                    depth_used = depth
-                    break
-
-            if depth_used is None:
-                logging.warning(
-                    "Cannot remap %s: no path overlap found for all attempted matchings",
-                    getattr(layer, "name", str(layer)),
-                )
-                # logging.debug("Old keys (sample): %s... | New keys (sample): %s...", old_keys[:5], new_keys[:5])
-                # logging.debug("Old basename sample: %s", [Path(p).name for p in old_paths_raw[:5]])
-                # logging.debug("New basename sample: %s", [Path(p).name for p in new_paths_raw[:5]])
-                return
-
-            if old_keys == new_keys:
-                return
-
-            # Build map: canonical key -> new frame index
-            key_to_new_idx = {k: i for i, k in enumerate(new_keys)}
-
-            # Determine which column is time/frame
+            # Determine time column (napari-specific choice)
             time_col = 1 if isinstance(layer, Tracks) else 0
 
-            data = layer.data
-            if data is None:
-                return
+            res = remap_layer_data_by_paths(
+                data=layer.data,
+                old_paths=old_paths,
+                new_paths=new_paths,
+                time_col=time_col,
+                policy=PathMatchPolicy.ORDERED_DEPTHS,
+            )
 
-            # Napari layers differ: Points/Tracks are ndarray-like; Shapes is list-like
-            is_list_like = isinstance(data, list)
+            if res.changed and res.data is not None:
+                layer.data = res.data
 
-            # Build an "old index -> new index" dict when we can map safely
-            # We only map old indices that correspond to an old canonical key present in new_keys.
-            idx_map = {}
-            for old_idx, k in enumerate(old_keys):
-                new_idx = key_to_new_idx.get(k)
-                if new_idx is not None:
-                    idx_map[old_idx] = new_idx
-
-            if not idx_map:
-                # No overlap at all; safest is to do nothing.
-                logging.warning(
-                    f"Cannot remap {getattr(layer, 'name', str(layer))}:"
-                    " no overlap between layer paths and current image paths.",
-                )
-                # logging.debug(f"Old keys (sample): {old_keys[:5]}... | New keys (sample): {new_keys[:5]}...")
-                return
-
-            if is_list_like:
-                # Shapes-like: list of vertices arrays
-                new_data = []
-                for verts in data:
-                    arr = np.asarray(verts)
-                    if arr.size == 0:
-                        new_data.append(arr)
-                        continue
-
-                    arr2 = arr.copy()
-                    t = arr2[:, time_col]
-
-                    # If t isn't integer-like, attempt safe conversion
-                    try:
-                        t_int = np.asarray(t).astype(int, copy=False)
-                    except Exception:
-                        # Can't interpret time column; keep shape as-is
-                        new_data.append(arr2)
-                        continue
-
-                    arr2[:, time_col] = remap_array(t_int, idx_map)
-                    new_data.append(arr2)
-
-                layer.data = new_data
-
+            # Optional debug logging
+            if res.depth_used is None:
+                logger.debug("Remap skipped for %s: %s", getattr(layer, "name", str(layer)), res.message)
             else:
-                arr = np.asarray(data)
-                if arr.size == 0:
-                    return
-                if arr.ndim < 2 or arr.shape[1] <= time_col:
-                    return
-
-                arr2 = arr.copy()
-                t = arr2[:, time_col]
-
-                # Handle NaNs/float time indices safely
-                # (If conversion fails, we skip remap.)
-                try:
-                    t_int = np.asarray(t).astype(int, copy=False)
-                except Exception:
-                    logging.warning(
-                        f"Cannot remap {getattr(layer, 'name', str(layer))}: "
-                        "time column could not be converted to int.",
-                    )
-                    return
-
-                arr2[:, time_col] = remap_array(t_int, idx_map)
-                layer.data = arr2
+                logger.debug(
+                    "Remap %s for %s (depth=%s, mapped=%s): %s",
+                    "applied" if res.changed else "skipped",
+                    getattr(layer, "name", str(layer)),
+                    res.depth_used,
+                    res.mapped_count,
+                    res.message,
+                )
 
         except Exception:
-            logging.exception(
-                f"Failed to remap frame indices for layer {getattr(layer, 'name', str(layer))}",
-            )
-            # Intentionally do not raise, simply warn and skip remapping
+            logger.exception("Failed to remap frame indices for layer %s", getattr(layer, "name", str(layer)))
             return
 
     def on_insert(self, event):
