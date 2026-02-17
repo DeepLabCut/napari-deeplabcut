@@ -1,6 +1,7 @@
 """Main widget and controls for napari-deeplabcut, including the tutorial and shortcuts windows."""
 
 # src/napari_deeplabcut/_widgets.py
+import hashlib
 import logging
 import os
 from collections import defaultdict, namedtuple
@@ -36,6 +37,7 @@ from qtpy.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -47,7 +49,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from napari_deeplabcut import keypoints
+from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut._reader import (
     _load_config,
     _load_superkeypoints,
@@ -56,7 +58,13 @@ from napari_deeplabcut._reader import (
 )
 from napari_deeplabcut._writer import _form_df, _write_config, _write_image
 from napari_deeplabcut.config.models import ImageMetadata, IOProvenance, PointsMetadata
-from napari_deeplabcut.core.metadata import infer_image_root, sync_points_from_image
+from napari_deeplabcut.core.metadata import (
+    get_default_scorer,
+    infer_image_root,
+    parse_points_metadata,
+    set_default_scorer,
+    sync_points_from_image,
+)
 from napari_deeplabcut.core.paths import (
     PathMatchPolicy,
     canonicalize_path,
@@ -267,6 +275,154 @@ def _paste_data(self, store):
         self.refresh()
 
 
+def _safe_folder_anchor_from_points_layer(layer: Points) -> str | None:
+    """Best-effort anchor folder for sidecar + CollectedData creation."""
+    md = layer.metadata or {}
+
+    # Prefer IO provenance project_root if present
+    try:
+        pts = parse_points_metadata(md)
+        if pts.io and pts.io.project_root:
+            return str(pts.io.project_root)
+    except Exception:
+        pass
+
+    # Fall back to root field
+    root = md.get("root")
+    if isinstance(root, str) and root:
+        return root
+
+    # Fall back to legacy source_h5 parent
+    src = md.get("source_h5")
+    if isinstance(src, str) and src:
+        try:
+            return str(Path(src).expanduser().resolve().parent)
+        except Exception:
+            return str(Path(src).parent)
+
+    return None
+
+
+def _find_config_scorer_nearby(anchor: str) -> str | None:
+    """Try to find config.yaml scorer (best-effort)."""
+    try:
+        # misc.find_project_config_path expects a path; anchor works fine as starting point.
+        cfg_path = misc.find_project_config_path(anchor)
+        if cfg_path:
+            cfg = _load_config(cfg_path)
+            s = cfg.get("scorer")
+            if isinstance(s, str) and s.strip():
+                return s.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _suggest_human_placeholder(anchor: str) -> str:
+    """Deterministic placeholder: human_<6hex> derived from anchor path."""
+    h = hashlib.sha1(anchor.encode("utf-8", errors="ignore")).hexdigest()[:6]
+    return f"human_{h}"
+
+
+def _prompt_for_scorer(parent_widget, *, anchor: str, suggested: str) -> str | None:
+    """Prompt user for a scorer name. Returns non-empty string or None if cancelled."""
+    text, ok = QInputDialog.getText(
+        parent_widget,
+        "Choose scorer",
+        "No DLC config.yaml scorer found.\n"
+        "Please enter a scorer name for the CollectedData file.\n\n"
+        "Tip: Use your name or a stable lab identifier.\n"
+        "(We strongly discourage keeping the generic 'human_xxxxxx'.)",
+        text=suggested,
+    )
+    if not ok:
+        return None
+    scorer = (text or "").strip()
+    if not scorer:
+        return None
+    return scorer
+
+
+def _ensure_promotion_save_target(self, layer: Points) -> bool:
+    """Ensure a prediction/machine source layer has a GT save_target set.
+
+    Returns True if save_target is set (or already existed), False if user cancels.
+    """
+    md = layer.metadata or {}
+    pts = parse_points_metadata(md)
+    io = pts.io
+    save_target = pts.save_target
+
+    # If save_target already set, nothing to do
+    if save_target is not None:
+        return True
+
+    # Only promote if source is machine/prediction
+    src_kind = getattr(io, "kind", None) if io is not None else None
+    if str(src_kind) != "machine":
+        return True  # GT sources can save normally
+
+    anchor = _safe_folder_anchor_from_points_layer(layer)
+    if not anchor:
+        QMessageBox.warning(self, "Cannot save", "Could not determine a folder anchor for saving.")
+        return False
+
+    # 1) scorer from config.yaml if available
+    scorer = _find_config_scorer_nearby(anchor)
+
+    # 2) scorer from sidecar
+    if not scorer:
+        scorer = get_default_scorer(anchor)
+
+    # 3) prompt user if still missing
+    if not scorer:
+        suggested = _suggest_human_placeholder(anchor)
+        while True:
+            s = _prompt_for_scorer(self, anchor=anchor, suggested=suggested)
+            if s is None:
+                return False
+
+            # Strong warning if user keeps generic placeholder
+            if s.startswith("human_"):
+                choice = QMessageBox.question(
+                    self,
+                    "Generic scorer name",
+                    "You entered a generic scorer name starting with 'human_'.\n\n"
+                    "We strongly recommend using a real name or stable identifier.\n"
+                    "Using a generic scorer can cause confusion when merging datasets.\n\n"
+                    "Do you want to keep this generic scorer anyway?",
+                    QMessageBox.Yes | QMessageBox.No,
+                )
+                if choice == QMessageBox.No:
+                    suggested = s
+                    continue
+
+            scorer = s
+            break
+
+        # Persist to sidecar so we don't prompt again for this folder
+        try:
+            set_default_scorer(anchor, scorer)
+        except Exception:
+            logger.debug("Failed to persist default scorer to sidecar", exc_info=True)
+
+    # Compute deterministic GT target path (promotion)
+    target_name = f"CollectedData_{scorer}.h5"
+
+    # Store save_target as IOProvenance dict (plain dict in napari metadata)
+    st = IOProvenance(
+        project_root=anchor,
+        source_relpath_posix=target_name,  # file lives directly in anchor folder
+        kind="gt",
+        dataset_key="keypoints",
+        scorer=scorer,  # extra field (allowed by IOProvenance extra='allow')
+    )
+
+    md["save_target"] = st.model_dump(exclude_none=True)
+    layer.metadata = md  # ensure napari sees update
+    return True
+
+
 # Hack to save a KeyPoints layer without showing the Save dialog
 def _save_layers_dialog(self, selected=False):
     """Save layers (all or selected) to disk, using ``LayerList.save()``.
@@ -286,6 +442,13 @@ def _save_layers_dialog(self, selected=False):
         QMessageBox.warning(self, "Nothing to save", msg, QMessageBox.Ok)
         return
     if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
+        layer = selected_layers[0]
+
+        # Promotion-to-GT policy: never write back to machine/prediction sources.
+        ok = _ensure_promotion_save_target(self, layer)
+        if not ok:
+            return
+
         self.viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
         self.viewer.status = "Data successfully saved"
     else:

@@ -7,11 +7,13 @@ import numpy as np
 import pandas as pd
 import pytest
 from napari.layers import Points
-from qtpy.QtWidgets import QMessageBox
+from qtpy.QtWidgets import QInputDialog, QMessageBox
 
 # -----------------------------------------------------------------------------
 # Fixtures: avoid modal hangs + control overwrite confirmation path
 # -----------------------------------------------------------------------------
+# TODO @C-Achard 17/02/26: Many of these can be moved to conftest
+# as they are useful for multiple test modules, and some can be made more generic.
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +21,38 @@ def _auto_accept_qmessagebox(monkeypatch):
     """Prevent any QMessageBox modal dialogs from blocking tests."""
     monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.Yes)
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+
+
+@pytest.fixture
+def inputdialog(monkeypatch):
+    """
+    Controller for QInputDialog.getText used by promotion-to-GT first save prompt.
+    """
+    state = {"value": "Alice", "ok": True, "calls": 0, "forbid": False}
+
+    def _fake_getText(*args, **kwargs):
+        state["calls"] += 1
+        if state["forbid"]:
+            raise AssertionError("QInputDialog.getText was called but forbid=True")
+        return state["value"], state["ok"]
+
+    monkeypatch.setattr(QInputDialog, "getText", _fake_getText)
+
+    class Controller:
+        @property
+        def calls(self):
+            return state["calls"]
+
+        def set(self, value: str, ok: bool = True):
+            state["value"] = value
+            state["ok"] = ok
+            return self
+
+        def forbid(self):
+            state["forbid"] = True
+            return self
+
+    return Controller()
 
 
 @pytest.fixture(autouse=True)
@@ -168,6 +202,31 @@ def _make_minimal_dlc_project(tmp_path: Path):
     df0.to_csv(str(h5_path).replace(".h5", ".csv"))
 
     return project, config_path, labeled, h5_path
+
+
+def _make_labeled_folder_with_machine_only(tmp_path: Path) -> Path:
+    """
+    Folder contains:
+      - images
+      - machinelabels-iter0.h5 (no CollectedData*, no config.yaml)
+    """
+    folder = tmp_path / "shared" / "labeled-data" / "test"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    # image
+    _write_minimal_png(folder / "img000.png")
+
+    # machine h5 (minimal DLC-like structure)
+    cols = pd.MultiIndex.from_product(
+        [["machine"], ["bodypart1", "bodypart2"], ["x", "y"]],
+        names=["scorer", "bodyparts", "coords"],
+    )
+    df0 = pd.DataFrame([[np.nan, np.nan, np.nan, np.nan]], index=["img000.png"], columns=cols)
+    (folder / "machinelabels-iter0.h5").unlink(missing_ok=True)
+    df0.to_hdf(folder / "machinelabels-iter0.h5", key="keypoints", mode="w")
+    df0.to_csv(str(folder / "machinelabels-iter0.csv"))
+
+    return folder
 
 
 # -----------------------------------------------------------------------------
@@ -792,3 +851,114 @@ def test_folder_open_loads_all_h5_when_multiple_exist(make_napari_viewer, qtbot,
 
         assert "io" in (ly.metadata or {}), f"Missing io provenance dict in layer.metadata for {ly.name}"
         assert ly.metadata["io"].get("source_relpath_posix"), f"io.source_relpath_posix missing for {ly.name}"
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_promotion_first_save_prompts_and_creates_sidecar(make_napari_viewer, qtbot, tmp_path, inputdialog):
+    """
+    First save on a machine/prediction layer (no config.yaml, no sidecar):
+    - prompts for scorer
+    - writes .napari-deeplabcut.json sidecar
+    - creates CollectedData_<scorer>.h5
+    - does NOT modify machinelabels-iter0.h5
+    """
+    labeled_folder = _make_labeled_folder_with_machine_only(tmp_path)
+
+    machine_path = labeled_folder / "machinelabels-iter0.h5"
+    machine_pre = pd.read_hdf(machine_path, key="keypoints")
+
+    viewer = make_napari_viewer()
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    # Open folder
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
+    qtbot.wait(200)
+
+    # Find machine points layer
+    pts_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
+    assert any(p.name == "machinelabels-iter0" for p in pts_layers)
+    machine_layer = next(p for p in pts_layers if p.name == "machinelabels-iter0")
+
+    # Edit: add bodypart2 (use helper that works across versions)
+    store = controls._stores.get(machine_layer)
+    assert store is not None
+    _set_or_add_bodypart_xy(machine_layer, store, "bodypart2", x=44.0, y=33.0)
+
+    # Set user input for scorer
+    inputdialog.set("Alice", ok=True)
+
+    # Save via the widget path (ensures prompt runs)
+    viewer.layers.selection.active = machine_layer
+    controls.viewer.layers.selection.active = machine_layer
+    controls.viewer.layers.selection.select_only(machine_layer)
+
+    # Call your menu-hooked save action (this hits promotion logic)
+    controls.viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+    qtbot.wait(200)
+
+    # Sidecar created
+    sidecar = labeled_folder / ".napari-deeplabcut.json"
+    assert sidecar.exists()
+    assert "Alice" in sidecar.read_text(encoding="utf-8")
+
+    # GT created
+    gt_path = labeled_folder / "CollectedData_Alice.h5"
+    assert gt_path.exists()
+
+    # Machine file unchanged
+    machine_post = pd.read_hdf(machine_path, key="keypoints")
+    pd.testing.assert_frame_equal(machine_pre, machine_post)
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_promotion_second_save_uses_sidecar_no_prompt(make_napari_viewer, qtbot, tmp_path, inputdialog):
+    """
+    After sidecar exists, saving again must not prompt:
+    - QInputDialog.getText not called
+    - writes/updates same CollectedData_<scorer>.h5
+    - machine file unchanged
+    """
+    labeled_folder = _make_labeled_folder_with_machine_only(tmp_path)
+
+    # Pre-create sidecar (as if first run already happened)
+    sidecar = labeled_folder / ".napari-deeplabcut.json"
+    sidecar.write_text('{"schema_version": 1, "default_scorer": "Alice"}', encoding="utf-8")
+
+    machine_path = labeled_folder / "machinelabels-iter0.h5"
+    machine_pre = pd.read_hdf(machine_path, key="keypoints")
+
+    viewer = make_napari_viewer()
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
+    qtbot.wait(200)
+
+    pts_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
+    machine_layer = next(p for p in pts_layers if p.name == "machinelabels-iter0")
+
+    store = controls._stores.get(machine_layer)
+    assert store is not None
+    _set_or_add_bodypart_xy(machine_layer, store, "bodypart1", x=99.0, y=88.0)
+
+    # No prompt expected
+    inputdialog.forbid()
+
+    # Save via widget path
+    controls._save_layers_dialog(selected=True)
+    qtbot.wait(200)
+
+    assert inputdialog.calls == 0
+
+    gt_path = labeled_folder / "CollectedData_Alice.h5"
+    assert gt_path.exists()
+
+    machine_post = pd.read_hdf(machine_path, key="keypoints")
+    pd.testing.assert_frame_equal(machine_pre, machine_post)

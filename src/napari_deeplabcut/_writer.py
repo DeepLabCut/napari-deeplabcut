@@ -8,7 +8,6 @@ from itertools import groupby
 from pathlib import Path
 
 import pandas as pd
-import yaml
 from napari.layers import Shapes
 from napari_builtins.io import napari_write_shapes
 from skimage.io import imsave
@@ -22,9 +21,22 @@ from napari_deeplabcut.ui.dialogs import _maybe_confirm_overwrite
 logger = logging.getLogger(__name__)
 
 
-def _write_config(config_path: str, params: dict):
-    with open(config_path, "w") as file:
-        yaml.safe_dump(params, file)
+def _set_df_scorer(df: pd.DataFrame, scorer: str) -> pd.DataFrame:
+    """Return df with scorer level set to the given scorer (if present)."""
+    scorer = (scorer or "").strip()
+    if not scorer:
+        return df
+    if not hasattr(df.columns, "names") or "scorer" not in df.columns.names:
+        return df
+
+    try:
+        cols = df.columns.to_frame(index=False)
+        cols["scorer"] = scorer
+        df = df.copy()
+        df.columns = pd.MultiIndex.from_frame(cols)
+    except Exception:
+        pass
+    return df
 
 
 def _form_df(points_data, metadata):
@@ -52,35 +64,61 @@ def _form_df(points_data, metadata):
     return df
 
 
-def _resolve_output_path_from_metadata(metadata: dict) -> str | None:
+def _resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str | None, str | None]:
     """
-    Resolve the target .h5 path from PointsMetadata.io if available,
-    otherwise fall back to legacy `source_h5` if present.
+    Resolve output path with promotion support.
 
-    Returns an absolute filesystem path string, or None if it cannot be resolved.
+    Returns:
+      (out_path, target_scorer, source_kind)
+
+    - Prefer PointsMetadata.save_target (promotion-to-GT).
+    - For GT sources, fall back to io/source_h5.
+    - For machine sources without save_target, return (None, None, "machine") to allow safe abort.
     """
-    # `metadata` here is the napari writer metadata dict passed into write_hdf.
-    # It contains a nested `metadata` dict (layer.metadata).
     layer_meta = metadata.get("metadata")
     if not isinstance(layer_meta, dict):
         layer_meta = {}
 
-    # 1) Preferred: PointsMetadata.io
     pts = parse_points_metadata(layer_meta)
     io = pts.io
+    st = pts.save_target
+
+    source_kind = str(getattr(io, "kind", "")) if io is not None else ""
+
+    # Promotion target wins
+    if st is not None:
+        try:
+            p = resolve_provenance_path(st, root_anchor=st.project_root, allow_missing=True)
+            target_scorer = getattr(st, "scorer", None)
+            if isinstance(target_scorer, str) and target_scorer.strip():
+                return str(p), target_scorer.strip(), source_kind
+            # Also accept scorer stored in dict extra
+            if isinstance(layer_meta.get("save_target"), dict):
+                s2 = layer_meta["save_target"].get("scorer")
+                if isinstance(s2, str) and s2.strip():
+                    return str(p), s2.strip(), source_kind
+            return str(p), None, source_kind
+        except (MissingProvenanceError, UnresolvablePathError):
+            return None, None, source_kind
+
+    # If source is machine/prediction and no save_target: never write back
+    if source_kind == "machine":
+        return None, None, source_kind
+
+    # GT source: prefer io if available
     if io is not None:
         try:
             p = resolve_provenance_path(io, root_anchor=io.project_root, allow_missing=True)
-            return str(p)
+            return str(p), None, source_kind
         except (MissingProvenanceError, UnresolvablePathError):
             pass
 
-    # 2) Legacy fallback: source_h5
+    # Legacy fallback: source_h5 (GT only)
     src = layer_meta.get("source_h5")
     if isinstance(src, str) and src:
-        return src
+        return src, None, source_kind
 
-    return None
+    return None, None, source_kind
 
 
 def write_hdf(filename, data, metadata):
@@ -94,20 +132,20 @@ def write_hdf(filename, data, metadata):
         * old values are preserved when new are NaN/missing
     - For machine/refinement files, keep existing behavior (special merging logic).
     """
-    file, _ = os.path.splitext(filename)  # currently unused
-    df_new = _form_df(data, metadata)
-
     layer_meta = metadata.get("metadata")
     if not isinstance(layer_meta, dict):
         layer_meta = {}
-
-    layer_name = metadata.get("name", "")
-
     # root may be nested or top-level depending on napari/version/reader path
     root = layer_meta.get("root") or metadata.get("root")
-
     # paths may be nested or top-level too
     paths = layer_meta.get("paths") or metadata.get("paths")
+    layer_name = metadata.get("name", "")
+
+    out_path, target_scorer, source_kind = _resolve_output_path_from_metadata(metadata)
+    df_new = _form_df(data, metadata)
+    # If promoting to GT and a target scorer is known, rewrite the scorer level.
+    if target_scorer:
+        df_new = _set_df_scorer(df_new, target_scorer)
 
     # Fallback: infer root from paths if still missing
     if not root and paths:
@@ -125,48 +163,27 @@ def write_hdf(filename, data, metadata):
     # ------------------------------------------------------------
     # Resolve output path using provenance (PointsMetadata.io) or source_h5.
     # ------------------------------------------------------------
-    out_path = _resolve_output_path_from_metadata(metadata)
 
-    # ------------------------------------------------------------
-    # Policy: if provenance missing, auto-select exactly one GT candidate.
-    # Deterministic and safe: only when there is exactly one CollectedData*.h5.
-    # ------------------------------------------------------------
+    # Never write back to machine sources; promotion must supply save_target.
+    if source_kind == "machine" and not out_path:
+        raise MissingProvenanceError(
+            "Refined predictions are promoted to CollectedData on save. No save_target was set for this layer."
+        )
+
+    # If still missing, fall back for GT only (temporary): write beside root using layer_name
     if not out_path:
-        candidates = sorted(Path(root).glob("CollectedData*.h5"))
-        if len(candidates) == 1:
-            out_path = str(candidates[0])
+        out_path = os.path.join(root, f"{layer_name}.h5")
 
-    # Final fallback (legacy): name-based within root (temporary migration support)
-    if not out_path:
-        out_path = os.path.join(root, layer_name + ".h5")
-
-    # Determine kind from PointsMetadata.io if present (do NOT infer from layer name).
+    # Decide write mode based on DESTINATION (promotion writes to GT target).
     pts = parse_points_metadata(layer_meta)
-    kind = getattr(getattr(pts, "io", None), "kind", None)
+    has_save_target = pts.save_target is not None
 
-    # Migration fallback: if kind missing but we have a source filename, infer from filename.
-    if not kind:
-        src_name = layer_meta.get("source_h5_name") or ""
-        low = str(src_name).lower()
-        if low.startswith("machinelabels"):
-            kind = "machine"
-        elif low.startswith("collecteddata"):
-            kind = "gt"
+    destination_kind = "gt" if has_save_target else str(getattr(getattr(pts, "io", None), "kind", "gt") or "gt")
+    # Note: Even if source is machine, promotion means destination is GT.
 
-    # Determine kind from PointsMetadata.io if present (do NOT infer from layer name).
-    pts = parse_points_metadata(layer_meta)
-    kind = getattr(getattr(pts, "io", None), "kind", None)
-
-    if str(kind) == "machine":
+    if destination_kind == "gt":
         # ------------------------------------------------------------
-        # Machine outputs: save to their own target file only.
-        # No automatic merge into GT (policy).
-        # ------------------------------------------------------------
-        df_out = df_new
-
-    else:
-        # ------------------------------------------------------------
-        # Ground-truth: safe merge-on-save
+        # Ground-truth destination: safe merge-on-save + overwrite confirm
         # ------------------------------------------------------------
         if os.path.exists(out_path):
             try:
@@ -187,6 +204,9 @@ def write_hdf(filename, data, metadata):
                 pass
         else:
             df_out = df_new
+    else:
+        # For now: any non-GT destination simply overwrites its target
+        df_out = df_new
 
     # Sort before writing
     df_out.sort_index(inplace=True)
