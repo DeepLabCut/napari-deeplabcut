@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from napari_deeplabcut.core.paths import PathMatchPolicy
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # -----------------------------------------------------------------------------
 # Enums
@@ -35,7 +36,7 @@ class DLCHeaderModel(BaseModel):
     This model allows opaque runtime storage.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
     columns: Any = Field(
         ...,
@@ -70,6 +71,8 @@ class ImageMetadata(BaseModel):
     - paths, if present, define frame order
     - root, if present, is a directory path
     """
+
+    model_config = ConfigDict(extra="allow")
 
     kind: MetadataKind = Field(default=MetadataKind.IMAGE)
     paths: list[str] | None = None
@@ -110,6 +113,7 @@ class PointsMetadata(BaseModel):
 
     project: str | None = None
     header: DLCHeaderModel | None = None
+    io: IOProvenance | None = None
 
     face_color_cycles: dict[str, dict[str, Any]] | None = None
     colormap_name: str | None = None
@@ -119,4 +123,71 @@ class PointsMetadata(BaseModel):
     # Non-serializable runtime attachments (allowed but ignored by pydantic)
     controls: Any | None = Field(default=None, exclude=True)
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+
+
+class AnnotationKind(str, Enum):
+    """Semantic kind of keypoint annotations for deterministic IO routing.
+
+    Notes
+    -----
+    This is used to enforce safe saving policies:
+    - ``gt``: ground-truth labels (e.g. ``CollectedData_*.h5``)
+    - ``machine``: machine predictions/refinements (e.g. ``machinelabels*.h5``)
+
+    The napari layer display name must never be used to infer this value.
+    """
+
+    GT = "gt"
+    MACHINE = "machine"
+
+
+class IOProvenance(BaseModel):
+    """Authoritative provenance for a Points layer.
+
+    This model captures *identity* for IO, independent of the napari layer name.
+
+    Design goals
+    ------------
+    - Prefer project-relative, OS-agnostic paths.
+    - Store relative paths using POSIX separators ('/'), even on Windows.
+    - Be explicit about annotation kind so saving never relies on directory ordering.
+
+    Fields
+    ------
+    schema_version:
+        Version marker for forward-compatible evolution.
+    project_root:
+        Optional project root directory. When set, ``source_relpath_posix`` is
+        interpreted relative to this root.
+    source_relpath_posix:
+        Project-relative path encoded with POSIX separators ('/').
+        Example: ``labeled-data/test/CollectedData_John.h5``.
+    kind:
+        Whether this layer is ground-truth or machine output.
+    dataset_key:
+        HDF5 key used for the keypoints table (default: ``keypoints``).
+    """
+
+    # Keep minimal but resilient to future additions
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: int = Field(default=1, description="Provenance schema version")
+    project_root: str | None = Field(default=None, description="Project root directory")
+    source_relpath_posix: str | None = Field(
+        default=None,
+        description="Project-relative POSIX path to the source .h5 (forward slashes).",
+    )
+    kind: AnnotationKind | None = Field(default=None, description="Annotation kind for routing")
+    dataset_key: str = Field(default="keypoints", description="HDF5 key for keypoints table")
+
+    @field_validator("source_relpath_posix")
+    @classmethod
+    def _normalize_relpath(cls, v: str | None) -> str | None:
+        """Normalize provenance paths to POSIX separators.
+
+        This keeps stored metadata OS-agnostic and stable across platforms.
+        """
+        if v is None:
+            return None
+        return v.replace("\\", "/")
