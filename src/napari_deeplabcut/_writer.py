@@ -17,7 +17,8 @@ from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import AnnotationKind
 from napari_deeplabcut.core.dataframes import harmonize_keypoint_row_index
 from napari_deeplabcut.core.errors import MissingProvenanceError, UnresolvablePathError
-from napari_deeplabcut.core.metadata import parse_points_metadata, resolve_provenance_path
+from napari_deeplabcut.core.metadata import parse_points_metadata
+from napari_deeplabcut.core.provenance import resolve_provenance_path
 from napari_deeplabcut.ui.dialogs import _maybe_confirm_overwrite
 
 logger = logging.getLogger(__name__)

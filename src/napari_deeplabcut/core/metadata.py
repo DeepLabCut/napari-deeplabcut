@@ -8,12 +8,11 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from napari_deeplabcut.config.models import ImageMetadata, IOProvenance, PointsMetadata
-from napari_deeplabcut.core.errors import (
-    AmbiguousSaveError,
-    MissingProvenanceError,
-)
+from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata, PointsMetadata
+from napari_deeplabcut.core.discovery import infer_annotation_kind_for_file
+from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.paths import canonicalize_path
+from napari_deeplabcut.core.provenance import build_io_provenance_dict
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,7 @@ def infer_image_root(
     """
     Best-effort inference of an image root directory.
 
-    Priority (unchanged from legacy behavior):
+    Priority:
     1. explicit_root
     2. parent of first path
     3. parent of source_path
@@ -60,31 +59,19 @@ def infer_image_root(
 # -----------------------------------------------------------------------------
 
 
-def merge_image_metadata(
-    base: ImageMetadata,
-    incoming: ImageMetadata,
-) -> ImageMetadata:
-    """
-    Merge ImageMetadata without clobbering existing values.
-
-    Non-null values in `incoming` fill missing values in `base`.
-    """
-    data = base.model_dump()
-    for field, value in incoming.model_dump().items():
+def merge_image_metadata(base: ImageMetadata, incoming: ImageMetadata) -> ImageMetadata:
+    """Merge ImageMetadata without clobbering existing values."""
+    data = base.model_dump(mode="python")
+    for field, value in incoming.model_dump(mode="python").items():
         if data.get(field) in (None, "", []) and value not in (None, "", []):
             data[field] = value
     return ImageMetadata(**data)
 
 
-def merge_points_metadata(
-    base: PointsMetadata,
-    incoming: PointsMetadata,
-) -> PointsMetadata:
-    """
-    Merge PointsMetadata without clobbering existing values.
-    """
-    data = base.model_dump()
-    for field, value in incoming.model_dump().items():
+def merge_points_metadata(base: PointsMetadata, incoming: PointsMetadata) -> PointsMetadata:
+    """Merge PointsMetadata without clobbering existing values."""
+    data = base.model_dump(mode="python")
+    for field, value in incoming.model_dump(mode="python").items():
         if field == "controls":
             continue
         if data.get(field) in (None, "", []) and value not in (None, "", []):
@@ -97,23 +84,14 @@ def merge_points_metadata(
 # -----------------------------------------------------------------------------
 
 
-def sync_points_from_image(
-    image_meta: ImageMetadata,
-    points_meta: PointsMetadata,
-) -> PointsMetadata:
-    """
-    Ensure PointsMetadata contains required image-derived fields.
-
-    This mirrors legacy widget behavior but is centralized and explicit.
-    """
-    updated = points_meta.model_dump()
-
+def sync_points_from_image(image_meta: ImageMetadata, points_meta: PointsMetadata) -> PointsMetadata:
+    """Ensure PointsMetadata contains required image-derived fields."""
+    updated = points_meta.model_dump(mode="python")
     for key in ("root", "paths", "shape", "name"):
         if updated.get(key) in (None, "", []):
             value = getattr(image_meta, key, None)
             if value not in (None, "", []):
                 updated[key] = value
-
     return PointsMetadata(**updated)
 
 
@@ -121,31 +99,26 @@ def ensure_metadata_models(
     image_meta: dict | ImageMetadata | None,
     points_meta: dict | PointsMetadata | None,
 ) -> tuple[ImageMetadata | None, PointsMetadata | None]:
-    """
-    Normalize raw metadata dicts into authoritative models.
-
-    This is the primary bridge for migration safety.
-    """
+    """Normalize raw metadata dicts into authoritative models."""
     img = None
     pts = None
-
     if image_meta is not None:
         img = image_meta if isinstance(image_meta, ImageMetadata) else ImageMetadata(**image_meta)
-
     if points_meta is not None:
         pts = points_meta if isinstance(points_meta, PointsMetadata) else PointsMetadata(**points_meta)
-
     return img, pts
 
 
 # -----------------------------------------------------------------------------
 # Parsing / round-tripping
 # -----------------------------------------------------------------------------
-def parse_points_metadata(md: Mapping[str, Any] | PointsMetadata | None) -> PointsMetadata:
-    """Parse PointsMetadata from a napari layer.metadata mapping.
 
-    This is a *best-effort* parser intended for migration safety.
-    It MUST be robust to napari runtime objects (e.g., misc.DLCHeader, Qt widgets).
+
+def parse_points_metadata(md: Mapping[str, Any] | PointsMetadata | None) -> PointsMetadata:
+    """
+    Parse PointsMetadata from a napari layer.metadata mapping.
+
+    Best-effort for migration safety; robust to runtime objects (Qt widgets, DLCHeader, etc.).
     """
     if md is None:
         return PointsMetadata()
@@ -155,24 +128,13 @@ def parse_points_metadata(md: Mapping[str, Any] | PointsMetadata | None) -> Poin
     try:
         raw = dict(md)
 
-        # Drop runtime-only / non-JSON fields that can break validation.
-        # We only need io/save_target/root/paths for routing decisions.
+        # Drop runtime-only / non-serializable fields
         raw.pop("controls", None)
-
-        # `header` is often a misc.DLCHeader runtime object (not our DLCHeaderModel dict).
-        # Keep it in layer.metadata, but exclude it from model_validate.
         raw.pop("header", None)
-
-        # face_color_cycles can contain numpy objects; keep out of model parse if needed.
-        # (Not strictly necessary, but safe.)
-        # raw.pop("face_color_cycles", None)
 
         return PointsMetadata.model_validate(raw)
     except Exception:
-        logger.debug(
-            "Failed to parse PointsMetadata from dict; falling back to empty model.",
-            exc_info=True,
-        )
+        logger.debug("Failed to parse PointsMetadata; falling back to empty model.", exc_info=True)
         return PointsMetadata()
 
 
@@ -183,51 +145,27 @@ def merge_model_into_metadata(
     exclude_none: bool = True,
     exclude: set[str] | None = None,
 ) -> dict[str, Any]:
-    """Merge a Pydantic model into an existing metadata dict.
-
-    This function updates only the keys owned by the model dump; it does not
-    remove or overwrite unrelated keys unless they collide.
-
-    Parameters
-    ----------
-    metadata:
-        Existing napari metadata dict (mutated in-place and returned).
-    model:
-        Pydantic model to merge.
-    exclude_none:
-        If True, omit None values from the dump.
-    exclude:
-        Optional set of field names to exclude from the merge.
-
-    Returns
-    -------
-    dict
-        The updated metadata mapping.
-    """
+    """Merge a Pydantic model into an existing metadata dict (shallow merge)."""
     if exclude is None:
         exclude = set()
 
     try:
-        dumped = model.model_dump(exclude_none=exclude_none, exclude=exclude)
+        dumped = model.model_dump(mode="python", exclude_none=exclude_none, exclude=exclude)
     except Exception:
         dumped = {}
 
-    # Merge shallowly; nested dicts are replaced at the top-level key.
-    # (We keep it minimal and deterministic; deeper merges can be added later.)
     for k, v in dumped.items():
         metadata[k] = v
     return metadata
 
 
-def require_unique_target(
-    candidates: list[Path],
-    *,
-    context: str = "save target",
-) -> Path:
-    """Ensure a candidate list resolves to exactly one path.
+# -----------------------------------------------------------------------------
+# Save target utilities
+# -----------------------------------------------------------------------------
 
-    This utility is used to enforce the \"ambiguity must not be silent\" policy.
-    """
+
+def require_unique_target(candidates: list[Path], *, context: str = "save target") -> Path:
+    """Ensure a candidate list resolves to exactly one path."""
     if not candidates:
         raise MissingProvenanceError(f"No candidates found for {context}.")
     if len(candidates) > 1:
@@ -235,17 +173,33 @@ def require_unique_target(
     return candidates[0]
 
 
-def _attach_source_and_io(metadata: dict, file_path: Path) -> None:
-    """
-    Attach authoritative source info + minimal IOProvenance to the layer metadata dict.
+# -----------------------------------------------------------------------------
+# Provenance attachment (napari metadata glue)
+# -----------------------------------------------------------------------------
 
-    - Keeps legacy source_h5 fields for migration.
+
+def attach_source_and_io(
+    metadata: dict[str, Any],
+    file_path: Path,
+    *,
+    kind: AnnotationKind | None = None,
+    dataset_key: str = "keypoints",
+) -> None:
+    """
+    Attach authoritative source info + IO provenance to napari layer metadata dict.
+
+    - Keeps legacy fields (source_h5*) for debugging/migration.
     - Stores IOProvenance as a plain dict under metadata['metadata']['io'].
-    - Uses core.paths.canonicalize_path for OS-agnostic relpaths.
+    - Stores AnnotationKind as enum object (runtime invariant).
+
+    If kind is None, we fall back to discovery-based inference.
+
+    # FUTURE NOTE hardcoded DLC structure:
+    # kind inference relies on discovery filename patterns (CollectedData*, machinelabels*).
     """
     meta = metadata.setdefault("metadata", {})
 
-    # --- legacy migration fields (still useful for debugging/backfill) ---
+    # Legacy migration fields
     try:
         src_abs = str(file_path.expanduser().resolve())
     except Exception:
@@ -255,21 +209,22 @@ def _attach_source_and_io(metadata: dict, file_path: Path) -> None:
     meta["source_h5_name"] = file_path.name
     meta["source_h5_stem"] = file_path.stem
 
-    # Root anchor: default to file parent (works when only labeled-data folder is shared)
+    # Anchor root: file parent (robust for shared labeled-data folders)
     try:
         anchor = str(file_path.expanduser().resolve().parent)
     except Exception:
         anchor = str(file_path.parent)
 
-    # Relative path stored OS-agnostic (POSIX). With anchor=file parent, this is filename.
+    # Relative path stored as POSIX (OS-agnostic)
     relposix = canonicalize_path(file_path, n=1)
-    kind = _infer_annotation_kind_from_discovery(file_path)
 
-    io = IOProvenance(
+    # If caller didn't provide kind, infer from discovery
+    if kind is None:
+        kind = infer_annotation_kind_for_file(file_path)
+
+    meta["io"] = build_io_provenance_dict(
         project_root=anchor,
         source_relpath_posix=relposix,
         kind=kind,
-        dataset_key="keypoints",
+        dataset_key=dataset_key,
     )
-    # Store as plain dict so it round-trips safely in napari metadata
-    meta["io"] = io.model_dump(exclude_none=True)

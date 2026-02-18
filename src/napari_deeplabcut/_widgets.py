@@ -60,10 +60,8 @@ from napari_deeplabcut._writer import _form_df, _write_image
 from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.io import write_config
 from napari_deeplabcut.core.metadata import (
-    get_default_scorer,
     infer_image_root,
     parse_points_metadata,
-    set_default_scorer,
     sync_points_from_image,
 )
 from napari_deeplabcut.core.paths import (
@@ -71,6 +69,7 @@ from napari_deeplabcut.core.paths import (
     canonicalize_path,
 )
 from napari_deeplabcut.core.remap import remap_layer_data_by_paths
+from napari_deeplabcut.core.sidecar import get_default_scorer, set_default_scorer
 from napari_deeplabcut.misc import (
     build_color_cycles,
     encode_categories,
