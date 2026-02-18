@@ -2,6 +2,7 @@
 
 # src/napari_deeplabcut/_reader.py
 import json
+import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from napari_deeplabcut import misc
 
 SUPPORTED_IMAGES = ".jpg", ".jpeg", ".png"
 SUPPORTED_VIDEOS = ".mp4", ".mov", ".avi"
+
+logger = logging.getLogger(__name__)
 
 
 def is_video(filename: str):
@@ -82,9 +85,24 @@ def get_folder_parser(path):
     images = _filter_extensions(Path(path).iterdir(), valid_extensions=SUPPORTED_IMAGES)
 
     if not images:
-        # FIXME  @C-Achard This could be made to read he h5/csv data, at the risk of partially populated metadata.
+        has_video = any(Path(path).glob(f"*{ext}") for ext in SUPPORTED_VIDEOS)
+        if has_video:
+            logger.info(
+                "No supported images found in '%s' (extensions: %s). "
+                "Annotations will not be loaded from images. A supported video appears to be present; "
+                "try opening the video directly to view frames and overlay annotations.",
+                path,
+                SUPPORTED_IMAGES,
+            )
+        else:
+            logger.warning(
+                "No supported images found in '%s' (extensions: %s), and no supported videos found (extensions: %s). "
+                "Annotations cannot be loaded. Add images or open a supported video.",
+                path,
+                SUPPORTED_IMAGES,
+                SUPPORTED_VIDEOS,
+            )
         return None
-        # raise OSError(f"No supported images were found in {path} with extensions {SUPPORTED_IMAGES}.")
 
     image_layer = read_images(images)
     layers.extend(image_layer)
