@@ -40,7 +40,8 @@ except ImportError:  # pragma: no cover
 # FIXME: Circumvent the need to access window.qt_viewer
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-import re
+import re  # noqa: E402 (import after top-level code)
+
 # Suppress RuntimeWarnings caused by NaN values in dataframe
 # (encountered during model-predicted labels refinement stage)
 warnings.filterwarnings(
@@ -48,6 +49,7 @@ warnings.filterwarnings(
     category=RuntimeWarning,
     message=re.escape("invalid value encountered in cast"),
 )
+
 
 class VispyWarningFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
