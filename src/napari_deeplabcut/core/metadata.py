@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata, PointsMetadata
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, PointsMetadata
 from napari_deeplabcut.core.discovery import infer_annotation_kind_for_file
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.paths import canonicalize_path
@@ -114,24 +114,76 @@ def ensure_metadata_models(
 # -----------------------------------------------------------------------------
 
 
-def parse_points_metadata(md: Mapping[str, Any] | PointsMetadata | None) -> PointsMetadata:
+def _coerce_header_to_model(header: Any) -> DLCHeaderModel | None:
+    """Coerce various runtime header forms into DLCHeaderModel.
+
+    Accepts:
+    - DLCHeaderModel (returned as-is)
+    - dict (validated into DLCHeaderModel)
+    - misc.DLCHeader-like object with `.columns` (wrapped)
+    """
+    if header is None:
+        return None
+
+    if isinstance(header, DLCHeaderModel):
+        return header
+
+    # dict-ish header
+    if isinstance(header, Mapping):
+        try:
+            return DLCHeaderModel.model_validate(dict(header))
+        except Exception:
+            return None
+
+    # runtime DLCHeader-like (e.g. napari_deeplabcut.misc.DLCHeader)
+    cols = getattr(header, "columns", None)
+    if cols is not None:
+        try:
+            return DLCHeaderModel(columns=cols)
+        except Exception:
+            return None
+
+    return None
+
+
+def parse_points_metadata(
+    md: Mapping[str, Any] | PointsMetadata | None,
+    *,
+    drop_header: bool = False,
+    drop_controls: bool = True,
+    # TODO defaults may need adjusted @C-Achard
+) -> PointsMetadata:
     """
     Parse PointsMetadata from a napari layer.metadata mapping.
 
-    Best-effort for migration safety; robust to runtime objects (Qt widgets, DLCHeader, etc.).
+    Robust to runtime objects (Qt widgets, misc.DLCHeader, etc.).
+    - controls are dropped by default (runtime-only)
+    - header is kept by default (needed for writing + conflict checking)
     """
     if md is None:
         return PointsMetadata()
     if isinstance(md, PointsMetadata):
         return md
 
-    try:
-        raw = dict(md)
+    raw = dict(md)
 
-        # Drop runtime-only / non-serializable fields
+    # Drop runtime-only / non-serializable fields
+    if drop_controls:
         raw.pop("controls", None)
-        raw.pop("header", None)
 
+    # Coerce header unless explicitly dropped
+    if drop_header:
+        raw.pop("header", None)
+    else:
+        hdr = raw.get("header", None)
+        coerced = _coerce_header_to_model(hdr)
+        if coerced is not None:
+            raw["header"] = coerced
+        else:
+            # If a header was present but not usable, remove it so we can still parse.
+            raw.pop("header", None)
+
+    try:
         return PointsMetadata.model_validate(raw)
     except Exception:
         logger.debug("Failed to parse PointsMetadata; falling back to empty model.", exc_info=True)

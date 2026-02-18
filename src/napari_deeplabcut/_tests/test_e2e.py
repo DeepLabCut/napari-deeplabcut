@@ -449,7 +449,7 @@ def test_config_first_hazard_regression_no_silent_deletion(make_napari_viewer, q
     placeholder.add(np.array([0.0, 33.0, 44.0], dtype=float))
 
     viewer.layers.selection.active = placeholder
-    viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(200)
 
     post = pd.read_hdf(h5_path, key="keypoints")
@@ -488,7 +488,7 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
     _set_or_add_bodypart_xy(points, store, "bodypart2", x=44.0, y=33.0)
 
     viewer.layers.selection.active = points
-    viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(200)
 
     post = pd.read_hdf(h5_path, key="keypoints")
@@ -523,7 +523,7 @@ def test_overwrite_warning_triggers_on_conflict(make_napari_viewer, qtbot, tmp_p
     _set_or_add_bodypart_xy(points, store, "bodypart1", x=99.0, y=88.0)
 
     viewer.layers.selection.active = points
-    viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(200)
 
     assert len(overwrite_confirm.calls) == 1, "Expected overwrite confirmation to be requested once."
@@ -565,7 +565,7 @@ def test_overwrite_warning_cancel_aborts_write(make_napari_viewer, qtbot, tmp_pa
 
     viewer.layers.selection.active = points
     try:
-        viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+        viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     except Exception:
         # Some napari/npe2 versions may raise when writer aborts; file integrity is what matters.
         pass
@@ -618,7 +618,7 @@ def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qt
     _set_or_add_bodypart_xy(points_b, store_b, "bodypart2", x=77.0, y=66.0)
 
     viewer.layers.selection.active = points_b
-    viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(200)
 
     after = {p: _snapshot_coords(p) for p in gt_paths}
@@ -664,7 +664,7 @@ def test_machine_layer_does_not_modify_gt_on_save(make_napari_viewer, qtbot, tmp
     _set_or_add_bodypart_xy(machine_layer, store, "bodypart2", x=55.0, y=44.0)
 
     viewer.layers.selection.active = machine_layer
-    viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(200)
 
     after = {p: _snapshot_coords(p) for p in gt_paths + [machine_path]}
@@ -711,7 +711,7 @@ def test_layer_rename_does_not_change_save_target(make_napari_viewer, qtbot, tmp
     _set_or_add_bodypart_xy(layer, store, "bodypart2", x=12.0, y=34.0)
 
     viewer.layers.selection.active = layer
-    viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(200)
 
     # Must not create foo.h5 in the folder
@@ -771,7 +771,7 @@ def test_ambiguous_placeholder_save_aborts_when_multiple_gt_exist(
 
     # Expect save to abort deterministically
     try:
-        viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+        viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     except Exception:
         pass  # acceptable in headless/test mode
 

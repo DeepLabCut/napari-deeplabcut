@@ -132,6 +132,7 @@ def build_color_cycles(header: DLCHeader, colormap: str | None = "viridis"):
     }
 
 
+# FIXME @C-Achard replace with schema in core
 class DLCHeader:
     def __init__(self, columns: pd.MultiIndex):
         self.columns = columns

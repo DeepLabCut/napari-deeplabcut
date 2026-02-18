@@ -44,7 +44,7 @@ contributions:
       filename_patterns: ['*']
   writers:
     - command: napari-deeplabcut.write_hdf_napari_dlc
-      layer_types: ["points{1}"]
+      layer_types: ["points"]
       filename_extensions: [".h5"]
     - command: napari-deeplabcut.write_masks
       layer_types: ["shapes{1}"]

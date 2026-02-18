@@ -1653,7 +1653,7 @@ class KeypointControls(QWidget):
             if not ok:
                 return
 
-            self.viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+            self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
             self.viewer.status = "Data successfully saved"
         else:
             dlg = QFileDialog()

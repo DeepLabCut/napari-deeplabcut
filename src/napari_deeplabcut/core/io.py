@@ -259,6 +259,7 @@ def _resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str 
     return None, None, source_kind
 
 
+# TODO move to dataframes.py
 def form_df(
     points_data,
     layer_metadata: dict,
@@ -343,7 +344,7 @@ def _atomic_to_hdf(df: pd.DataFrame, out_path: Path, key: str = "keypoints") -> 
     tmp.replace(out_path)
 
 
-def write_hdf(path: str, data, attributes: dict) -> list[str]:
+def write_hdf(path: None, data, attributes: dict) -> list[str]:
     """
     NPE2 single-layer writer.
 
@@ -354,7 +355,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     This function writes DLC keypoints to .h5 (and companion .csv).
     """
     attrs = dlc_schemas.PointsLayerAttributesModel.model_validate(attributes or {})
-    pts_meta: PointsMetadata = parse_points_metadata(attrs.metadata)
+    pts_meta: PointsMetadata = parse_points_metadata(attrs.metadata, drop_header=False)
 
     points = dlc_schemas.PointsDataModel.model_validate({"data": data})
     props = dlc_schemas.KeypointPropertiesModel.model_validate(attrs.properties)
