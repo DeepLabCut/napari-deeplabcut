@@ -40,6 +40,7 @@ from napari_deeplabcut.core.dataframes import (
     harmonize_keypoint_column_index,
     harmonize_keypoint_row_index,
     keypoint_conflicts,
+    merge_multiple_scorers,
 )
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError, UnresolvablePathError
 from napari_deeplabcut.core.layers import populate_keypoint_layer_metadata
@@ -115,7 +116,7 @@ def read_hdf(filename: str) -> list[LayerData]:
 def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[LayerData]:
     """Read a single H5 file and attach provenance with optional explicit kind."""
     temp = pd.read_hdf(str(file))
-    temp = misc.merge_multiple_scorers(temp)
+    temp = merge_multiple_scorers(temp)
     header = misc.DLCHeader(temp.columns)
     temp = temp.droplevel("scorer", axis=1)
 

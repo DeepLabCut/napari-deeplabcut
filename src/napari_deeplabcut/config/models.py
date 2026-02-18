@@ -26,6 +26,8 @@ class DLCHeaderModel(BaseModel):
     columns: Any = Field(...)
 
     def as_multiindex(self) -> pd.MultiIndex:
+        # FIXME @C-Achard 2026-02-18 ensure we are not mixing 3/4 level formats,
+        # or that we are not losing information by coercing to 4-level form
         cols = self.columns
 
         # Already a MultiIndex: return as-is

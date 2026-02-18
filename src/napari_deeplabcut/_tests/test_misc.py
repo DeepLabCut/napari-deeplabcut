@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from napari_deeplabcut import misc
-from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
+from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows, merge_multiple_scorers
 from napari_deeplabcut.core.io import load_config
 
 
@@ -310,7 +310,7 @@ def test_merge_multiple_scorers_no_likelihood(fake_keypoints):
     temp = fake_keypoints.copy(deep=True)
     temp.columns = temp.columns.set_levels(["you"], level="scorer")
     df = fake_keypoints.merge(temp, left_index=True, right_index=True)
-    df = misc.merge_multiple_scorers(df)
+    df = merge_multiple_scorers(df)
     pd.testing.assert_frame_equal(df, fake_keypoints)
 
 
@@ -326,7 +326,7 @@ def test_merge_multiple_scorers(fake_keypoints):
     fake_keypoints.iloc[:5] = np.nan
     temp.iloc[5:] = np.nan
     df = fake_keypoints.merge(temp, left_index=True, right_index=True)
-    df = misc.merge_multiple_scorers(df)
+    df = merge_multiple_scorers(df)
     pd.testing.assert_index_equal(df.columns, fake_keypoints.columns)
     assert not df.isna().any(axis=None)
 
