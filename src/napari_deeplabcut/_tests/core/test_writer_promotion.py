@@ -8,6 +8,7 @@ import pytest
 
 from napari_deeplabcut import _writer, misc
 from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.core import io
 from napari_deeplabcut.core.errors import MissingProvenanceError
 
 
@@ -77,7 +78,7 @@ def test_writer_promotion_writes_collecteddata_and_rewrites_scorer(tmp_path: Pat
     header = misc.DLCHeader(cols)
 
     # Ensure overwrite confirm always returns True
-    monkeypatch.setattr(_writer, "_maybe_confirm_overwrite", lambda *args, **kwargs: True)
+    monkeypatch.setattr(io, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
 
     # Pretend we loaded from a machine file but will promote to GT file CollectedData_Alice.h5
     save_target = {
@@ -112,7 +113,7 @@ def test_writer_promotion_writes_collecteddata_and_rewrites_scorer(tmp_path: Pat
     )
 
     fname = _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
-    assert fname == "CollectedData_Alice.h5"
+    assert Path(fname).name == "CollectedData_Alice.h5"
 
     gt_path = tmp_path / "CollectedData_Alice.h5"
     assert gt_path.exists()

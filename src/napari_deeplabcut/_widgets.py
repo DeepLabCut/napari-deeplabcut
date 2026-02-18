@@ -73,7 +73,7 @@ from napari_deeplabcut.misc import (
 Tip = namedtuple("Tip", ["msg", "pos"])
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
-logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp
+# logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp
 
 
 class Shortcuts(QDialog):

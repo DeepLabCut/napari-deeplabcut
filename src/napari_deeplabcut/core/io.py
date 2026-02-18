@@ -344,13 +344,13 @@ def _atomic_to_hdf(df: pd.DataFrame, out_path: Path, key: str = "keypoints") -> 
     tmp.replace(out_path)
 
 
-def write_hdf(path: None, data, attributes: dict) -> list[str]:
+def write_hdf(path: str, data, attributes: dict) -> list[str]:
     """
     NPE2 single-layer writer.
 
     Signature required by napari (manifest-based writers):
         def writer(path: str, data: Any, attributes: dict) -> List[str]
-    Writers must return a list of successfully-written paths.[1](https://napari.org/plugins/guides.html)
+    Writers must return a list of successfully-written paths.
 
     This function writes DLC keypoints to .h5 (and companion .csv).
     """
@@ -387,15 +387,20 @@ def write_hdf(path: None, data, attributes: dict) -> list[str]:
 
     # If provenance returned nothing, default to requested path
     if not out_path:
-        # strict provenance: do not write to arbitrary UI-selected path
-        raise MissingProvenanceError("Cannot resolve provenance output path; refusing to write without provenance.")
-    out = Path(out_path)
+        # Strict only for MACHINE
+        # Safety: never write back to machine sources unless promotion target exists
+        if source_kind == AnnotationKind.MACHINE:
+            raise MissingProvenanceError("Cannot resolve provenance output path for MACHINE source.")
 
-    # Safety: never write back to machine sources unless promotion target exists
-    if source_kind is AnnotationKind.MACHINE and not out_path:
-        raise MissingProvenanceError(
-            "Refined predictions are promoted to CollectedData on save. No save_target was set for this layer."
-        )
+        # GT fallback
+        root = pts_meta.root
+        if not root:
+            raise MissingProvenanceError("GT fallback requires root.")
+
+        scorer = target_scorer or pts_meta.header.scorer
+        out = Path(root) / f"CollectedData_{scorer}.h5"
+    else:
+        out = Path(out_path)
 
     # Determine destination kind (promotion writes to GT target)
     has_save_target = pts_meta.save_target is not None
@@ -414,7 +419,7 @@ def write_hdf(path: None, data, attributes: dict) -> list[str]:
 
         key_conflict = misc.keypoint_conflicts(df_old, df_new)
         if not maybe_confirm_overwrite(attributes, key_conflict):
-            return []  # user cancelled
+            raise RuntimeError("User aborted save due to keypoint conflicts.")
 
         # Harmonize indices and merge
         try:
@@ -471,7 +476,11 @@ def load_superkeypoints_json_from_path(json_path: str | Path):
     if not path.is_file():
         raise FileNotFoundError(f"Superkeypoints JSON file not found at {json_path}.")
     with open(path) as f:
-        return json.load(f)
+        payload = json.load(f)
+        if payload:
+            return payload
+        else:
+            raise ValueError(f"Superkeypoints JSON file at {json_path} is empty or invalid.")
 
 
 def load_superkeypoints_diagram_from_path(image_path: str | Path):

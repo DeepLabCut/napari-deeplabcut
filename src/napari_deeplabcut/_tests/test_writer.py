@@ -204,10 +204,11 @@ def test_write_hdf_basic(tmp_path, fake_keypoints):
         ]
     )
 
-    fname = _writer.write_hdf_napari_dlc("whatever.h5", points, metadata)
+    fnames = _writer.write_hdf_napari_dlc("whatever.h5", points, metadata)
 
-    h5_path = root / fname
-    csv_path = h5_path.with_suffix(".csv")
+    h5_path = Path(fnames[0])
+    csv_path = Path(fnames[1])
+    assert h5_path.name == csv_path.with_suffix(".h5").name == "CollectedData_me.h5"
 
     assert h5_path.exists()
     assert csv_path.exists()
@@ -230,7 +231,7 @@ def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, m
     root.mkdir()
 
     # Always allow overwrite confirmation in unit test
-    monkeypatch.setattr(_writer, "_maybe_confirm_overwrite", lambda *args, **kwargs: True)
+    monkeypatch.setattr(napari_dlc_io, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
 
     header = misc.DLCHeader(fake_keypoints.columns)
 
@@ -282,11 +283,11 @@ def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, m
 
     points = np.column_stack([np.arange(n_rows), rng.random(n_rows), rng.random(n_rows)])
 
-    fname = _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
-    assert fname == "CollectedData_me.h5"
+    fnames = _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
+    assert Path(fnames[0]).name == "CollectedData_me.h5"
 
     # GT should exist and be readable
-    df = pd.read_hdf(root / fname, key="keypoints")
+    df = pd.read_hdf(fnames[0], key="keypoints")
     assert isinstance(df, pd.DataFrame)
 
     # Must still be scored as "me" after promotion
@@ -348,7 +349,7 @@ def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, m
     root = tmp_path / "proj"
     root.mkdir()
 
-    monkeypatch.setattr(_writer, "_maybe_confirm_overwrite", lambda *args, **kwargs: True)
+    monkeypatch.setattr(napari_dlc_io, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
 
     header = misc.DLCHeader(fake_keypoints.columns)
     n_rows = len(fake_keypoints)
@@ -379,10 +380,10 @@ def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, m
 
     points = np.column_stack([np.arange(n_rows), rng.random(n_rows), rng.random(n_rows)])
 
-    fname = _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
-    assert fname == "CollectedData_alice.h5"
+    fnames = _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
+    assert Path(fnames[0]).name == "CollectedData_alice.h5"
 
-    out_h5 = root / fname
+    out_h5 = Path(fnames[0])
     assert out_h5.exists()
 
     df = pd.read_hdf(out_h5, key="keypoints")
@@ -392,32 +393,3 @@ def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, m
     assert not (root / "machinelabels-iter0.h5").exists(), (
         "Writer should not create/overwrite prediction files during promotion."
     )
-
-
-#  Write_masks — verify masks & vertices
-def test_write_masks(tmp_path):
-    foldername = str(tmp_path / "masks.h5")
-
-    # fake polygon: frame index always 0
-    data = [
-        np.array([[0, 5, 5], [0, 5, 2]]).T  # (inds, y, x)
-    ]
-
-    metadata = {
-        "metadata": {
-            "shape": (1, 10, 10),
-            "paths": ["frame0.png"],
-        }
-    }
-
-    output_dir = _writer.write_masks(foldername, data, metadata)
-    out_path = Path(output_dir)
-
-    assert out_path.exists()
-
-    # mask files present
-    mask_files = list(out_path.glob("*_obj_*.png"))
-    assert mask_files
-
-    # vertices.csv must be present
-    assert (out_path / "vertices.csv").exists()

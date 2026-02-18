@@ -1,5 +1,6 @@
 # src/napari_deeplabcut/_tests/conftest.py
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -20,6 +21,40 @@ os.environ["NAPARI_ASYNC"] = "0"  # avoid async teardown surprises in tests
 # os.environ["QT_QPA_PLATFORM"] = "offscreen"  # headless QT for CI
 # os.environ["QT_OPENGL"] = "software"  # avoid some CI issues with OpenGL
 # os.environ["PYTEST_QT_API"] = "pyqt6" # only for local testing with pyqt6, we use pyside6 otherwise
+logging.getLogger("napari_deeplabcut").propagate = True
+logging.getLogger("napari-deeplabcut").propagate = True
+
+
+@pytest.fixture(autouse=True)
+def only_deeplabcut_debug_logs():
+    """
+    Show DEBUG logs only for napari-deeplabcut.
+    Suppress DEBUG from all other libraries.
+    """
+    logging.getLogger()
+
+    # Store original levels
+    original_levels = {}
+
+    try:
+        for name, logger in logging.root.manager.loggerDict.items():
+            if not isinstance(logger, logging.Logger):
+                continue
+
+            original_levels[name] = logger.level
+
+            if not name.startswith("napari_deeplabcut") or name.startswith("napari-deeplabcut"):
+                logger.setLevel(logging.INFO)
+
+        # Ensure our plugin is verbose
+        logging.getLogger("napari_deeplabcut").setLevel(logging.DEBUG)
+
+        yield
+    finally:
+        # Restore original logger levels
+        for name, level in original_levels.items():
+            logger = logging.getLogger(name)
+            logger.setLevel(level)
 
 
 @pytest.fixture
