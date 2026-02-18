@@ -28,7 +28,7 @@ def _build_overwrite_warning_text(key_conflict: pd.DataFrame, max_items: int = 1
     return summary, details
 
 
-def _maybe_confirm_overwrite(metadata: dict, key_conflict: pd.DataFrame) -> bool:
+def maybe_confirm_overwrite(metadata: dict, key_conflict: pd.DataFrame) -> bool:
     """
     Returns True if save should proceed, False if user cancels.
     If no GUI controls are present, returns True (non-interactive).

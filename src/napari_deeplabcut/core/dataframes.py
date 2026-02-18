@@ -5,6 +5,49 @@ from __future__ import annotations
 import pandas as pd
 
 from napari_deeplabcut import misc
+from napari_deeplabcut.core.schemas import PointsWriteInputModel
+
+
+def form_df_from_validated(ctx: PointsWriteInputModel) -> pd.DataFrame:
+    """Create a DLC-style DataFrame from validated napari points + metadata."""
+    header = ctx.meta.header  # DLCHeaderModel (validated)
+    props = ctx.props
+
+    # DLC expects x,y columns; ctx.points.xy_dlc converts napari [y,x] -> [x,y]
+    temp_df = pd.DataFrame(ctx.points.xy_dlc, columns=["x", "y"])
+    temp_df["bodyparts"] = props.label
+    temp_df["individuals"] = props.id
+    temp_df["inds"] = ctx.points.frame_inds
+    temp_df["likelihood"] = props.likelihood if props.likelihood is not None else 1.0
+    temp_df["scorer"] = (
+        getattr(header.columns, "get_level_values", lambda *_: None)("scorer")[0]
+        if hasattr(header, "columns")
+        else getattr(ctx.meta.header, "scorer", None)
+    )
+
+    # If you already store scorer somewhere authoritative, prefer that:
+    # temp_df["scorer"] = ctx.meta.header.columns.get_level_values("scorer")[0]
+
+    df = temp_df.set_index(["scorer", "individuals", "bodyparts", "inds"]).stack()
+    df.index.set_names("coords", level=-1, inplace=True)
+    df = df.unstack(["scorer", "individuals", "bodyparts", "coords"])
+    df.index.name = None
+
+    # Drop individuals if this is a single-animal layout (empty ids)
+    # Here we check if all ids are '' (or falsy)
+    if all((not x) for x in props.id):
+        if "individuals" in df.columns.names:
+            df = df.droplevel("individuals", axis=1)
+
+    # Reindex to canonical header columns
+    df = df.reindex(ctx.meta.header.columns, axis=1)
+
+    # Replace integer frame index with path keys if available
+    if ctx.meta.paths:
+        df.index = [ctx.meta.paths[i] for i in df.index]
+
+    misc.guarantee_multiindex_rows(df)
+    return df
 
 
 def harmonize_keypoint_row_index(df_new: pd.DataFrame, df_old: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -28,12 +29,18 @@ from dask import delayed
 from dask_image.imread import imread
 from napari.types import LayerData
 from natsort import natsorted
+from pydantic import ValidationError
 
 from napari_deeplabcut import misc
-from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, PointsMetadata
+from napari_deeplabcut.core import schemas as dlc_schemas
+from napari_deeplabcut.core.dataframes import form_df_from_validated, harmonize_keypoint_row_index
+from napari_deeplabcut.core.errors import MissingProvenanceError, UnresolvablePathError
 from napari_deeplabcut.core.layers import populate_keypoint_layer_metadata
-from napari_deeplabcut.core.metadata import attach_source_and_io
+from napari_deeplabcut.core.metadata import attach_source_and_io, parse_points_metadata
 from napari_deeplabcut.core.paths import canonicalize_path
+from napari_deeplabcut.core.provenance import resolve_provenance_path
+from napari_deeplabcut.ui.dialogs import maybe_confirm_overwrite
 
 logger = logging.getLogger(__name__)
 
@@ -170,11 +177,286 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
         attach_source_and_io(metadata, file)
         # Override kind in io to discovered kind
         if isinstance(meta.get("io"), dict):
-            meta["io"]["kind"] = kind  # stored as enum value for JSON safety
+            meta["io"]["kind"] = kind  # stored as actual enum, not value
     else:
         attach_source_and_io(metadata, file)
 
     return [(data, metadata, "points")]
+
+
+def _set_df_scorer(df: pd.DataFrame, scorer: str) -> pd.DataFrame:
+    """Return df with scorer level set to the given scorer (if present)."""
+    scorer = (scorer or "").strip()
+    if not scorer:
+        return df
+    if not hasattr(df.columns, "names") or "scorer" not in df.columns.names:
+        return df
+
+    try:
+        cols = df.columns.to_frame(index=False)
+        cols["scorer"] = scorer
+        df = df.copy()
+        df.columns = pd.MultiIndex.from_frame(cols)
+    except Exception:
+        pass
+    return df
+
+
+def _resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str | None, AnnotationKind | None]:
+    """
+    Resolve output path with promotion support.
+
+    Returns:
+      (out_path, target_scorer, source_kind)
+
+    - Prefer PointsMetadata.save_target (promotion-to-GT).
+    - For GT sources, fall back to io/source_h5.
+    - For machine sources without save_target, return (None, None, "machine") to allow safe abort.
+    """
+    layer_meta = metadata.get("metadata")
+    if not isinstance(layer_meta, dict):
+        layer_meta = {}
+
+    pts = parse_points_metadata(layer_meta)
+    io = pts.io
+    st = pts.save_target
+
+    source_kind = getattr(io, "kind", None) if io is not None else None
+
+    # Promotion target wins
+    if st is not None:
+        try:
+            p = resolve_provenance_path(st, root_anchor=st.project_root, allow_missing=True)
+            target_scorer = getattr(st, "scorer", None)
+            if isinstance(target_scorer, str) and target_scorer.strip():
+                return str(p), target_scorer.strip(), source_kind
+            # Also accept scorer stored in dict extra
+            if isinstance(layer_meta.get("save_target"), dict):
+                s2 = layer_meta["save_target"].get("scorer")
+                if isinstance(s2, str) and s2.strip():
+                    return str(p), s2.strip(), source_kind
+            return str(p), None, source_kind
+        except (MissingProvenanceError, UnresolvablePathError):
+            return None, None, source_kind
+
+    # If source is machine/prediction and no save_target: never write back
+    if source_kind is AnnotationKind.MACHINE:
+        return None, None, source_kind
+
+    # GT source: prefer io if available
+    if io is not None:
+        try:
+            p = resolve_provenance_path(io, root_anchor=io.project_root, allow_missing=True)
+            return str(p), None, source_kind
+        except (MissingProvenanceError, UnresolvablePathError):
+            pass
+
+    # Legacy fallback: source_h5 (GT only)
+    src = layer_meta.get("source_h5")
+    if isinstance(src, str) and src:
+        return src, None, source_kind
+
+    return None, None, source_kind
+
+
+def form_df(
+    points_data,
+    layer_metadata: dict,
+    layer_properties: dict,
+) -> pd.DataFrame:
+    """
+    Form a DataFrame from points data + layer metadata, structured according to DLC conventions.
+
+    Arguments
+    ---------
+    points_data:
+        array-like of shape (N, 3) in napari-style [frame, y, x]
+    layer_metadata:
+        dict that must contain at least: 'header' (DLCHeader-like or DLCHeaderModel), optional 'paths'
+    layer_properties:
+        dict that must contain: 'label', 'id', optional 'likelihood'
+    """
+    layer_metadata = layer_metadata or {}
+    layer_properties = layer_properties or {}
+
+    # -----------------------------
+    # 1) Normalize/wrap header
+    # -----------------------------
+    header_obj = layer_metadata.get("header", None)
+    if header_obj is None:
+        raise KeyError("layer_metadata['header'] is required to write DLC keypoints.")
+
+    if isinstance(header_obj, DLCHeaderModel):
+        header_model = header_obj
+    else:
+        # Accept a misc.DLCHeader-like object (has .columns)
+        cols = getattr(header_obj, "columns", None)
+        if cols is None:
+            raise TypeError("layer_metadata['header'] must be a DLCHeaderModel or an object with a .columns attribute.")
+        header_model = DLCHeaderModel(columns=cols)
+
+    # Build a PointsMetadata model from the layer_metadata dict,
+    # but replace raw header with our DLCHeaderModel wrapper.
+    meta_payload = dict(layer_metadata)
+    meta_payload["header"] = header_model
+    pts_meta = PointsMetadata.model_validate(meta_payload)
+
+    # -----------------------------
+    # 2) Fill missing likelihood (preserve old behavior)
+    # -----------------------------
+    # Your old code assumed likelihood always existed.
+    # To remain backwards compatible, auto-fill with 1.0 if missing/None.
+    n = np.asarray(points_data).shape[0] if points_data is not None else 0
+    props_payload = dict(layer_properties)
+    if props_payload.get("likelihood", None) is None:
+        props_payload["likelihood"] = [1.0] * n
+
+    # -----------------------------
+    # 3) Validate with dedicated schemas
+    # -----------------------------
+    try:
+        points = dlc_schemas.PointsDataModel.model_validate({"data": points_data})
+        props = dlc_schemas.KeypointPropertiesModel.model_validate(props_payload)
+        ctx = dlc_schemas.PointsWriteInputModel.model_validate({"points": points, "meta": pts_meta, "props": props})
+    except ValidationError as e:
+        # Give a concise error that points to the failing part.
+        # The full `e` still has structured details if you want to log it.
+        raise ValueError(f"Invalid keypoint write inputs: {e}") from e
+
+    # -----------------------------
+    # 4) Delegate transformation
+    # -----------------------------
+    df = form_df_from_validated(ctx)
+
+    # Keep your belt-and-suspenders guarantee
+    misc.guarantee_multiindex_rows(df)
+    return df
+
+
+def _atomic_to_hdf(df: pd.DataFrame, out_path: Path, key: str = "keypoints") -> None:
+    """Best-effort atomic write: write to temp and replace."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+    # Write temp
+    df.to_hdf(tmp, key=key, mode="w")
+    # Replace
+    tmp.replace(out_path)
+
+
+def write_hdf(path: str, data, attributes: dict) -> list[str]:
+    """
+    NPE2 single-layer writer.
+
+    Signature required by napari (manifest-based writers):
+        def writer(path: str, data: Any, attributes: dict) -> List[str]
+    Writers must return a list of successfully-written paths.[1](https://napari.org/plugins/guides.html)
+
+    This function writes DLC keypoints to .h5 (and companion .csv).
+    """
+    attrs = dlc_schemas.PointsLayerAttributesModel.model_validate(attributes or {})
+    pts_meta: PointsMetadata = parse_points_metadata(attrs.metadata)
+
+    points = dlc_schemas.PointsDataModel.model_validate({"data": data})
+    props = dlc_schemas.KeypointPropertiesModel.model_validate(attrs.properties)
+
+    # Bundle + validate cross-field invariants
+    ctx = dlc_schemas.PointsWriteInputModel.model_validate(
+        {
+            "points": points,
+            "meta": pts_meta,
+            "props": props,
+        }
+    )
+
+    # Build df from points + plugin metadata + layer properties
+    df_new = form_df_from_validated(ctx)
+
+    # Decide output path:
+    # 1) User-requested path should be ignored in favor of provenance when available
+    #  This is a fallback only used when provenance is missing or unresolvable,
+    #  and is never expected to be set for this plugin
+    # requested_out = _normalize_requested_out_path(path, layer_name)
+
+    # 2) provenance/save_target is always the source of truth for where to write
+    out_path, target_scorer, source_kind = _resolve_output_path_from_metadata(attributes)
+
+    # If promoting to GT and scorer is known, rewrite scorer level
+    if target_scorer:
+        df_new = _set_df_scorer(df_new, target_scorer)
+
+    # If provenance returned nothing, default to requested path
+    if not out_path:
+        # strict provenance: do not write to arbitrary UI-selected path
+        raise MissingProvenanceError("Cannot resolve provenance output path; refusing to write without provenance.")
+    out = Path(out_path)
+
+    # Safety: never write back to machine sources unless promotion target exists
+    if source_kind is AnnotationKind.MACHINE and not out_path:
+        raise MissingProvenanceError(
+            "Refined predictions are promoted to CollectedData on save. No save_target was set for this layer."
+        )
+
+    # Determine destination kind (promotion writes to GT target)
+    has_save_target = pts_meta.save_target is not None
+    destination_kind = (
+        AnnotationKind.GT
+        if has_save_target
+        else ((pts_meta.io.kind if pts_meta.io is not None else None) or AnnotationKind.GT)
+    )
+
+    # Merge-on-save for GT
+    if destination_kind == AnnotationKind.GT and out.exists():
+        try:
+            df_old = pd.read_hdf(out, key="keypoints")
+        except (KeyError, ValueError):
+            df_old = pd.read_hdf(out)
+
+        key_conflict = misc.keypoint_conflicts(df_old, df_new)
+        if not maybe_confirm_overwrite(attributes, key_conflict):
+            return []  # user cancelled
+
+        # Harmonize indices and merge
+        try:
+            misc.guarantee_multiindex_rows(df_new)
+            misc.guarantee_multiindex_rows(df_old)
+        except Exception:
+            pass
+
+        df_new, df_old = harmonize_keypoint_row_index(df_new, df_old)
+        df_out = df_new.combine_first(df_old)
+
+        # Normalize columns to DLC header if possible
+        try:
+            header = misc.DLCHeader(df_out.columns)
+            df_out = df_out.reindex(header.columns, axis=1)
+        except Exception:
+            pass
+    else:
+        df_out = df_new
+
+    # Final cleanup
+    try:
+        misc.guarantee_multiindex_rows(df_out)
+    except Exception:
+        pass
+    df_out.sort_index(inplace=True)
+
+    # Write .h5 and .csv
+    _atomic_to_hdf(df_out, out, key="keypoints")
+    csv_path = out.with_suffix(".csv")
+    df_out.to_csv(csv_path)
+
+    # Update UI controls if present (safe in headless)
+    controls = getattr(pts_meta, "controls", None)
+    if controls is not None:
+        controls._is_saved = True
+        try:
+            controls.last_saved_label.setText(f"Last saved at {str(datetime.now().time()).split('.')[0]}")
+            controls.last_saved_label.show()
+        except Exception:
+            pass
+
+    return [str(out), str(csv_path)]
 
 
 # =============================================================================

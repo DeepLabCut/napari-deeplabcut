@@ -53,77 +53,17 @@ class DLCHeaderModel(BaseModel):
     def bodyparts(self) -> list[str]:
         return list(dict.fromkeys(self.columns.get_level_values("bodyparts")))
 
+    @property
+    def scorer(self) -> str | None:
+        if hasattr(self.columns, "names") and "scorer" in self.columns.names:
+            vals = self.columns.get_level_values("scorer")
+            return str(vals[0]) if len(vals) else None
+        return None
+
 
 # -----------------------------------------------------------------------------
-# Metadata models
+# Metadata & I/O models
 # -----------------------------------------------------------------------------
-
-
-class ImageMetadata(BaseModel):
-    """
-    Metadata for Image layers.
-
-    Stored in napari layer.metadata.
-
-    Invariants
-    ----------
-    - paths, if present, define frame order
-    - root, if present, is a directory path
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    kind: MetadataKind = Field(default=MetadataKind.IMAGE, strict=True)
-    paths: list[str] | None = None
-    root: str | None = None
-    shape: tuple[int, ...] | None = None
-    name: str | None = None
-
-    def __repr__(self) -> str:
-        # Only show non-None fields, truncate long lists
-        fields = []
-        for k in ("kind", "name", "root", "shape", "paths"):
-            v = getattr(self, k)
-            if v is not None:
-                if k == "paths":
-                    if isinstance(v, list):
-                        v = f"[{len(v)} paths]"
-                fields.append(f"{k}={v!r}")
-        return f"ImageMetadata({', '.join(fields)})"
-
-
-class PointsMetadata(BaseModel):
-    """
-    Metadata for Points layers.
-
-    Invariants
-    ----------
-    - header defines keypoint structure
-    - root + paths must align with ImageMetadata when present
-    - face_color_cycles must be consistent with header
-    """
-
-    kind: MetadataKind = Field(default=MetadataKind.POINTS)
-
-    root: str | None = None
-    paths: list[str] | None = None
-    shape: tuple[int, ...] | None = None
-    name: str | None = None
-
-    project: str | None = None
-    header: DLCHeaderModel | None = None
-    io: IOProvenance | None = None
-    save_target: IOProvenance | None = None
-
-    face_color_cycles: dict[str, dict[str, Any]] | None = None
-    colormap_name: str | None = None
-
-    tables: dict[str, dict[str, str]] | None = None
-
-    # Non-serializable runtime attachments (allowed but ignored by pydantic)
-    controls: Any | None = Field(default=None, exclude=True)
-
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
 
 class AnnotationKind(str, Enum):
@@ -191,3 +131,70 @@ class IOProvenance(BaseModel):
         if v is None:
             return None
         return v.replace("\\", "/")
+
+
+class ImageMetadata(BaseModel):
+    """
+    Metadata for Image layers.
+
+    Stored in napari layer.metadata.
+
+    Invariants
+    ----------
+    - paths, if present, define frame order
+    - root, if present, is a directory path
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    kind: MetadataKind = Field(default=MetadataKind.IMAGE, strict=True)
+    paths: list[str] | None = None
+    root: str | None = None
+    shape: tuple[int, ...] | None = None
+    name: str | None = None
+
+    def __repr__(self) -> str:
+        # Only show non-None fields, truncate long lists
+        fields = []
+        for k in ("kind", "name", "root", "shape", "paths"):
+            v = getattr(self, k)
+            if v is not None:
+                if k == "paths":
+                    if isinstance(v, list):
+                        v = f"[{len(v)} paths]"
+                fields.append(f"{k}={v!r}")
+        return f"ImageMetadata({', '.join(fields)})"
+
+
+class PointsMetadata(BaseModel):
+    """
+    Metadata for Points layers.
+
+    Invariants
+    ----------
+    - header defines keypoint structure
+    - root + paths must align with ImageMetadata when present
+    - face_color_cycles must be consistent with header
+    """
+
+    kind: MetadataKind = Field(default=MetadataKind.POINTS)
+
+    root: str | None = None
+    paths: list[str] | None = None
+    shape: tuple[int, ...] | None = None
+    name: str | None = None
+
+    project: str | None = None
+    header: DLCHeaderModel | None = None
+    io: IOProvenance | None = None
+    save_target: IOProvenance | None = None
+
+    face_color_cycles: dict[str, dict[str, Any]] | None = None
+    colormap_name: str | None = None
+
+    tables: dict[str, dict[str, str]] | None = None
+
+    # Non-serializable runtime attachments (allowed but ignored by pydantic)
+    controls: Any | None = Field(default=None, exclude=True)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")

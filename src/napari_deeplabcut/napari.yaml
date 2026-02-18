@@ -17,8 +17,8 @@ contributions:
     - id: napari-deeplabcut.get_config_reader
       python_name: napari_deeplabcut._reader:get_config_reader
       title: Open config with napari DeepLabCut
-    - id: napari-deeplabcut.write_hdf
-      python_name: napari_deeplabcut._writer:write_hdf
+    - id: napari-deeplabcut.write_hdf_napari_dlc
+      python_name: napari_deeplabcut._writer:write_hdf_napari_dlc
       title: Save keypoint annotations with napari DeepLabCut
     - id: napari-deeplabcut.write_masks
       python_name: napari_deeplabcut._writer:write_masks
@@ -43,7 +43,7 @@ contributions:
       accepts_directories: true
       filename_patterns: ['*']
   writers:
-    - command: napari-deeplabcut.write_hdf
+    - command: napari-deeplabcut.write_hdf_napari_dlc
       layer_types: ["points{1}"]
       filename_extensions: [".h5"]
     - command: napari-deeplabcut.write_masks

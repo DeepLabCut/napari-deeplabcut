@@ -60,8 +60,8 @@ def overwrite_confirm(monkeypatch):
     """
     Control the overwrite-confirmation path used by the writer.
 
-    NOTE: the writer imports/uses _maybe_confirm_overwrite at module scope,
-    so we patch napari_deeplabcut._writer._maybe_confirm_overwrite.
+    NOTE: the io module imports/uses maybe_confirm_overwrite at module scope,
+    so we patch napari_deeplabcut.core.io.maybe_confirm_overwrite.
 
     API:
       - forbid(): fail test if confirmation is requested for a real overwrite
@@ -104,13 +104,13 @@ def overwrite_confirm(monkeypatch):
 
         # In "forbid" mode: allow calls only when there is no actual overwrite.
         if state["mode"] == "forbid" and n_pairs > 0:
-            raise AssertionError("_maybe_confirm_overwrite was called unexpectedly for a real overwrite (n_pairs > 0).")
+            raise AssertionError("maybe_confirm_overwrite was called unexpectedly for a real overwrite (n_pairs > 0).")
 
         return state["result"]
 
-    import napari_deeplabcut._writer as writer_mod
+    import napari_deeplabcut.core.io as io_mod
 
-    monkeypatch.setattr(writer_mod, "_maybe_confirm_overwrite", _patched_maybe_confirm_overwrite)
+    monkeypatch.setattr(io_mod, "maybe_confirm_overwrite", _patched_maybe_confirm_overwrite)
 
     class Controller:
         @property

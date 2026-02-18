@@ -51,7 +51,7 @@ from qtpy.QtWidgets import (
 
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut import keypoints, misc
-from napari_deeplabcut._writer import _form_df, _write_image
+from napari_deeplabcut._writer import _write_image
 from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.metadata import (
     infer_image_root,
@@ -440,7 +440,7 @@ class KeypointMatplotlibCanvas(QWidget):
         self.show()  # Silly hack so the window does not hang the first time it is shown
         self.hide()
 
-        self.df = _form_df(
+        self.df = io.form_df(
             points_layer.data,
             layer_metadata=points_layer.metadata,
             layer_properties=points_layer.properties,
@@ -1146,7 +1146,7 @@ class KeypointControls(QWidget):
 
             # If annotations were loaded, they should be written to a machinefile.h5 file
             if points_layer is not None:
-                df = _form_df(
+                df = io.form_df(
                     points_layer.data,
                     layer_metadata=points_layer.metadata,
                     layer_properties=points_layer.properties,

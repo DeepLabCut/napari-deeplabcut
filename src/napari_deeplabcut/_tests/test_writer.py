@@ -40,7 +40,7 @@ def test_write_image(tmp_path):
 
 #  Form_df — multi-animal + single-animal
 def _fake_metadata_for_df(df, paths):
-    """Helper for metadata for _form_df.
+    """Helper for metadata for form_df.
 
     IMPORTANT: The writer assigns properties row-wise, so we must provide
     per-row arrays (length == n_rows). We cycle through (individual, bodypart)
@@ -116,7 +116,7 @@ def test_form_df_multi_animal(fake_keypoints):
     # inds + (x,y)
     data = np.column_stack([np.arange(n), rng.random(n), rng.random(n)])
 
-    df = _writer._form_df(data, layer_metadata=metadata["metadata"], layer_properties=metadata["properties"])
+    df = napari_dlc_io.form_df(data, layer_metadata=metadata["metadata"], layer_properties=metadata["properties"])
 
     assert isinstance(df, pd.DataFrame)
     assert len(df) == n
@@ -130,7 +130,7 @@ def test_form_df_multi_animal(fake_keypoints):
 
 
 def test_form_df_single_animal(fake_keypoints):
-    """Drop the individuals level and check that _form_df handles it."""
+    """Drop the individuals level and check that form_df handles it."""
     df_single = fake_keypoints.xs("animal_0", axis=1, level="individuals")
     scorer_values = df_single.columns.get_level_values("scorer").unique()
     bodyparts_values = df_single.columns.get_level_values("bodyparts").unique()
@@ -150,7 +150,7 @@ def test_form_df_single_animal(fake_keypoints):
 
     # inds + (x,y)
     points = np.column_stack([np.arange(n), rng.random(n), rng.random(n)])
-    out = _writer._form_df(points, layer_metadata=metadata["metadata"], layer_properties=metadata["properties"])
+    out = napari_dlc_io.form_df(points, layer_metadata=metadata["metadata"], layer_properties=metadata["properties"])
 
     assert isinstance(out, pd.DataFrame)
     assert len(out) == n
@@ -204,7 +204,7 @@ def test_write_hdf_basic(tmp_path, fake_keypoints):
         ]
     )
 
-    fname = _writer.write_hdf("whatever.h5", points, metadata)
+    fname = _writer.write_hdf_napari_dlc("whatever.h5", points, metadata)
 
     h5_path = root / fname
     csv_path = h5_path.with_suffix(".csv")
@@ -282,7 +282,7 @@ def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, m
 
     points = np.column_stack([np.arange(n_rows), rng.random(n_rows), rng.random(n_rows)])
 
-    fname = _writer.write_hdf("ignored.h5", points, metadata)
+    fname = _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
     assert fname == "CollectedData_me.h5"
 
     # GT should exist and be readable
@@ -335,7 +335,7 @@ def test_write_hdf_machine_source_without_save_target_aborts(tmp_path, fake_keyp
     points = np.column_stack([np.arange(n_rows), rng.random(n_rows), rng.random(n_rows)])
 
     with pytest.raises(MissingProvenanceError):
-        _writer.write_hdf("ignored.h5", points, metadata)
+        _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
 
 
 def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, monkeypatch):
@@ -379,7 +379,7 @@ def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, m
 
     points = np.column_stack([np.arange(n_rows), rng.random(n_rows), rng.random(n_rows)])
 
-    fname = _writer.write_hdf("ignored.h5", points, metadata)
+    fname = _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
     assert fname == "CollectedData_alice.h5"
 
     out_h5 = root / fname

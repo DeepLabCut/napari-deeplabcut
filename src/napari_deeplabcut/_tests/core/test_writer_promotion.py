@@ -14,7 +14,7 @@ from napari_deeplabcut.core.errors import MissingProvenanceError
 def _make_minimal_points_metadata(
     root: Path, header, *, name: str, kind: AnnotationKind, save_target: dict | None = None
 ):
-    # Minimal metadata payload compatible with _writer._form_df usage
+    # Minimal metadata payload compatible with form_df usage
     md = {
         "name": name,
         "properties": {
@@ -65,7 +65,7 @@ def test_writer_aborts_if_machine_source_without_save_target(tmp_path: Path):
     )
 
     with pytest.raises(MissingProvenanceError):
-        _writer.write_hdf("ignored.h5", points, metadata)
+        _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
 
 
 def test_writer_promotion_writes_collecteddata_and_rewrites_scorer(tmp_path: Path, monkeypatch):
@@ -111,7 +111,7 @@ def test_writer_promotion_writes_collecteddata_and_rewrites_scorer(tmp_path: Pat
         dtype=float,
     )
 
-    fname = _writer.write_hdf("ignored.h5", points, metadata)
+    fname = _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
     assert fname == "CollectedData_Alice.h5"
 
     gt_path = tmp_path / "CollectedData_Alice.h5"

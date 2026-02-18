@@ -12,7 +12,7 @@ __all__ = (
     "get_hdf_reader",
     "get_image_reader",
     "get_video_reader",
-    "write_hdf",
+    "write_hdf_napari_dlc",
     "write_masks",
     "__version__",
 )
@@ -26,7 +26,7 @@ from ._reader import (  # noqa: F401 (explicit re-export via __all__)
     get_video_reader,
 )
 from ._writer import (  # noqa: F401 (explicit re-export via __all__)
-    write_hdf,
+    write_hdf_napari_dlc,
     write_masks,
 )
 
