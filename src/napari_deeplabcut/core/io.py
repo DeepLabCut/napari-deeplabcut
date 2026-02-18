@@ -36,12 +36,21 @@ from napari_deeplabcut.core.paths import canonicalize_path
 
 logger = logging.getLogger(__name__)
 
+# -----------------------------------------------------------------------------
+# Supported formats (shared by image/video readers)
+# -----------------------------------------------------------------------------
 # FIXME move to config/data_formats.py or similar if more formats are added
 SUPPORTED_IMAGES = (".jpg", ".jpeg", ".png")
 SUPPORTED_VIDEOS = (".mp4", ".mov", ".avi")
 
 
+# =============================================================================
+# CONFIG (YAML)
+# =============================================================================
+
+
 def load_config(config_path: str):
+    # NOTE: intentionally minimal; callers own error handling
     with open(config_path) as file:
         return yaml.safe_load(file)
 
@@ -75,9 +84,11 @@ def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
         yaml.safe_dump(params, f)
 
 
-# -----------------------------------------------------------------------------
-# Read HDF data
-# -----------------------------------------------------------------------------
+# =============================================================================
+# KEYPOINTS / ANNOTATIONS (HDF5)
+# =============================================================================
+# NOTE: This reader returns a napari Points layer (data + metadata + "points")
+# and attaches provenance via attach_source_and_io.
 
 
 def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[LayerData]:
@@ -87,6 +98,8 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     header = misc.DLCHeader(temp.columns)
     temp = temp.droplevel("scorer", axis=1)
 
+    # Handle legacy/single-animal column layout by inserting empty "individuals" level.
+    # Colormap selection also falls back to config when possible.
     if "individuals" not in temp.columns.names:
         old_idx = temp.columns.to_frame()
         old_idx.insert(0, "individuals", "")
@@ -99,6 +112,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     else:
         colormap = "Set3"
 
+    # If the on-disk index is a MultiIndex (path parts), collapse it to string paths.
     if isinstance(temp.index, pd.MultiIndex):
         temp.index = [str(Path(*row)) for row in temp.index]
 
@@ -113,6 +127,8 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     data = np.empty((nrows, 3))
     image_paths = df["level_0"]
 
+    # Convert image keys to integer indices when they are already numeric,
+    # otherwise encode category paths deterministically.
     if pd.api.types.is_numeric_dtype(getattr(image_paths, "dtype", np.asarray(image_paths).dtype)):
         image_inds = image_paths.values
         paths2inds = []
@@ -153,9 +169,12 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     return [(data, metadata, "points")]
 
 
-# ------------------------------------------------------------------------------
-# Superkeypoints diagram and JSON loading (for DLCHeader superkeypoints support)
-# -----------------------------------------------------------------------------
+# =============================================================================
+# SUPERKEYPOINTS (assets: diagram + JSON)
+# =============================================================================
+# NOTE: These are used to support DLCHeader superkeypoints workflows.
+
+
 def load_superkeypoints_diagram(super_animal: str):
     path = str(Path(__file__).parent / "assets" / f"{super_animal}.jpg")
     try:
@@ -170,6 +189,12 @@ def load_superkeypoints(super_animal: str):
         raise FileNotFoundError(f"Superkeypoints JSON file not found for {super_animal}.")
     with open(path) as f:
         return json.load(f)
+
+
+# =============================================================================
+# IMAGES (lazy stack with Dask)
+# =============================================================================
+# NOTE: Image reading uses OpenCV for normalization and Dask for laziness.
 
 
 # Helper functions for lazy image reading and normalization
@@ -335,6 +360,7 @@ def read_images(path: str | Path | list[str | Path]):
 
     # Multiple images → lazy-imread stack
     if len(filepaths) > 1:
+        # NOTE: canonicalize_path(fp, 3) stores a stable relative-ish path for the UI/metadata.
         relative_paths = [canonicalize_path(fp, 3) for fp in filepaths]
         params = {
             "name": "images",
@@ -356,6 +382,11 @@ def read_images(path: str | Path | list[str | Path]):
         },
     }
     return [(imread(str(image_path)), params, "image")]
+
+
+# =============================================================================
+# VIDEO (OpenCV; optional PyAV fallback)
+# =============================================================================
 
 
 def is_video(filename: str) -> bool:
