@@ -57,7 +57,7 @@ from napari_deeplabcut._reader import (
     is_video,
 )
 from napari_deeplabcut._writer import _form_df, _write_image
-from napari_deeplabcut.config.models import ImageMetadata, IOProvenance, PointsMetadata
+from napari_deeplabcut.config.models import ImageMetadata, IOProvenance, PointsMetadata, AnnotationKind
 from napari_deeplabcut.core.io import write_config
 from napari_deeplabcut.core.metadata import (
     get_default_scorer,
@@ -360,7 +360,9 @@ def _ensure_promotion_save_target(self, layer: Points) -> bool:
 
     # Only promote if source is machine/prediction
     src_kind = getattr(io, "kind", None) if io is not None else None
-    if str(src_kind) != "machine":
+
+    # Only machine layers need promotion-to-GT
+    if src_kind is not AnnotationKind.MACHINE:
         return True  # GT sources can save normally
 
     anchor = _safe_folder_anchor_from_points_layer(layer)
@@ -414,7 +416,7 @@ def _ensure_promotion_save_target(self, layer: Points) -> bool:
     st = IOProvenance(
         project_root=anchor,
         source_relpath_posix=target_name,  # file lives directly in anchor folder
-        kind="gt",
+        kind=AnnotationKind.GT,
         dataset_key="keypoints",
         scorer=scorer,  # extra field (allowed by IOProvenance extra='allow')
     )
@@ -1154,9 +1156,9 @@ class KeypointControls(QWidget):
         low = p.name.lower()
         kind = None
         if low.startswith("collecteddata"):
-            kind = "gt"
+            kind = AnnotationKind.GT
         elif low.startswith("machinelabels"):
-            kind = "machine"
+            kind = AnnotationKind.MACHINE
 
         relposix = canonicalize_path(p, n=1)
         io = IOProvenance(

@@ -8,9 +8,10 @@ import pytest
 
 from napari_deeplabcut import _writer, misc
 from napari_deeplabcut.core.errors import MissingProvenanceError
+from napari_deeplabcut.config.models import AnnotationKind
 
 
-def _make_minimal_points_metadata(root: Path, header, *, name: str, kind: str, save_target: dict | None = None):
+def _make_minimal_points_metadata(root: Path, header, *, name: str, kind: AnnotationKind, save_target: dict | None = None):
     # Minimal metadata payload compatible with _writer._form_df usage
     md = {
         "name": name,
@@ -50,7 +51,7 @@ def test_writer_aborts_if_machine_source_without_save_target(tmp_path: Path):
     header = misc.DLCHeader(cols)
 
     metadata = _make_minimal_points_metadata(
-        tmp_path, header, name="machinelabels-iter0", kind="machine", save_target=None
+        tmp_path, header, name="machinelabels-iter0", kind=AnnotationKind.MACHINE, save_target=None
     )
 
     points = np.array(
@@ -81,7 +82,7 @@ def test_writer_promotion_writes_collecteddata_and_rewrites_scorer(tmp_path: Pat
         "schema_version": 1,
         "project_root": str(tmp_path),
         "source_relpath_posix": "CollectedData_Alice.h5",
-        "kind": "gt",
+        "kind": AnnotationKind.GT,
         "dataset_key": "keypoints",
         "scorer": "Alice",
     }
@@ -90,7 +91,7 @@ def test_writer_promotion_writes_collecteddata_and_rewrites_scorer(tmp_path: Pat
         tmp_path,
         header,
         name="machinelabels-iter0",
-        kind="machine",
+        kind=AnnotationKind.MACHINE,
         save_target=save_target,
     )
 

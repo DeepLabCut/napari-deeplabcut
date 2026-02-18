@@ -9,15 +9,15 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from napari_deeplabcut.config.models import ImageMetadata, IOProvenance, PointsMetadata
+from napari_deeplabcut.config.models import ImageMetadata, IOProvenance, PointsMetadata, AnnotationKind
+from napari_deeplabcut.core.paths import canonicalize_path
 from napari_deeplabcut.core.errors import (
     AmbiguousSaveError,
     MissingProvenanceError,
     UnresolvablePathError,
 )
 
-_SIDECAR_NAME = ".napari-deeplabcut.json"
-_SCHEMA_VERSION = 1
+
 
 logger = logging.getLogger(__name__)
 
@@ -223,80 +223,6 @@ def merge_model_into_metadata(
     return metadata
 
 
-# -----------------------------------------------------------------------------
-# Provenance normalization and resolution
-# -----------------------------------------------------------------------------
-
-
-def normalize_provenance(io: IOProvenance | None) -> IOProvenance | None:
-    """Normalize provenance fields for stable storage.
-
-    - Ensures source_relpath_posix uses '/' separators.
-    - Leaves unknown extra fields untouched.
-
-    Returns the same instance type (model_copy) to avoid mutating caller state.
-    """
-    if io is None:
-        return None
-
-    # IOProvenance already normalizes via validator, but we may receive a partially
-    # constructed instance (or older dict-derived values). Keep this minimal.
-    src = io.source_relpath_posix
-    if src is not None:
-        src = src.replace("\\\\", "/").replace("\\", "/")
-
-    return io.model_copy(update={"source_relpath_posix": src})
-
-
-def resolve_provenance_path(
-    io: IOProvenance | None,
-    *,
-    root_anchor: str | Path | None = None,
-    allow_missing: bool = False,
-) -> Path:
-    """Resolve IOProvenance into a concrete filesystem Path.
-
-    Parameters
-    ----------
-    io:
-        Provenance model. Must contain source_relpath_posix.
-    root_anchor:
-        Configurable root directory used to resolve relative paths. If not
-        provided, ``io.project_root`` is used.
-    allow_missing:
-        If True, returns the resolved path even if it does not exist.
-
-    Raises
-    ------
-    MissingProvenanceError:
-        If io is None or does not contain source_relpath_posix.
-    UnresolvablePathError:
-        If neither root_anchor nor io.project_root is available.
-
-    Returns
-    -------
-    pathlib.Path
-        Resolved target path.
-    """
-    if io is None or not io.source_relpath_posix:
-        raise MissingProvenanceError("Missing IO provenance (source_relpath_posix is required).")
-
-    io = normalize_provenance(io) or io
-
-    anchor = root_anchor or io.project_root
-    if not anchor:
-        raise UnresolvablePathError(
-            "Cannot resolve provenance path: no root anchor provided and io.project_root is missing."
-        )
-
-    # Resolve POSIX relpath against anchor using PurePosixPath for OS-agnostic storage.
-    rel = PurePosixPath(io.source_relpath_posix)
-    resolved = Path(anchor) / Path(*rel.parts)
-
-    if not allow_missing and not resolved.exists():
-        raise UnresolvablePathError(f"Resolved provenance path does not exist: {resolved}")
-
-    return resolved
 
 
 def require_unique_target(
@@ -315,59 +241,41 @@ def require_unique_target(
     return candidates[0]
 
 
-# --------------------------------------------------------------------------------
-# Sidecar storage for folder-scoped napari-deeplabcut preferences.
+def _attach_source_and_io(metadata: dict, file_path: Path) -> None:
+    """
+    Attach authoritative source info + minimal IOProvenance to the layer metadata dict.
 
-# This is intentionally non-invasive: DeepLabCut ignores unknown files in folders.
-# We store minimal, portable info (e.g., default scorer) to avoid repeated prompts
-# when config.yaml is missing (common for shared labeled-data folders).
+    - Keeps legacy source_h5 fields for migration.
+    - Stores IOProvenance as a plain dict under metadata['metadata']['io'].
+    - Uses core.paths.canonicalize_path for OS-agnostic relpaths.
+    """
+    meta = metadata.setdefault("metadata", {})
 
-
-# File name: .napari-deeplabcut.json
-# Location:  anchor folder (typically the labeled-data/<video> folder)
-# --------------------------------------------------------------------------------
-def sidecar_path(anchor: str | Path) -> Path:
-    return Path(anchor) / _SIDECAR_NAME
-
-
-def read_sidecar(anchor: str | Path) -> dict[str, Any]:
-    """Read sidecar JSON. Returns empty dict on missing/invalid."""
-    p = sidecar_path(anchor)
-    if not p.exists() or not p.is_file():
-        return {}
+    # --- legacy migration fields (still useful for debugging/backfill) ---
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        src_abs = str(file_path.expanduser().resolve())
     except Exception:
-        logger.debug("Failed to read sidecar %s", p, exc_info=True)
-        return {}
+        src_abs = str(file_path)
 
+    meta["source_h5"] = src_abs
+    meta["source_h5_name"] = file_path.name
+    meta["source_h5_stem"] = file_path.stem
 
-def write_sidecar(anchor: str | Path, data: dict[str, Any]) -> None:
-    """Write sidecar JSON atomically-ish."""
-    p = sidecar_path(anchor)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    payload = dict(data)
-    payload.setdefault("schema_version", _SCHEMA_VERSION)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.replace(p)
+    # Root anchor: default to file parent (works when only labeled-data folder is shared)
+    try:
+        anchor = str(file_path.expanduser().resolve().parent)
+    except Exception:
+        anchor = str(file_path.parent)
 
+    # Relative path stored OS-agnostic (POSIX). With anchor=file parent, this is filename.
+    relposix = canonicalize_path(file_path, n=1)
+    kind = _infer_annotation_kind_from_discovery(file_path)
 
-def get_default_scorer(anchor: str | Path) -> str | None:
-    """Return default scorer stored in sidecar, if present and non-empty."""
-    data = read_sidecar(anchor)
-    scorer = data.get("default_scorer")
-    if isinstance(scorer, str) and scorer.strip():
-        return scorer.strip()
-    return None
-
-
-def set_default_scorer(anchor: str | Path, scorer: str) -> None:
-    """Persist a non-empty scorer to sidecar."""
-    scorer = (scorer or "").strip()
-    if not scorer:
-        raise ValueError("default_scorer must be non-empty")
-    data = read_sidecar(anchor)
-    data["schema_version"] = _SCHEMA_VERSION
-    data["default_scorer"] = scorer
-    write_sidecar(anchor, data)
+    io = IOProvenance(
+        project_root=anchor,
+        source_relpath_posix=relposix,
+        kind=kind,
+        dataset_key="keypoints",
+    )
+    # Store as plain dict so it round-trips safely in napari metadata
+    meta["io"] = io.model_dump(exclude_none=True)

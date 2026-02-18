@@ -27,10 +27,14 @@ valid sources, with an optional inferred H5 companion if present.
 from __future__ import annotations
 
 from collections.abc import Iterable
+import json
+from enum import Enum
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+import numpy as np
+import pandas as pd
 from natsort import natsorted
 
 from napari_deeplabcut.config.models import AnnotationKind
@@ -178,3 +182,83 @@ def iter_annotation_candidates(paths: Iterable[str | Path]) -> list[Path]:
 def write_config(config_path: str, params: dict):
     with open(config_path, "w") as file:
         yaml.safe_dump(params, file)
+
+
+
+
+
+# -----------------------------------------------------------------------------
+# Read HDF data
+# -----------------------------------------------------------------------------
+
+def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[LayerData]:
+    """Read a single H5 file and attach provenance with optional explicit kind."""
+    temp = pd.read_hdf(str(file))
+    temp = misc.merge_multiple_scorers(temp)
+    header = misc.DLCHeader(temp.columns)
+    temp = temp.droplevel("scorer", axis=1)
+
+    if "individuals" not in temp.columns.names:
+        old_idx = temp.columns.to_frame()
+        old_idx.insert(0, "individuals", "")
+        temp.columns = pd.MultiIndex.from_frame(old_idx)
+        try:
+            cfg = _load_config(misc.find_project_config_path(str(file)))
+            colormap = cfg["colormap"]
+        except FileNotFoundError:
+            colormap = "rainbow"
+    else:
+        colormap = "Set3"
+
+    if isinstance(temp.index, pd.MultiIndex):
+        temp.index = [str(Path(*row)) for row in temp.index]
+
+    df = (
+        temp.stack(["individuals", "bodyparts"])
+        .reindex(header.individuals, level="individuals")
+        .reindex(header.bodyparts, level="bodyparts")
+        .reset_index()
+    )
+
+    nrows = df.shape[0]
+    data = np.empty((nrows, 3))
+    image_paths = df["level_0"]
+
+    if pd.api.types.is_numeric_dtype(getattr(image_paths, "dtype", np.asarray(image_paths).dtype)):
+        image_inds = image_paths.values
+        paths2inds = []
+    else:
+        image_inds, paths2inds = misc.encode_categories(
+            image_paths,
+            is_path=True,
+            return_unique=True,
+            do_sort=True,
+        )
+
+    data[:, 0] = image_inds
+    data[:, 1:] = df[["y", "x"]].to_numpy()
+
+    metadata = _populate_metadata(
+        header,
+        labels=df["bodyparts"],
+        ids=df["individuals"],
+        likelihood=df.get("likelihood"),
+        paths=list(paths2inds),
+        colormap=colormap,
+    )
+    metadata["name"] = file.stem
+    metadata["metadata"]["root"] = str(file.parent)
+    metadata["metadata"]["name"] = metadata["name"]
+
+    # Attach provenance. If explicit kind provided, we store it directly.
+    if kind is not None:
+        meta = metadata.setdefault("metadata", {})
+        # Keep legacy source fields too
+        _attach_source_and_io(metadata, file)
+        # Override kind in io to discovered kind
+        if isinstance(meta.get("io"), dict):
+            meta["io"]["kind"] = kind.value  # stored as enum value for JSON safety
+    else:
+        _attach_source_and_io(metadata, file)
+
+    return [(data, metadata, "points")]

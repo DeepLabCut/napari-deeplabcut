@@ -73,7 +73,7 @@ class ImageMetadata(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    kind: MetadataKind = Field(default=MetadataKind.IMAGE)
+    kind: MetadataKind = Field(default=MetadataKind.IMAGE, strict=True)
     paths: list[str] | None = None
     root: str | None = None
     shape: tuple[int, ...] | None = None
@@ -178,7 +178,7 @@ class IOProvenance(BaseModel):
         default=None,
         description="Project-relative POSIX path to the source .h5 (forward slashes).",
     )
-    kind: AnnotationKind | None = Field(default=None, description="Annotation kind for routing")
+    kind: AnnotationKind | None = Field(default=None, description="Annotation kind for routing", strict=True)
     dataset_key: str = Field(default="keypoints", description="HDF5 key for keypoints table")
 
     @field_validator("source_relpath_posix")

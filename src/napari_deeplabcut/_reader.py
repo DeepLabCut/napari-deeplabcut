@@ -18,7 +18,7 @@ from natsort import natsorted
 
 from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import AnnotationKind, IOProvenance
-from napari_deeplabcut.core.io import discover_annotations
+from napari_deeplabcut.core.io import discover_annotations, read_hdf_single
 from napari_deeplabcut.core.paths import canonicalize_path, looks_like_dlc_labeled_folder
 
 SUPPORTED_IMAGES = ".jpg", ".jpeg", ".png"
@@ -115,22 +115,24 @@ def get_folder_parser(path):
     # We explicitly avoid "first match wins" behavior.
     # ---------------------------------------------------------------------
     artifacts = discover_annotations(path)
+    h5_artifacts = [(Path(a.h5_path), getattr(a, "kind", None)) for a in artifacts if a.h5_path is not None]
 
-    h5_files = [a.h5_path for a in artifacts if a.h5_path is not None]
-    if not h5_files:
+    if not h5_artifacts:
         # No H5 artifacts found. Keep existing behavior: only images will load.
         # (We do not attempt to load CSV-only here because policy is "H5 only".)
         return lambda _: layers
 
     errors: list[tuple[type, str, Exception]] = []
-    for h5 in h5_files:
+
+    for h5_path, k in h5_artifacts:
         try:
-            layers.extend(read_hdf(str(h5)))
+            kind = k if isinstance(k, AnnotationKind) else (AnnotationKind(k) if isinstance(k, str) and k else None)
+            layers.extend(read_hdf_single(h5_path, kind=kind))
         except Exception as e:
             # Don't silently skip: collect errors and fail deterministically
             # if nothing else loads successfully.
-            logger.debug("Could not read annotation data from %s", h5, exc_info=True)
-            exc = (RuntimeError, f"Could not read annotation data from {h5}", e)
+            logger.debug("Could not read annotation data from %s", h5_path, exc_info=True)
+            exc = (RuntimeError, f"Could not read annotation data from {h5_path}", e)
             errors.append(exc)
 
     # If we found H5 files but failed to load all of them, raise only if none loaded.
@@ -269,56 +271,8 @@ def _lazy_imread(
         ) from e
 
 
-def _infer_annotation_kind_from_filename(p: Path) -> str | None:
-    # FUTURE NOTE @C-Achard 2026-02-17: Do not hardcode these patterns
-    # and clearly expose these if data file formats change or expand.
-    name = p.name.lower()
-    if name.startswith("collecteddata"):
-        return AnnotationKind.GT.value
-    if name.startswith("machinelabels"):
-        return AnnotationKind.MACHINE.value
-    return None
 
 
-def _attach_source_and_io(metadata: dict, file_path: Path) -> None:
-    """
-    Attach authoritative source info + minimal IOProvenance to the layer metadata dict.
-
-    - Keeps legacy source_h5 fields for migration.
-    - Stores IOProvenance as a plain dict under metadata['metadata']['io'].
-    - Uses core.paths.canonicalize_path for OS-agnostic relpaths.
-    """
-    meta = metadata.setdefault("metadata", {})
-
-    # --- legacy migration fields (still useful for debugging/backfill) ---
-    try:
-        src_abs = str(file_path.expanduser().resolve())
-    except Exception:
-        src_abs = str(file_path)
-
-    meta["source_h5"] = src_abs
-    meta["source_h5_name"] = file_path.name
-    meta["source_h5_stem"] = file_path.stem
-
-    # Root anchor: default to file parent (works when only labeled-data folder is shared)
-    try:
-        anchor = str(file_path.expanduser().resolve().parent)
-    except Exception:
-        anchor = str(file_path.parent)
-
-    kind = _infer_annotation_kind_from_filename(file_path)
-
-    # Relative path stored OS-agnostic (POSIX). With anchor=file parent, this is filename.
-    relposix = canonicalize_path(file_path, n=1)
-
-    io = IOProvenance(
-        project_root=anchor,
-        source_relpath_posix=relposix,
-        kind=kind,
-        dataset_key="keypoints",
-    )
-    # Store as plain dict so it round-trips safely in napari metadata
-    meta["io"] = io.model_dump(exclude_none=True)
 
 
 # Read images from a list of files or a glob/string path
@@ -472,68 +426,9 @@ def read_config(configname: str) -> list[LayerData]:
 
 # Read HDF file and create keypoint layers
 def read_hdf(filename: str) -> list[LayerData]:
-    config_path = misc.find_project_config_path(filename)
     layers = []
     for file in Path(filename).parent.glob(Path(filename).name):
-        temp = pd.read_hdf(str(file))
-        temp = misc.merge_multiple_scorers(temp)
-        header = misc.DLCHeader(temp.columns)
-        temp = temp.droplevel("scorer", axis=1)
-        if "individuals" not in temp.columns.names:
-            # Append a fake level to the MultiIndex
-            # to make it look like a multi-animal DataFrame
-            old_idx = temp.columns.to_frame()
-            old_idx.insert(0, "individuals", "")
-            temp.columns = pd.MultiIndex.from_frame(old_idx)
-            try:
-                cfg = _load_config(config_path)
-                colormap = cfg["colormap"]
-            except FileNotFoundError:
-                colormap = "rainbow"
-        else:
-            colormap = "Set3"
-        if isinstance(temp.index, pd.MultiIndex):
-            temp.index = [str(Path(*row)) for row in temp.index]
-        df = (
-            temp.stack(["individuals", "bodyparts"])
-            .reindex(header.individuals, level="individuals")
-            .reindex(header.bodyparts, level="bodyparts")
-            .reset_index()
-        )
-        nrows = df.shape[0]
-        data = np.empty((nrows, 3))
-        image_paths = df["level_0"]
-        if pd.api.types.is_numeric_dtype(getattr(image_paths, "dtype", np.asarray(image_paths).dtype)):
-            image_inds = image_paths.values
-            paths2inds = []
-        else:
-            image_inds, paths2inds = misc.encode_categories(
-                image_paths,
-                is_path=True,
-                return_unique=True,
-                do_sort=True,
-            )
-
-        data[:, 0] = image_inds
-        data[:, 1:] = df[["y", "x"]].to_numpy()
-        metadata = _populate_metadata(
-            header,
-            labels=df["bodyparts"],
-            ids=df["individuals"],
-            likelihood=df.get("likelihood"),
-            paths=list(paths2inds),
-            colormap=colormap,
-        )
-        # Layer display name (presentation)
-        metadata["name"] = Path(file).stem
-
-        # Root folder where the annotation file lives (legacy behavior)
-        metadata["metadata"]["root"] = str(Path(file).parent)
-
-        # Store file name in case the layer's name is edited by the user (legacy behavior)
-        metadata["metadata"]["name"] = metadata["name"]
-        _attach_source_and_io(metadata, file)
-        layers.append((data, metadata, "points"))
+        layers.extend(read_hdf_single(file))
     return layers
 
 

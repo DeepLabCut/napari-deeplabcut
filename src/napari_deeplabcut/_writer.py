@@ -17,6 +17,8 @@ from napari_deeplabcut import misc
 from napari_deeplabcut.core.errors import MissingProvenanceError, UnresolvablePathError
 from napari_deeplabcut.core.metadata import parse_points_metadata, resolve_provenance_path
 from napari_deeplabcut.ui.dialogs import _maybe_confirm_overwrite
+from napari_deeplabcut.config.models import IOProvenance, AnnotationKind
+from napari_deeplabcut.core.dataframes import harmonize_keypoint_row_index
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +77,7 @@ def _form_df(points_data, metadata):
     return df
 
 
-def _resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str | None, str | None]:
+def _resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str | None, AnnotationKind | None]:
     """
     Resolve output path with promotion support.
 
@@ -94,7 +96,7 @@ def _resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str 
     io = pts.io
     st = pts.save_target
 
-    source_kind = _kind_value(getattr(io, "kind", None) if io is not None else "")
+    source_kind = getattr(io, "kind", None) if io is not None else None
 
     # Promotion target wins
     if st is not None:
@@ -113,7 +115,7 @@ def _resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str 
             return None, None, source_kind
 
     # If source is machine/prediction and no save_target: never write back
-    if source_kind == "machine":
+    if source_kind is AnnotationKind.MACHINE:
         return None, None, source_kind
 
     # GT source: prefer io if available
@@ -176,7 +178,7 @@ def write_hdf(filename, data, metadata):
     # ------------------------------------------------------------
 
     # Never write back to machine sources; promotion must supply save_target.
-    if source_kind == "machine" and not out_path:
+    if source_kind is AnnotationKind.MACHINE and not out_path:
         raise MissingProvenanceError(
             "Refined predictions are promoted to CollectedData on save. No save_target was set for this layer."
         )
@@ -189,10 +191,12 @@ def write_hdf(filename, data, metadata):
     pts = parse_points_metadata(layer_meta)
     has_save_target = pts.save_target is not None
 
-    destination_kind = "gt" if has_save_target else str(getattr(getattr(pts, "io", None), "kind", "gt") or "gt")
-    # Note: Even if source is machine, promotion means destination is GT.
+    if has_save_target:
+        destination_kind = AnnotationKind.GT
+    else:
+        destination_kind = getattr(getattr(pts, "io", None), "kind", None) or AnnotationKind.GT
 
-    if destination_kind == "gt":
+    if destination_kind == AnnotationKind.GT:
         # ------------------------------------------------------------
         # Ground-truth destination: safe merge-on-save + overwrite confirm
         # ------------------------------------------------------------
@@ -215,7 +219,8 @@ def write_hdf(filename, data, metadata):
                 misc.guarantee_multiindex_rows(df_old)
             except Exception:
                 pass
-
+            
+            df_new, df_old = harmonize_keypoint_row_index(df_new, df_old)
             df_out = df_new.combine_first(df_old)
 
             try:

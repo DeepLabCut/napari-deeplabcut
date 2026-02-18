@@ -9,6 +9,7 @@ from skimage.io import imread
 from napari_deeplabcut import _writer, misc
 from napari_deeplabcut.core import io as napari_dlc_io
 from napari_deeplabcut.core.errors import MissingProvenanceError
+from napari_deeplabcut.config.models import AnnotationKind
 
 rng = np.random.default_rng(42)
 
@@ -79,14 +80,14 @@ def _fake_metadata_for_df(df, paths):
     }
 
 
-def _add_source_io(metadata: dict, *, root: Path, kind: str, source_name: str) -> None:
+def _add_source_io(metadata: dict, *, root: Path, kind: AnnotationKind, source_name: str) -> None:
     """Attach minimal PointsMetadata.io dict to metadata['metadata']."""
     md = metadata.setdefault("metadata", {})
     md["io"] = {
         "schema_version": 1,
         "project_root": str(root),
         "source_relpath_posix": source_name.replace("\\", "/"),
-        "kind": kind,  # "machine" or "gt"
+        "kind": kind,  # AnnotationKind.GT or AnnotationKind.MACHINE
         "dataset_key": "keypoints",
     }
     # legacy migration compatibility (optional but good)
@@ -102,7 +103,7 @@ def _add_save_target(metadata: dict, *, root: Path, scorer: str) -> None:
         "schema_version": 1,
         "project_root": str(root),
         "source_relpath_posix": f"CollectedData_{scorer}.h5",
-        "kind": "gt",
+        "kind": AnnotationKind.GT,  # save_target is always GT
         "dataset_key": "keypoints",
         "scorer": scorer,
     }
@@ -220,7 +221,7 @@ def test_write_hdf_basic(tmp_path, fake_keypoints):
 def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, monkeypatch):
     """
     Promotion contract:
-      - source is machine/prediction (io.kind == "machine")
+      - source is machine/prediction (io.kind is AnnotationKind.MACHINE)
       - save_target points to CollectedData_<scorer>.h5
       - writer must MERGE safely into GT (not overwrite blindly),
         and must NOT write back to prediction file.
@@ -256,14 +257,22 @@ def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, m
     }
 
     # Source provenance: machine/prediction file
-    _add_source_io(metadata, root=root, kind="machine", source_name="machinelabels-iter0.h5")
+    _add_source_io(metadata, root=root, kind=AnnotationKind.MACHINE, source_name="machinelabels-iter0.h5")
 
     # Promotion target: existing GT
     _add_save_target(metadata, root=root, scorer="me")
 
-    # Create existing GT file with key="keypoints" (writer expects this!)
+    # Create existing GT file with DLC-like path-based index (not RangeIndex)
     gt_path = root / "CollectedData_me.h5"
-    fake_keypoints.to_hdf(gt_path, key="keypoints", mode="w")
+    gt = fake_keypoints.copy()
+
+    # Use the same "paths" convention as the writer uses when forming df_new
+    gt.index = [f"img{i}.png" for i in range(len(gt))]
+
+    # Convert to MultiIndex of path components (matches refactored indexing model)
+    misc.guarantee_multiindex_rows(gt)
+
+    gt.to_hdf(gt_path, key="keypoints", mode="w")
 
     # Create a machine file too; it must remain untouched
     machine_path = root / "machinelabels-iter0.h5"
@@ -321,7 +330,7 @@ def test_write_hdf_machine_source_without_save_target_aborts(tmp_path, fake_keyp
         },
     }
 
-    _add_source_io(metadata, root=root, kind="machine", source_name="machinelabels-iter0.h5")
+    _add_source_io(metadata, root=root, kind=AnnotationKind.MACHINE, source_name="machinelabels-iter0.h5")
 
     points = np.column_stack([np.arange(n_rows), rng.random(n_rows), rng.random(n_rows)])
 
@@ -365,7 +374,7 @@ def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, m
         },
     }
 
-    _add_source_io(metadata, root=root, kind="machine", source_name="machinelabels-iter0.h5")
+    _add_source_io(metadata, root=root, kind=AnnotationKind.MACHINE, source_name="machinelabels-iter0.h5")
     _add_save_target(metadata, root=root, scorer="alice")
 
     points = np.column_stack([np.arange(n_rows), rng.random(n_rows), rng.random(n_rows)])
