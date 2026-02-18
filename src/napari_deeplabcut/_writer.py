@@ -23,7 +23,7 @@ def write_hdf_napari_dlc(path: str, data, attributes: dict) -> list[str]:
             "are refined by a human (as we do not want to overwrite machine labels),"
             "but that case is handled separately."
         )
-    return write_hdf(None, data, attributes)
+    return write_hdf(path, data, attributes)
 
 
 # TODO rewrite explicitly as napari-facing func

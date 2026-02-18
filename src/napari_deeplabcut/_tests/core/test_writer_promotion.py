@@ -112,8 +112,9 @@ def test_writer_promotion_writes_collecteddata_and_rewrites_scorer(tmp_path: Pat
         dtype=float,
     )
 
-    fname = _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
-    assert Path(fname).name == "CollectedData_Alice.h5"
+    fnames = _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
+    assert Path(fnames[0]).name == "CollectedData_Alice.h5"
+    assert Path(fnames[1]).name == Path(fnames[0]).with_suffix(".csv").name
 
     gt_path = tmp_path / "CollectedData_Alice.h5"
     assert gt_path.exists()

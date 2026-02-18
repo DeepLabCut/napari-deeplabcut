@@ -103,7 +103,7 @@ def _add_save_target(metadata: dict, *, root: Path, scorer: str) -> None:
         "schema_version": 1,
         "project_root": str(root),
         "source_relpath_posix": f"CollectedData_{scorer}.h5",
-        "kind": AnnotationKind.GT,  # save_target is always GT
+        "kind": "gt",
         "dataset_key": "keypoints",
         "scorer": scorer,
     }

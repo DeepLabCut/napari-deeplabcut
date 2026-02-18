@@ -1,10 +1,13 @@
+import logging
 from collections.abc import Sequence
 
 import numpy as np
 
 from napari_deeplabcut import misc
+from napari_deeplabcut.config.models import AnnotationKind
 
 # TODO move to a layers/ folder?
+logger = logging.getLogger(__name__)
 
 
 # Helper to populate keypoint layer metadata
@@ -51,3 +54,18 @@ def populate_keypoint_layer_metadata(
             "paths": paths or [],
         },
     }
+
+
+def is_machine_layer(layer) -> bool:
+    md = getattr(layer, "metadata", {}) or {}
+    io = md.get("io") or {}
+    k = io.get("kind")
+    # allow enum or string
+    if k is AnnotationKind.MACHINE:
+        return True
+    is_machine = str(k).lower() == "machine"
+    if is_machine:
+        logger.info(
+            "A literal 'machine' str was used for io.kind; please use AnnotationKind.MACHINE for better validation."
+        )
+    return is_machine

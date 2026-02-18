@@ -9,6 +9,9 @@ import pytest
 from napari.layers import Points
 from qtpy.QtWidgets import QInputDialog, QMessageBox
 
+from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.core.errors import UnresolvablePathError
+
 # -----------------------------------------------------------------------------
 # Fixtures: avoid modal hangs + control overwrite confirmation path
 # -----------------------------------------------------------------------------
@@ -580,7 +583,6 @@ def test_overwrite_warning_cancel_aborts_write(make_napari_viewer, qtbot, tmp_pa
 
 
 @pytest.mark.usefixtures("qtbot")
-@pytest.mark.xfail(strict=True, reason="Writer still routes by layer.name/root; needs provenance-based routing.")
 def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
     """
     Contract: Saving a Points layer must write back ONLY to the file it came from.
@@ -628,12 +630,9 @@ def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qt
 
 
 @pytest.mark.usefixtures("qtbot")
-@pytest.mark.xfail(
-    strict=True, reason="Machine saves currently merge into first GT file; must save back to machine file."
-)
 def test_machine_layer_does_not_modify_gt_on_save(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
     """
-    Contract: machine outputs must save to their own machine file, not merge into an arbitrary GT file.
+    Contract: machine outputs must never save to their own file.
     """
     overwrite_confirm.forbid()
 
@@ -664,18 +663,21 @@ def test_machine_layer_does_not_modify_gt_on_save(make_napari_viewer, qtbot, tmp
     _set_or_add_bodypart_xy(machine_layer, store, "bodypart2", x=55.0, y=44.0)
 
     viewer.layers.selection.active = machine_layer
-    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+
+    # FIXME exception type
+    with pytest.raises(UnresolvablePathError):
+        viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+
     qtbot.wait(200)
 
     after = {p: _snapshot_coords(p) for p in gt_paths + [machine_path]}
 
     # Only machine file should change
-    _assert_only_these_files_changed(before, after, changed={machine_path})
-    assert after[machine_path]["b2x"] == 55.0
+    _assert_only_these_files_changed(before, after, changed=set())
+    # assert after[machine_path]["b2x"] == 55.0
 
 
 @pytest.mark.usefixtures("qtbot")
-@pytest.mark.xfail(strict=True, reason="Writer uses layer.name for output; must route via source_h5_path.")
 def test_layer_rename_does_not_change_save_target(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
     """
     Contract: layer renaming must not redirect output or create new file.
@@ -722,7 +724,6 @@ def test_layer_rename_does_not_change_save_target(make_napari_viewer, qtbot, tmp
 
 
 @pytest.mark.usefixtures("qtbot")
-@pytest.mark.xfail(strict=True, reason="Placeholder save currently routes via root/name; must abort when ambiguous.")
 def test_ambiguous_placeholder_save_aborts_when_multiple_gt_exist(
     make_napari_viewer, qtbot, tmp_path, overwrite_confirm
 ):
@@ -863,9 +864,13 @@ def test_promotion_first_save_prompts_and_creates_sidecar(make_napari_viewer, qt
     controls.viewer.layers.selection.active = machine_layer
     controls.viewer.layers.selection.select_only(machine_layer)
 
+    assert "io" in machine_layer.metadata
+    assert machine_layer.metadata["io"].get("kind") in ("machine", AnnotationKind.MACHINE)
+
     # Call your menu-hooked save action (this hits promotion logic)
     controls._save_layers_dialog(selected=True)
     qtbot.wait(200)
+    assert "save_target" in machine_layer.metadata, machine_layer.metadata.keys()
 
     # Sidecar created
     sidecar = labeled_folder / ".napari-deeplabcut.json"

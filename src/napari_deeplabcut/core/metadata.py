@@ -112,9 +112,20 @@ def ensure_metadata_models(
 # -----------------------------------------------------------------------------
 # Parsing / round-tripping
 # -----------------------------------------------------------------------------
+def _normalize_columns(cols: Any) -> Any:
+    try:
+        import pandas as pd
+
+        if isinstance(cols, pd.MultiIndex):
+            return [tuple(map(str, t)) for t in cols.to_list()]
+        if isinstance(cols, pd.Index):
+            return [str(x) for x in cols.to_list()]
+    except Exception:
+        pass
+    return cols
 
 
-def _coerce_header_to_model(header: Any) -> DLCHeaderModel | None:
+def _coerce_header_to_model(header: Any, *, strict: bool = False) -> DLCHeaderModel | None:
     """Coerce various runtime header forms into DLCHeaderModel.
 
     Accepts:
@@ -123,27 +134,51 @@ def _coerce_header_to_model(header: Any) -> DLCHeaderModel | None:
     - misc.DLCHeader-like object with `.columns` (wrapped)
     """
     if header is None:
+        if strict:
+            raise ValueError("Header is None; cannot write to DLCHeaderModel.")
         return None
 
     if isinstance(header, DLCHeaderModel):
         return header
 
+    def _fail(msg: str, exc: Exception | None = None):
+        logger.debug(msg, exc_info=exc is not None)
+        if strict:
+            raise ValueError(msg) from exc
+        return None
+
     # dict-ish header
     if isinstance(header, Mapping):
         try:
-            return DLCHeaderModel.model_validate(dict(header))
+            hd = dict(header)
+            if "columns" in hd:
+                hd["columns"] = _normalize_columns(hd["columns"])
+            return DLCHeaderModel.model_validate(hd)
         except Exception:
-            return None
+            return _fail("Failed to parse header dict into DLCHeaderModel.", exc=Exception)
 
     # runtime DLCHeader-like (e.g. napari_deeplabcut.misc.DLCHeader)
     cols = getattr(header, "columns", None)
     if cols is not None:
         try:
-            return DLCHeaderModel(columns=cols)
+            return DLCHeaderModel(columns=_normalize_columns(cols))
         except Exception:
-            return None
+            return _fail("Failed to coerce header with columns into DLCHeaderModel.", exc=Exception)
 
     return None
+
+
+def _coerce_io_kind(d: dict, key: str = "kind") -> None:
+    k = d.get(key)
+    if isinstance(k, str):
+        try:
+            d[key] = AnnotationKind(k)  # works if enum values are "gt"/"machine"
+        except Exception:
+            # optionally accept upper-cased names
+            try:
+                d[key] = AnnotationKind[k.upper()]
+            except Exception:
+                pass
 
 
 def parse_points_metadata(
@@ -176,12 +211,24 @@ def parse_points_metadata(
         raw.pop("header", None)
     else:
         hdr = raw.get("header", None)
+        logger.debug("Raw header type=%r", type(hdr))
+        logger.debug("Raw header has columns=%s", hasattr(hdr, "columns"))
+        cols = getattr(hdr, "columns", None)
+        logger.debug("columns type=%r", type(cols))
         coerced = _coerce_header_to_model(hdr)
         if coerced is not None:
             raw["header"] = coerced
         else:
             # If a header was present but not usable, remove it so we can still parse.
             raw.pop("header", None)
+
+    io_dict = raw.get("io", None)
+    if isinstance(io_dict, dict):
+        _coerce_io_kind(io_dict)
+
+    st_dict = raw.get("save_target", None)
+    if isinstance(st_dict, dict):
+        _coerce_io_kind(st_dict)
 
     try:
         return PointsMetadata.model_validate(raw)

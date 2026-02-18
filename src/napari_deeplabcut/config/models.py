@@ -4,6 +4,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
+import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -20,45 +21,70 @@ class MetadataKind(str, Enum):
 # -----------------------------------------------------------------------------
 # Header model (authoritative wrapper)
 # -----------------------------------------------------------------------------
-
-
 class DLCHeaderModel(BaseModel):
-    """
-    Structured representation of a DLC header.
-
-    Invariants
-    ----------
-    - `columns` must be a pandas.MultiIndex at runtime
-    - This model does NOT serialize columns directly
-      (napari metadata may contain non-JSON objects)
-
-    This model allows opaque runtime storage.
-    """
-
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+    columns: Any = Field(...)
 
-    columns: Any = Field(
-        ...,
-        description="pandas.MultiIndex defining scorer / individuals / bodyparts / coords",
-    )
+    def as_multiindex(self) -> pd.MultiIndex:
+        cols = self.columns
 
-    @property
-    def individuals(self) -> list[str]:
-        inds = getattr(self.columns, "levels", None)
-        if inds is None or "individuals" not in self.columns.names:
-            return [""]
-        return list(dict.fromkeys(self.columns.get_level_values("individuals")))
+        # Already a MultiIndex: return as-is
+        if isinstance(cols, pd.MultiIndex):
+            return cols
 
-    @property
-    def bodyparts(self) -> list[str]:
-        return list(dict.fromkeys(self.columns.get_level_values("bodyparts")))
+        # List/tuple of tuples: infer tuple length
+        if isinstance(cols, (list, tuple)) and cols:
+            first = cols[0]
+            if not isinstance(first, (list, tuple)):
+                raise TypeError(f"columns must be tuples, got {type(first)!r}")
+
+            n = len(first)
+
+            # 4-level canonical
+            if n == 4:
+                tuples = [tuple(map(str, t)) for t in cols]
+                return pd.MultiIndex.from_tuples(
+                    tuples,
+                    names=["scorer", "individuals", "bodyparts", "coords"],
+                )
+
+            # 3-level legacy/single-animal: insert empty individuals level
+            if n == 3:
+                tuples = [(str(t[0]), "", str(t[1]), str(t[2])) for t in cols]
+                return pd.MultiIndex.from_tuples(
+                    tuples,
+                    names=["scorer", "individuals", "bodyparts", "coords"],
+                )
+
+            # Anything else: either error or accept without names
+            tuples = [tuple(map(str, t)) for t in cols]
+            return pd.MultiIndex.from_tuples(tuples, names=[None] * n)
+
+        raise TypeError(f"Unsupported columns type: {type(cols)!r}")
 
     @property
     def scorer(self) -> str | None:
-        if hasattr(self.columns, "names") and "scorer" in self.columns.names:
-            vals = self.columns.get_level_values("scorer")
+        cols = self.as_multiindex()
+        if "scorer" in (cols.names or []):
+            vals = cols.get_level_values("scorer")
             return str(vals[0]) if len(vals) else None
-        return None
+        # fallback: if names are missing, assume first level is scorer
+        return str(cols.to_list()[0][0]) if len(cols) else None
+
+    @property
+    def individuals(self) -> list[str]:
+        cols = self.as_multiindex()
+        if "individuals" not in (cols.names or []):
+            return [""]
+        return list(dict.fromkeys(cols.get_level_values("individuals")))
+
+    @property
+    def bodyparts(self) -> list[str]:
+        cols = self.as_multiindex()
+        if "bodyparts" in (cols.names or []):
+            return list(dict.fromkeys(cols.get_level_values("bodyparts")))
+        # fallback: assume bodyparts is level 2 in canonical form
+        return list(dict.fromkeys([t[2] for t in cols.to_list()]))
 
 
 # -----------------------------------------------------------------------------

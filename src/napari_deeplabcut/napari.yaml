@@ -20,7 +20,6 @@ contributions:
     - id: napari-deeplabcut.write_hdf_napari_dlc
       python_name: napari_deeplabcut._writer:write_hdf_napari_dlc
       title: Save keypoint annotations with napari DeepLabCut
-      title: Save segmentation masks with napari DeepLabCut
     - id: napari-deeplabcut.make_keypoint_controls
       python_name: napari_deeplabcut._widgets:KeypointControls
       title: Make keypoint controls

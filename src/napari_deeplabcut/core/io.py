@@ -35,7 +35,7 @@ from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, PointsMetadata
 from napari_deeplabcut.core import schemas as dlc_schemas
 from napari_deeplabcut.core.dataframes import form_df_from_validated, harmonize_keypoint_row_index
-from napari_deeplabcut.core.errors import MissingProvenanceError, UnresolvablePathError
+from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError, UnresolvablePathError
 from napari_deeplabcut.core.layers import populate_keypoint_layer_metadata
 from napari_deeplabcut.core.metadata import attach_source_and_io, parse_points_metadata
 from napari_deeplabcut.core.paths import canonicalize_path
@@ -239,10 +239,9 @@ def _resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str 
         except (MissingProvenanceError, UnresolvablePathError):
             return None, None, source_kind
 
-    # If source is machine/prediction and no save_target: never write back
-    if source_kind is AnnotationKind.MACHINE:
+    # Never save back to machine sources
+    if source_kind == AnnotationKind.MACHINE:
         return None, None, source_kind
-
     # GT source: prefer io if available
     if io is not None:
         try:
@@ -356,6 +355,8 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     """
     attrs = dlc_schemas.PointsLayerAttributesModel.model_validate(attributes or {})
     pts_meta: PointsMetadata = parse_points_metadata(attrs.metadata, drop_header=False)
+    if not pts_meta.header:
+        raise ValueError("Layer metadata must include a valid DLC header to write keypoints.")
 
     points = dlc_schemas.PointsDataModel.model_validate({"data": data})
     props = dlc_schemas.KeypointPropertiesModel.model_validate(attrs.properties)
@@ -385,6 +386,10 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     if target_scorer:
         df_new = _set_df_scorer(df_new, target_scorer)
 
+    # Never write back to machine sources without an explicit promotion target
+    if not out_path and source_kind == AnnotationKind.MACHINE:
+        raise MissingProvenanceError("Cannot resolve provenance output path for MACHINE source.")
+
     # If provenance returned nothing, default to requested path
     if not out_path:
         # Strict only for MACHINE
@@ -397,8 +402,20 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
         if not root:
             raise MissingProvenanceError("GT fallback requires root.")
 
-        scorer = target_scorer or pts_meta.header.scorer
-        out = Path(root) / f"CollectedData_{scorer}.h5"
+        root_path = Path(root)
+        candidates = sorted(root_path.glob("CollectedData_*.h5"))
+        if len(candidates) > 1:
+            raise AmbiguousSaveError(
+                f"Multiple CollectedData_*.h5 files found in {root}."
+                " Cannot determine where to save."
+                " Please specify a save_target with explicit path and scorer.",
+                candidates=[str(c) for c in candidates],
+            )
+        elif len(candidates) == 1:
+            out = candidates[0]
+        else:
+            scorer = target_scorer or pts_meta.header.scorer
+            out = root_path / f"CollectedData_{scorer}.h5"
     else:
         out = Path(out_path)
 
@@ -500,7 +517,8 @@ def load_superkeypoints_diagram(super_animal: str):
 
 def load_superkeypoints(super_animal: str):
     path = resources.files("napari_deeplabcut") / "assets" / f"{super_animal}.json"
-    return load_superkeypoints_json_from_path(path)
+    payload = load_superkeypoints_json_from_path(path)
+    return payload.get("data", payload) if isinstance(payload, dict) else payload
 
 
 # =============================================================================

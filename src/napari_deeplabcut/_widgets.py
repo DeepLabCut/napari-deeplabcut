@@ -53,6 +53,7 @@ import napari_deeplabcut.core.io as io
 from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut._writer import _write_image
 from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata, IOProvenance, PointsMetadata
+from napari_deeplabcut.core.layers import is_machine_layer
 from napari_deeplabcut.core.metadata import (
     infer_image_root,
     parse_points_metadata,
@@ -1559,10 +1560,14 @@ class KeypointControls(QWidget):
         if save_target is not None:
             return True
 
-        # Only promote if source is machine/prediction
         src_kind = getattr(io, "kind", None) if io is not None else None
 
+        is_machine = is_machine_layer(layer)
+
         # Only machine layers need promotion-to-GT
+        if not is_machine:
+            return True
+
         if src_kind is not AnnotationKind.MACHINE:
             return True  # GT sources can save normally
 
@@ -1612,7 +1617,7 @@ class KeypointControls(QWidget):
         # Compute deterministic GT target path (promotion)
         target_name = f"CollectedData_{scorer}.h5"
 
-        # Store save_target as IOProvenance dict (plain dict in napari metadata)
+        # Store save_target as IOProvenance
         st = IOProvenance(
             project_root=anchor,
             source_relpath_posix=target_name,
@@ -1621,10 +1626,9 @@ class KeypointControls(QWidget):
             scorer=scorer,
         )
 
-        # IMPORTANT: store at top level of layer.metadata
         md["save_target"] = st.model_dump(mode="python", exclude_none=True)
 
-        layer.metadata = md
+        layer.metadata.update(md)
         return True
 
     # Hack to save a KeyPoints layer without showing the Save dialog
@@ -1652,6 +1656,12 @@ class KeypointControls(QWidget):
             ok = self._ensure_promotion_save_target(layer)
             if not ok:
                 return
+
+            logger.debug(
+                "About to save. io.kind=%r save_target=%r",
+                layer.metadata.get("io", {}).get("kind"),
+                layer.metadata.get("save_target"),
+            )
 
             self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
             self.viewer.status = "Data successfully saved"
