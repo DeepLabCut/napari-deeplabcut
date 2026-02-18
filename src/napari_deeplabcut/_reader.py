@@ -9,7 +9,6 @@ from pathlib import Path
 import cv2
 import dask.array as da
 import numpy as np
-import pandas as pd
 import yaml
 from dask import delayed
 from dask_image.imread import imread
@@ -17,7 +16,7 @@ from napari.types import LayerData
 from natsort import natsorted
 
 from napari_deeplabcut import misc
-from napari_deeplabcut.config.models import AnnotationKind, IOProvenance
+from napari_deeplabcut.config.models import AnnotationKind
 from napari_deeplabcut.core.io import discover_annotations, read_hdf_single
 from napari_deeplabcut.core.paths import canonicalize_path, looks_like_dlc_labeled_folder
 
@@ -269,10 +268,6 @@ def _lazy_imread(
             "Cannot stack images with different shapes using NumPy. "
             "Ensure all images have the same shape or set stack=False."
         ) from e
-
-
-
-
 
 
 # Read images from a list of files or a glob/string path

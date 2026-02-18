@@ -14,11 +14,11 @@ from skimage.io import imsave
 from skimage.util import img_as_ubyte
 
 from napari_deeplabcut import misc
+from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.core.dataframes import harmonize_keypoint_row_index
 from napari_deeplabcut.core.errors import MissingProvenanceError, UnresolvablePathError
 from napari_deeplabcut.core.metadata import parse_points_metadata, resolve_provenance_path
 from napari_deeplabcut.ui.dialogs import _maybe_confirm_overwrite
-from napari_deeplabcut.config.models import IOProvenance, AnnotationKind
-from napari_deeplabcut.core.dataframes import harmonize_keypoint_row_index
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +219,7 @@ def write_hdf(filename, data, metadata):
                 misc.guarantee_multiindex_rows(df_old)
             except Exception:
                 pass
-            
+
             df_new, df_old = harmonize_keypoint_row_index(df_new, df_old)
             df_out = df_new.combine_first(df_old)
 

@@ -27,14 +27,12 @@ valid sources, with an optional inferred H5 companion if present.
 from __future__ import annotations
 
 from collections.abc import Iterable
-import json
-from enum import Enum
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
 import numpy as np
 import pandas as pd
+import yaml
 from natsort import natsorted
 
 from napari_deeplabcut.config.models import AnnotationKind
@@ -184,12 +182,10 @@ def write_config(config_path: str, params: dict):
         yaml.safe_dump(params, file)
 
 
-
-
-
 # -----------------------------------------------------------------------------
 # Read HDF data
 # -----------------------------------------------------------------------------
+
 
 def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[LayerData]:
     """Read a single H5 file and attach provenance with optional explicit kind."""

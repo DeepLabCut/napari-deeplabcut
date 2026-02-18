@@ -7,9 +7,9 @@ import yaml
 from skimage.io import imread
 
 from napari_deeplabcut import _writer, misc
+from napari_deeplabcut.config.models import AnnotationKind
 from napari_deeplabcut.core import io as napari_dlc_io
 from napari_deeplabcut.core.errors import MissingProvenanceError
-from napari_deeplabcut.config.models import AnnotationKind
 
 rng = np.random.default_rng(42)
 

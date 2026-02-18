@@ -1,23 +1,19 @@
 # src/napari_deeplabcut/core/metadata.py
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Iterable, Mapping
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-from napari_deeplabcut.config.models import ImageMetadata, IOProvenance, PointsMetadata, AnnotationKind
-from napari_deeplabcut.core.paths import canonicalize_path
+from napari_deeplabcut.config.models import ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.errors import (
     AmbiguousSaveError,
     MissingProvenanceError,
-    UnresolvablePathError,
 )
-
-
+from napari_deeplabcut.core.paths import canonicalize_path
 
 logger = logging.getLogger(__name__)
 
@@ -221,8 +217,6 @@ def merge_model_into_metadata(
     for k, v in dumped.items():
         metadata[k] = v
     return metadata
-
-
 
 
 def require_unique_target(

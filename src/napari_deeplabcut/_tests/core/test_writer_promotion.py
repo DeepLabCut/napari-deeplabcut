@@ -7,11 +7,13 @@ import pandas as pd
 import pytest
 
 from napari_deeplabcut import _writer, misc
-from napari_deeplabcut.core.errors import MissingProvenanceError
 from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.core.errors import MissingProvenanceError
 
 
-def _make_minimal_points_metadata(root: Path, header, *, name: str, kind: AnnotationKind, save_target: dict | None = None):
+def _make_minimal_points_metadata(
+    root: Path, header, *, name: str, kind: AnnotationKind, save_target: dict | None = None
+):
     # Minimal metadata payload compatible with _writer._form_df usage
     md = {
         "name": name,

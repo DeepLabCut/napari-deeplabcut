@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Tuple
-
 import pandas as pd
 
 from napari_deeplabcut import misc
 
 
-def harmonize_keypoint_row_index(df_new: pd.DataFrame, df_old: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def harmonize_keypoint_row_index(df_new: pd.DataFrame, df_old: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Harmonize row index representation between a freshly formed points dataframe (df_new)
     and an existing on-disk dataframe (df_old) to make combine_first/align stable.

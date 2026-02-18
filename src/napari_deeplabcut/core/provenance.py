@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from napari_deeplabcut.config.models import IOProvenance, AnnotationKind
+from napari_deeplabcut.config.models import AnnotationKind, IOProvenance
 from napari_deeplabcut.core.errors import MissingProvenanceError, UnresolvablePathError
 
 logger = logging.getLogger(__name__)

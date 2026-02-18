@@ -57,7 +57,7 @@ from napari_deeplabcut._reader import (
     is_video,
 )
 from napari_deeplabcut._writer import _form_df, _write_image
-from napari_deeplabcut.config.models import ImageMetadata, IOProvenance, PointsMetadata, AnnotationKind
+from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.io import write_config
 from napari_deeplabcut.core.metadata import (
     get_default_scorer,
