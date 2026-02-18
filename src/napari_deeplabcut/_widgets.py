@@ -941,7 +941,7 @@ class KeypointControls(QWidget):
         layer.events.add(query_next_frame=Event)
         layer.events.query_next_frame.connect(store._advance_step)
 
-        # FIXME @C-Achard duplicated code for now
+        # FIXME @C-Achard 2026-02-17 duplicated code for now
         layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
         layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
         layer.bind_key("Down", store.next_keypoint, overwrite=True)

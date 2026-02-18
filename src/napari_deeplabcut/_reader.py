@@ -270,7 +270,7 @@ def _lazy_imread(
 
 
 def _infer_annotation_kind_from_filename(p: Path) -> str | None:
-    # FUTURE NOTE @C-Achard 17/02/26: Do not hardcode these patterns
+    # FUTURE NOTE @C-Achard 2026-02-17: Do not hardcode these patterns
     # and clearly expose these if data file formats change or expand.
     name = p.name.lower()
     if name.startswith("collecteddata"):
@@ -532,25 +532,6 @@ def read_hdf(filename: str) -> list[LayerData]:
 
         # Store file name in case the layer's name is edited by the user (legacy behavior)
         metadata["metadata"]["name"] = metadata["name"]
-
-        try:
-            anchor = str(Path(file).expanduser().resolve().parent)
-        except Exception:
-            anchor = str(Path(file).parent)
-
-        kind = _infer_annotation_kind_from_filename(Path(file))
-
-        # Store relpath as POSIX, relative to anchor. In this minimal step,
-        # this becomes simply the filename; later we can support deeper relpaths.
-        relposix = canonicalize_path(file, n=1)
-
-        metadata["metadata"]["io"] = {
-            "schema_version": 1,
-            "project_root": anchor,  # configurable root anchor
-            "source_relpath_posix": relposix,  # OS-agnostic relative path
-            "kind": kind,  # "gt" | "machine" | None
-            "dataset_key": "keypoints",
-        }
         _attach_source_and_io(metadata, file)
         layers.append((data, metadata, "points"))
     return layers
