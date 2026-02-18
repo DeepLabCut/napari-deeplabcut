@@ -49,13 +49,6 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-# from napari_deeplabcut.core.io import (
-#     is_video,
-#     load_config,
-#     load_superkeypoints,
-#     load_superkeypoints_diagram,
-#     write_config,
-# )
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut._writer import _form_df, _write_image
@@ -350,7 +343,9 @@ def _ensure_promotion_save_target(self, layer: Points) -> bool:
     Returns True if save_target is set (or already existed), False if user cancels.
     """
     md = layer.metadata or {}
-    pts = parse_points_metadata(md)
+    meta = md.setdefault("metadata", {})  # <-- nested metadata is authoritative for IO routing
+
+    pts = parse_points_metadata(meta)
     io = pts.io
     save_target = pts.save_target
 
@@ -385,7 +380,6 @@ def _ensure_promotion_save_target(self, layer: Points) -> bool:
             if s is None:
                 return False
 
-            # Strong warning if user keeps generic placeholder
             if s.startswith("human_"):
                 choice = QMessageBox.question(
                     self,
@@ -415,14 +409,16 @@ def _ensure_promotion_save_target(self, layer: Points) -> bool:
     # Store save_target as IOProvenance dict (plain dict in napari metadata)
     st = IOProvenance(
         project_root=anchor,
-        source_relpath_posix=target_name,  # file lives directly in anchor folder
+        source_relpath_posix=target_name,
         kind=AnnotationKind.GT,
         dataset_key="keypoints",
-        scorer=scorer,  # extra field (allowed by IOProvenance extra='allow')
+        scorer=scorer,
     )
 
-    md["save_target"] = st.model_dump(exclude_none=True)
-    layer.metadata = md  # ensure napari sees update
+    # IMPORTANT: writer expects save_target inside metadata["metadata"]
+    meta["save_target"] = st.model_dump(mode="python", exclude_none=True)
+
+    layer.metadata = md
     return True
 
 
@@ -1219,7 +1215,9 @@ class KeypointControls(QWidget):
     def _sync_points_layers_from_image_meta(self) -> None:
         """
         Ensure all Points layers have core fields required for saving.
-        Updates layer.metadata IN PLACE to avoid dropping runtime attachments.
+
+        IMPORTANT: The writer expects the DLC runtime header at layer.metadata["metadata"]["header"].
+        Therefore, we sync fields into layer.metadata["metadata"] (nested), not top-level.
         """
         if self._image_meta is None:
             return
@@ -1230,24 +1228,35 @@ class KeypointControls(QWidget):
 
             if ly.metadata is None:
                 ly.metadata = {}
-            md = ly.metadata  # mutate in place
-            self._ensure_io_from_source_h5(md)
 
-            # Validate points metadata *authoritatively* (but do not overwrite controls)
+            md = ly.metadata  # mutate in place
+            meta = md.setdefault("metadata", {})  # nested payload used by writer
+
+            # Preserve header across any subsequent metadata operations
+            existing_header = meta.get("header", None)
+
+            # Ensure IO provenance exists (operate on nested meta, not top-level)
+            self._ensure_io_from_source_h5(meta)
+
+            # Validate points metadata from nested payload (authoritative for routing)
             try:
-                pts_model = PointsMetadata(**md)
+                pts_model = PointsMetadata(**meta)
             except Exception:
-                # If legacy metadata is malformed, don't crash; only fill missing keys
                 pts_model = PointsMetadata()
 
             synced = sync_points_from_image(self._image_meta, pts_model)
 
-            # Only fill missing values; never clobber existing non-empty values
-            for key, value in synced.model_dump(exclude_none=True).items():
+            # Fill missing values in nested meta only; never clobber existing non-empty values
+            synced_dict = synced.model_dump(mode="python", exclude_none=True)
+            for key, value in synced_dict.items():
                 if key == "controls":
                     continue
-                if md.get(key) in (None, "", []):
-                    md[key] = value
+                if meta.get(key) in (None, "", []):
+                    meta[key] = value
+
+            # Restore header if it was present before
+            if existing_header is not None and meta.get("header") is None:
+                meta["header"] = existing_header
 
     def _show_color_scheme(self):
         show = self._view_scheme_cb.isChecked()

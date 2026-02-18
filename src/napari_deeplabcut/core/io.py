@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -183,7 +184,9 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
 
 
 def load_superkeypoints_diagram(super_animal: str):
-    path = str(Path(__file__).parent / "assets" / f"{super_animal}.jpg")
+    path = resources.files("napari_deeplabcut") / "assets" / f"{super_animal}.jpg"
+    if not Path(path).is_file():
+        raise FileNotFoundError(f"Superkeypoints diagram not found for {super_animal}.")
     try:
         return imread(path), {"root": ""}, "images"
     except Exception as e:
@@ -191,7 +194,7 @@ def load_superkeypoints_diagram(super_animal: str):
 
 
 def load_superkeypoints(super_animal: str):
-    path = str(Path(__file__).parent / "assets" / f"{super_animal}.json")
+    path = resources.files("napari_deeplabcut") / "assets" / f"{super_animal}.json"
     if not Path(path).is_file():
         raise FileNotFoundError(f"Superkeypoints JSON file not found for {super_animal}.")
     with open(path) as f:

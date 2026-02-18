@@ -307,7 +307,7 @@ def test_read_images_single_glob_pattern(tmp_path):
 
 def test_video_init_and_properties(video_path):
     """Ensure Video object initializes and exposes correct properties."""
-    vid = _reader.Video(video_path)
+    vid = Video(video_path)
 
     assert len(vid) == 5  # number of frames created by fixture
     assert vid.width == 50
