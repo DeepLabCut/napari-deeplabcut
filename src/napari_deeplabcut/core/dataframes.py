@@ -105,9 +105,9 @@ def form_df_from_validated(ctx: PointsWriteInputModel) -> pd.DataFrame:
     hdr_cols = ctx.meta.header.as_multiindex()
 
     # If df columns dropped individuals, drop it from header too (if present)
-    if df.columns.nlevels == 3 and isinstance(hdr_cols, pd.MultiIndex) and hdr_cols.nlevels == 4:
-        if "individuals" in hdr_cols.names:
-            hdr_cols = hdr_cols.droplevel("individuals")
+    # if df.columns.nlevels == 3 and isinstance(hdr_cols, pd.MultiIndex) and hdr_cols.nlevels == 4:
+    #     if "individuals" in hdr_cols.names:
+    #         hdr_cols = hdr_cols.droplevel("individuals")
 
     # If df columns kept individuals but header doesn't have it, add it (single-animal)
     if df.columns.nlevels == 4 and isinstance(hdr_cols, pd.MultiIndex) and hdr_cols.nlevels == 3:

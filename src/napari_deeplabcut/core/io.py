@@ -114,7 +114,13 @@ def read_hdf(filename: str) -> list[LayerData]:
 
 
 def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[LayerData]:
-    """Read a single H5 file and attach provenance with optional explicit kind."""
+    """Read a single H5 file and attach provenance with optional explicit kind.
+
+    - Produces one Points layer per H5 file
+    - Points.data contains only finite coordinates
+    - Unlabeled keypoints are omitted from Points.data
+    - Empty Points layers are valid
+    """
     temp = pd.read_hdf(str(file))
     temp = merge_multiple_scorers(temp)
     header = misc.DLCHeader(temp.columns)
@@ -359,6 +365,10 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     Signature required by napari (manifest-based writers):
         def writer(path: str, data: Any, attributes: dict) -> List[str]
     Writers must return a list of successfully-written paths.
+
+    Contract:
+    - Empty Points layers may be written only if promoted
+    - Finite Points must always produce finite stored coordinates
 
     This function writes DLC keypoints to .h5 (and companion .csv).
     """

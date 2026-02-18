@@ -22,6 +22,10 @@ def populate_keypoint_layer_metadata(
     pcutoff: float | None = 0.6,
     colormap: str | None = "viridis",
 ) -> dict:
+    """
+    - Must accept empty labels/ids/likelihood
+    - Must not assume ≥1 point
+    """
     if labels is None:
         labels = header.bodyparts
     if ids is None:
