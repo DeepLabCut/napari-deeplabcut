@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from napari_deeplabcut.config.models import AnnotationKind
-from napari_deeplabcut.core.io import (
+from napari_deeplabcut.core.discovery import (
     discover_annotation_paths,
     discover_annotations,
     iter_annotation_candidates,

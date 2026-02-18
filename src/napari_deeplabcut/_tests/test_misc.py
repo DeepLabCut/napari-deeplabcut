@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from napari_deeplabcut import _reader, misc
+from napari_deeplabcut import misc
+from napari_deeplabcut.core.io import load_config
 
 
 # ----------------------------
@@ -384,7 +385,7 @@ def test_dlc_header():
 
 
 def test_dlc_header_from_config_multi(config_path):
-    config = _reader._load_config(config_path)
+    config = load_config(config_path)
     config["multianimalproject"] = True
     config["individuals"] = ["animal"]
     config["multianimalbodyparts"] = list("abc")

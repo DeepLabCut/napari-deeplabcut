@@ -1,11 +1,12 @@
 """
 Core IO utilities.
 
-This module is intentionally small:
-- re-exports deterministic discovery helpers (for backward-compatible imports)
-- provides config write helpers
-
-Reader/writer and napari LayerData logic must live outside core/ for separation of concerns.
+Includes:
+- Config file reading/writing
+- HDF reading with provenance attachment
+- Lazy image reading with Dask support
+- Video reading with OpenCV and optional PyAV fallback
+- Superkeypoints diagram and JSON loading
 """
 # src/napari_deeplabcut/core/io.py
 
@@ -40,14 +41,14 @@ SUPPORTED_IMAGES = (".jpg", ".jpeg", ".png")
 SUPPORTED_VIDEOS = (".mp4", ".mov", ".avi")
 
 
-def _load_config(config_path: str):
+def load_config(config_path: str):
     with open(config_path) as file:
         return yaml.safe_load(file)
 
 
 # Read config file and create keypoint layer metadata
 def read_config(configname: str) -> list[LayerData]:
-    config = _load_config(configname)
+    config = load_config(configname)
     # FIXME duplicated DLCHeader misc/models
     header = misc.DLCHeader.from_config(config)
     metadata = populate_keypoint_layer_metadata(
@@ -91,7 +92,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
         old_idx.insert(0, "individuals", "")
         temp.columns = pd.MultiIndex.from_frame(old_idx)
         try:
-            cfg = _load_config(misc.find_project_config_path(str(file)))
+            cfg = load_config(misc.find_project_config_path(str(file)))
             colormap = cfg["colormap"]
         except FileNotFoundError:
             colormap = "rainbow"
@@ -155,7 +156,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
 # ------------------------------------------------------------------------------
 # Superkeypoints diagram and JSON loading (for DLCHeader superkeypoints support)
 # -----------------------------------------------------------------------------
-def _load_superkeypoints_diagram(super_animal: str):
+def load_superkeypoints_diagram(super_animal: str):
     path = str(Path(__file__).parent / "assets" / f"{super_animal}.jpg")
     try:
         return imread(path), {"root": ""}, "images"
@@ -163,7 +164,7 @@ def _load_superkeypoints_diagram(super_animal: str):
         raise FileNotFoundError(f"Superkeypoints diagram not found for {super_animal}.") from e
 
 
-def _load_superkeypoints(super_animal: str):
+def load_superkeypoints(super_animal: str):
     path = str(Path(__file__).parent / "assets" / f"{super_animal}.json")
     if not Path(path).is_file():
         raise FileNotFoundError(f"Superkeypoints JSON file not found for {super_animal}.")
@@ -357,12 +358,8 @@ def read_images(path: str | Path | list[str | Path]):
     return [(imread(str(image_path)), params, "image")]
 
 
-# Read HDF file and create keypoint layers
-def read_hdf(filename: str) -> list[LayerData]:
-    layers = []
-    for file in Path(filename).parent.glob(Path(filename).name):
-        layers.extend(read_hdf_single(file))
-    return layers
+def is_video(filename: str) -> bool:
+    return any(filename.lower().endswith(ext) for ext in SUPPORTED_VIDEOS)
 
 
 # Video reader using OpenCV

@@ -6,12 +6,13 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from napari.types import LayerData
+
 from napari_deeplabcut.core.discovery import discover_annotations
 from napari_deeplabcut.core.io import (
     SUPPORTED_IMAGES,
     SUPPORTED_VIDEOS,
     read_config,
-    read_hdf,
     read_hdf_single,
     read_images,
     read_video,
@@ -21,8 +22,12 @@ from napari_deeplabcut.core.paths import looks_like_dlc_labeled_folder
 logger = logging.getLogger(__name__)
 
 
-def is_video(filename: str) -> bool:
-    return any(filename.lower().endswith(ext) for ext in SUPPORTED_VIDEOS)
+# Read HDF file and create keypoint layers
+def read_hdf(filename: str) -> list[LayerData]:
+    layers = []
+    for file in Path(filename).parent.glob(Path(filename).name):
+        layers.extend(read_hdf_single(file))
+    return layers
 
 
 def get_hdf_reader(path):

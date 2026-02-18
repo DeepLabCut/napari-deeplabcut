@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from napari_deeplabcut.core.metadata import (
+from napari_deeplabcut.core.sidecar import (
     get_default_scorer,
     read_sidecar,
     set_default_scorer,
