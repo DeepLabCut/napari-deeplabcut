@@ -36,6 +36,7 @@ from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, Poin
 from napari_deeplabcut.core import schemas as dlc_schemas
 from napari_deeplabcut.core.dataframes import (
     form_df_from_validated,
+    guarantee_multiindex_rows,
     harmonize_keypoint_column_index,
     harmonize_keypoint_row_index,
     keypoint_conflicts,
@@ -162,6 +163,8 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
 
     data[:, 0] = image_inds
     data[:, 1:] = df[["y", "x"]].to_numpy()
+    finite = np.isfinite(data).all(axis=1)
+    df = df.loc[finite].reset_index(drop=True)
 
     metadata = populate_keypoint_layer_metadata(
         header,
@@ -334,7 +337,7 @@ def form_df(
     df = form_df_from_validated(ctx)
 
     # Keep your belt-and-suspenders guarantee
-    misc.guarantee_multiindex_rows(df)
+    guarantee_multiindex_rows(df)
     return df
 
 
@@ -374,6 +377,15 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             "props": props,
         }
     )
+
+    logger.debug("HEADER nlevels: %s", ctx.meta.header.as_multiindex().nlevels)
+    logger.debug("HEADER names: %s", ctx.meta.header.as_multiindex().names)
+
+    df_new = form_df_from_validated(ctx)
+
+    logger.debug("DF_NEW columns nlevels: %s", df_new.columns.nlevels)
+    logger.debug("DF_NEW columns names: %s", df_new.columns.names)
+    logger.debug("DF_NEW finite count: %s", np.isfinite(df_new.to_numpy()).sum())
 
     # Build df from points + plugin metadata + layer properties
     df_new = form_df_from_validated(ctx)
@@ -445,8 +457,8 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
 
         # Harmonize indices and merge
         try:
-            misc.guarantee_multiindex_rows(df_new)
-            misc.guarantee_multiindex_rows(df_old)
+            guarantee_multiindex_rows(df_new)
+            guarantee_multiindex_rows(df_old)
         except Exception:
             pass
 
@@ -466,7 +478,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
 
     # Final cleanup
     try:
-        misc.guarantee_multiindex_rows(df_out)
+        guarantee_multiindex_rows(df_out)
     except Exception:
         pass
     df_out.sort_index(inplace=True)

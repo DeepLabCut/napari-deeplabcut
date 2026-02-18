@@ -53,6 +53,7 @@ import napari_deeplabcut.core.io as io
 from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut._writer import _write_image
 from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata, IOProvenance, PointsMetadata
+from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.layers import is_machine_layer
 from napari_deeplabcut.core.metadata import (
     infer_image_root,
@@ -68,7 +69,6 @@ from napari_deeplabcut.core.sidecar import get_default_scorer, set_default_score
 from napari_deeplabcut.misc import (
     build_color_cycles,
     encode_categories,
-    guarantee_multiindex_rows,
 )
 
 Tip = namedtuple("Tip", ["msg", "pos"])

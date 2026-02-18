@@ -198,6 +198,7 @@ def _make_minimal_dlc_project(tmp_path: Path):
         names=["scorer", "bodyparts", "coords"],
     )
     idx = pd.MultiIndex.from_tuples([img_rel])
+    # NaN implies "unlabeled" in DLC, so bodypart2 is unlabeled here.
     df0 = pd.DataFrame([[10.0, 20.0, np.nan, np.nan]], index=idx, columns=cols)
 
     h5_path = labeled / "CollectedData_John.h5"
@@ -362,7 +363,7 @@ def _get_points_layer_with_data(viewer) -> Points:
     """Return the first Points layer with actual data; fallback to first Points layer."""
     pts = [ly for ly in viewer.layers if isinstance(ly, Points)]
     assert pts, "Expected at least one Points layer in viewer."
-    return next((ly for ly in pts if ly.data is not None and np.any(ly.data)), pts[0])
+    return next((ly for ly in pts if ly.data is not None and np.isfinite(np.asarray(ly.data)[:, 1:3]).any()), pts[0])
 
 
 def _index_mask_for_img(df: pd.DataFrame, basename: str) -> np.ndarray:
@@ -484,6 +485,36 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
     qtbot.wait(200)
 
     points = _get_points_layer_with_data(viewer)
+
+    logging.debug("points.name: %s", points.name)
+    logging.debug("points.data shape: %s", None if points.data is None else np.asarray(points.data).shape)
+    logging.debug("points.data[:5]: %s", None if points.data is None else np.asarray(points.data)[:5])
+    logging.debug(
+        "any NaNs in points.data: %s", False if points.data is None else np.isnan(np.asarray(points.data)).any()
+    )
+    logging.debug(
+        "any finite xy: %s", False if points.data is None else np.isfinite(np.asarray(points.data)[:, 1:3]).any()
+    )
+
+    logging.debug("len(label): %s", len(points.properties.get("label", [])))
+    logging.debug("len(id): %s", len(points.properties.get("id", [])))
+    logging.debug("label[:10]: %s", points.properties.get("label", [])[:10])
+    logging.debug("id[:10]: %s", points.properties.get("id", [])[:10])
+
+    hdr = points.metadata.get("header")
+    logging.debug("header type: %s", type(hdr))
+    if hdr is not None:
+        cols = hdr.columns
+        logging.debug("header.columns type: %s", type(cols))
+        logging.debug("header.columns names: %s", getattr(cols, "names", None))
+        logging.debug("header.columns nlevels: %s", getattr(cols, "nlevels", None))
+
+    logging.info("points.data[:5] = %s", points.data[:5])
+    logging.info("any NaNs in points.data = %s", np.isnan(points.data).any())
+    logging.info("labels[:10] = %s", points.properties.get("label")[:10])
+    logging.info("ids[:10] = %s", points.properties.get("id")[:10] if "id" in points.properties else None)
+    logging.info("header.columns.names = %s", points.metadata["header"].columns.names)
+    logging.info("header.columns.nlevels = %s", points.metadata["header"].columns.nlevels)
     store = controls._stores.get(points)
     assert store is not None
 

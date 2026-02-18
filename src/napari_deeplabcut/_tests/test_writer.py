@@ -9,6 +9,7 @@ from skimage.io import imread
 from napari_deeplabcut import _writer, misc
 from napari_deeplabcut.config.models import AnnotationKind
 from napari_deeplabcut.core import io as napari_dlc_io
+from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.errors import MissingProvenanceError
 
 rng = np.random.default_rng(42)
@@ -271,7 +272,7 @@ def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, m
     gt.index = [f"img{i}.png" for i in range(len(gt))]
 
     # Convert to MultiIndex of path components (matches refactored indexing model)
-    misc.guarantee_multiindex_rows(gt)
+    guarantee_multiindex_rows(gt)
 
     gt.to_hdf(gt_path, key="keypoints", mode="w")
 

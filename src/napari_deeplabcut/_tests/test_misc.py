@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from napari_deeplabcut import misc
+from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.io import load_config
 
 
@@ -336,13 +337,13 @@ def test_merge_multiple_scorers(fake_keypoints):
 def test_guarantee_multiindex_rows():
     fake_index = [f"labeled-data/subfolder_{i}/image_{j}" for i in range(3) for j in range(10)]
     df = pd.DataFrame(index=fake_index)
-    misc.guarantee_multiindex_rows(df)
+    guarantee_multiindex_rows(df)
     assert isinstance(df.index, pd.MultiIndex)
 
     # Substitute index with frame numbers
     frame_numbers = list(range(df.shape[0]))
     df.index = frame_numbers
-    misc.guarantee_multiindex_rows(df)
+    guarantee_multiindex_rows(df)
     assert df.index.to_list() == frame_numbers
 
 

@@ -2,10 +2,63 @@
 
 from __future__ import annotations
 
+import logging
+
+import numpy as np
 import pandas as pd
 
 from napari_deeplabcut import misc
 from napari_deeplabcut.core.schemas import PointsWriteInputModel
+
+logger = logging.getLogger(__name__)
+
+
+def merge_multiple_scorers(
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    n_frames = df.shape[0]
+    header = misc.DLCHeader(df.columns)
+    n_scorers = len(header._get_unique("scorer"))
+    if n_scorers == 1:
+        return df
+
+    if "likelihood" in header.coords:
+        # Merge annotations from multiple scorers to keep
+        # detections with highest confidence
+        data = df.to_numpy().reshape((n_frames, n_scorers, -1, 3))
+        try:
+            idx = np.nanargmax(data[..., 2], axis=1)
+        except ValueError:  # All-NaN slice encountered
+            mask = np.isnan(data[..., 2]).all(axis=1, keepdims=True)
+            mask = np.broadcast_to(mask[..., None], data.shape)
+            data[mask] = -1
+            idx = np.nanargmax(data[..., 2], axis=1)
+            data[mask] = np.nan
+        data_best = data[np.arange(n_frames)[:, None], idx, np.arange(data.shape[2])].reshape((n_frames, -1))
+        df = pd.DataFrame(
+            data_best,
+            index=df.index,
+            columns=header.columns[: data_best.shape[1]],
+        )
+    else:  # Arbitrarily pick data from the first scorer
+        df = df.loc(axis=1)[: header.scorer]
+    return df
+
+
+def guarantee_multiindex_rows(df):
+    """Ensure that DataFrame rows are a MultiIndex of path components.
+    Legacy DLC data may use an index with pathto/video/file.png strings as Index.
+    The new format uses a MultiIndex with each path component as a level.
+    """
+    # Make paths platform-agnostic if they are not already
+    if not isinstance(df.index, pd.MultiIndex):  # Backwards compatibility
+        path = df.index[0]
+        try:
+            sep = "/" if "/" in path else "\\"
+            splits = tuple(df.index.str.split(sep))
+            df.index = pd.MultiIndex.from_tuples(splits)
+        except TypeError:  # Ignore numerical index of frame indices
+            pass
 
 
 def form_df_from_validated(ctx: PointsWriteInputModel) -> pd.DataFrame:
@@ -22,25 +75,75 @@ def form_df_from_validated(ctx: PointsWriteInputModel) -> pd.DataFrame:
 
     temp_df["scorer"] = header.scorer or "unknown"
 
+    # Mark rows that have actual coords
+    temp_df["_has_xy"] = temp_df[["x", "y"]].notna().all(axis=1)
+
+    # Sort so that rows WITH coords come last (so keep="last" keeps them)
+    temp_df = temp_df.sort_values("_has_xy")
+
+    # Drop duplicates on the key that defines a unique keypoint observation
+    temp_df = temp_df.drop_duplicates(
+        subset=["scorer", "individuals", "bodyparts", "inds"],
+        keep="last",
+    )
+    temp_df = temp_df.drop(columns="_has_xy")
+
     df = temp_df.set_index(["scorer", "individuals", "bodyparts", "inds"]).stack()
     df.index.set_names("coords", level=-1, inplace=True)
     df = df.unstack(["scorer", "individuals", "bodyparts", "coords"])
     df.index.name = None
 
+    logger.debug("Before reindex: cols nlevels %s, names %s", df.columns.nlevels, df.columns.names)
+    logger.debug(
+        "header cols nlevels %s, names %s",
+        ctx.meta.header.as_multiindex().nlevels,
+        ctx.meta.header.as_multiindex().names,
+    )
+
     # Drop individuals if this is a single-animal layout (empty ids)
     # Here we check if all ids are '' (or falsy)
-    if all((not x) for x in props.id):
-        if "individuals" in df.columns.names:
-            df = df.droplevel("individuals", axis=1)
+    hdr_cols = ctx.meta.header.as_multiindex()
 
-    # Reindex to canonical header columns
-    df = df.reindex(ctx.meta.header.as_multiindex(), axis=1)
+    # If df columns dropped individuals, drop it from header too (if present)
+    if df.columns.nlevels == 3 and isinstance(hdr_cols, pd.MultiIndex) and hdr_cols.nlevels == 4:
+        if "individuals" in hdr_cols.names:
+            hdr_cols = hdr_cols.droplevel("individuals")
+
+    # If df columns kept individuals but header doesn't have it, add it (single-animal)
+    if df.columns.nlevels == 4 and isinstance(hdr_cols, pd.MultiIndex) and hdr_cols.nlevels == 3:
+        # Insert empty individuals level into header tuples
+        frame = hdr_cols.to_frame(index=False)
+        frame.insert(1, "individuals", "")
+        hdr_cols = pd.MultiIndex.from_frame(frame, names=["scorer", "individuals", "bodyparts", "coords"])
+
+    df = df.reindex(hdr_cols, axis=1)
+
+    logger.debug("After reindex: cols nlevels %s, names %s", df.columns.nlevels, df.columns.names)
+    logger.debug(
+        "header cols nlevels %s, names %s",
+        ctx.meta.header.as_multiindex().nlevels,
+        ctx.meta.header.as_multiindex().names,
+    )
 
     # Replace integer frame index with path keys if available
     if ctx.meta.paths:
         df.index = [ctx.meta.paths[i] for i in df.index]
 
-    misc.guarantee_multiindex_rows(df)
+    guarantee_multiindex_rows(df)
+
+    # Writer invariant: if there are finite points in the layer, df must contain finite coords
+    layer_xy = np.asarray(ctx.points.xy_dlc)  # (N, 2) in [x,y]
+    n_layer = np.isfinite(layer_xy).all(axis=1).sum()
+
+    # Count finite values in df (x/y columns only)
+    n_df = np.isfinite(df.to_numpy()).sum()
+
+    if n_layer > 0 and n_df == 0:
+        raise RuntimeError(
+            "Writer produced no finite coordinates although layer contains finite points. "
+            "Likely a header/column MultiIndex mismatch during reindex."
+        )
+
     return df
 
 
@@ -62,8 +165,8 @@ def harmonize_keypoint_row_index(df_new: pd.DataFrame, df_old: pd.DataFrame) -> 
     df_old2 = df_old.copy()
 
     # Make both MultiIndex (project convention)
-    misc.guarantee_multiindex_rows(df_new2)
-    misc.guarantee_multiindex_rows(df_old2)
+    guarantee_multiindex_rows(df_new2)
+    guarantee_multiindex_rows(df_old2)
 
     inew = df_new2.index
     iold = df_old2.index
@@ -149,6 +252,9 @@ def harmonize_keypoint_column_index(df: pd.DataFrame) -> pd.DataFrame:
 
 def align_old_new(df_old: pd.DataFrame, df_new: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Align both dataframes to union of index and columns."""
+    df_old = harmonize_keypoint_column_index(df_old)
+    df_new = harmonize_keypoint_column_index(df_new)
+
     idx = df_old.index.union(df_new.index)
     cols = df_old.columns.union(df_new.columns)
     return (
