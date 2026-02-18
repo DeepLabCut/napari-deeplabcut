@@ -34,7 +34,12 @@ from pydantic import ValidationError
 from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, PointsMetadata
 from napari_deeplabcut.core import schemas as dlc_schemas
-from napari_deeplabcut.core.dataframes import form_df_from_validated, harmonize_keypoint_row_index
+from napari_deeplabcut.core.dataframes import (
+    form_df_from_validated,
+    harmonize_keypoint_column_index,
+    harmonize_keypoint_row_index,
+    keypoint_conflicts,
+)
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError, UnresolvablePathError
 from napari_deeplabcut.core.layers import populate_keypoint_layer_metadata
 from napari_deeplabcut.core.metadata import attach_source_and_io, parse_points_metadata
@@ -434,7 +439,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
         except (KeyError, ValueError):
             df_old = pd.read_hdf(out)
 
-        key_conflict = misc.keypoint_conflicts(df_old, df_new)
+        key_conflict = keypoint_conflicts(df_old, df_new)
         if not maybe_confirm_overwrite(attributes, key_conflict):
             raise RuntimeError("User aborted save due to keypoint conflicts.")
 
@@ -446,6 +451,8 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             pass
 
         df_new, df_old = harmonize_keypoint_row_index(df_new, df_old)
+        df_new = harmonize_keypoint_column_index(df_new)
+        df_old = harmonize_keypoint_column_index(df_old)
         df_out = df_new.combine_first(df_old)
 
         # Normalize columns to DLC header if possible
