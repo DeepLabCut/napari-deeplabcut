@@ -190,19 +190,59 @@ class KeypointStore:
 
 
 def _add(store, coord):
+    coord = np.atleast_2d(coord)
+
+    # Controls may be missing if metadata was replaced/filtered.
+    controls = (store.layer.metadata or {}).get("controls", None)
+    label_mode = getattr(controls, "_label_mode", None)
+
     if store.current_keypoint not in store.annotated_keypoints:
-        store.layer.data = np.append(
-            store.layer.data,
-            np.atleast_2d(coord),
-            axis=0,
-        )
-    elif store.layer.metadata["controls"]._label_mode is LabelMode.QUICK:
+        # 1) append data
+        store.layer.data = np.append(store.layer.data, coord, axis=0)
+
+        # 2) append/align properties to match number of points
+        kp = store.current_keypoint
+        n_new = coord.shape[0]
+        n_total = len(store.layer.data)
+        n_old = n_total - n_new
+
+        props = store.layer.properties.copy()
+
+        def _as_array(key, dtype):
+            arr = props.get(key, None)
+            if arr is None:
+                return np.array([], dtype=dtype)
+            return np.asarray(arr, dtype=dtype)
+
+        # Existing values truncated/padded to n_old, then append new rows
+        label_arr = _as_array("label", object)[:n_old]
+        id_arr = _as_array("id", object)[:n_old]
+        lik_arr = _as_array("likelihood", float)[:n_old]
+
+        # If any are shorter than n_old, pad (rare but safe)
+        if label_arr.size < n_old:
+            label_arr = np.concatenate([label_arr, np.array([kp.label] * (n_old - label_arr.size), dtype=object)])
+        if id_arr.size < n_old:
+            id_arr = np.concatenate([id_arr, np.array([kp.id] * (n_old - id_arr.size), dtype=object)])
+        if lik_arr.size < n_old:
+            lik_arr = np.concatenate([lik_arr, np.ones(n_old - lik_arr.size, dtype=float)])
+
+        props["label"] = np.concatenate([label_arr, np.array([kp.label] * n_new, dtype=object)])
+        props["id"] = np.concatenate([id_arr, np.array([kp.id] * n_new, dtype=object)])
+        props["likelihood"] = np.concatenate([lik_arr, np.ones(n_new, dtype=float)])
+
+        store.layer.properties = props
+
+    elif label_mode is LabelMode.QUICK:
         ind = store.annotated_keypoints.index(store.current_keypoint)
         data = store.layer.data
-        data[np.flatnonzero(store.current_mask)[ind]] = coord
+        data[np.flatnonzero(store.current_mask)[ind]] = coord.squeeze()
         store.layer.data = data
+
     store.layer.selected_data = set()
-    if store.layer.metadata["controls"]._label_mode is LabelMode.LOOP:
+
+    # If controls are missing, behave like the default mode (advance keypoint)
+    if label_mode is LabelMode.LOOP:
         store.layer.events.query_next_frame()
     else:
         store.next_keypoint()

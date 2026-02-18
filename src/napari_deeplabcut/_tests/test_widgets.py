@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/_tests/test_widgets.py
 import os
 import types
 
@@ -48,10 +49,10 @@ def test_store_crop_coordinates(viewer, images, config_path):
     viewer.layers.selection.add(images)
     _ = viewer.add_shapes(np.random.random((4, 3)), shape_type="rectangle")
     controls = _widgets.KeypointControls(viewer)
-    controls._images_meta = {
-        "name": "fake_video",
-        "project": os.path.dirname(config_path),
-    }
+    # _image_meta is expected to be an ImageMetadata instance
+    controls._image_meta = _widgets.ImageMetadata(name="fake_video")
+    # _store_crop_coordinates now uses _project_path instead of reading "project" from _image_meta
+    controls._project_path = os.path.dirname(config_path)
     # Stores crop coordinates from a rectangle shape into the project's config.yaml
     controls._store_crop_coordinates()
 

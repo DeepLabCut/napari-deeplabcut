@@ -1,3 +1,6 @@
+"""Main widget and controls for napari-deeplabcut, including the tutorial and shortcuts windows."""
+
+# src/napari_deeplabcut/_widgets.py
 import logging
 import os
 from collections import defaultdict, namedtuple
@@ -15,7 +18,6 @@ import napari
 import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_qtagg import FigureCanvas, NavigationToolbar2QT
-from napari._qt.widgets.qt_welcome import QtWelcomeLabel
 from napari.layers import Image, Points, Shapes, Tracks
 from napari.layers.points._points_key_bindings import register_points_action
 from napari.layers.utils import color_manager
@@ -23,7 +25,7 @@ from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
 from qtpy.QtCore import QPoint, QSettings, QSize, Qt, QTimer, Signal
-from qtpy.QtGui import QAction, QCursor, QIcon, QPainter
+from qtpy.QtGui import QAction, QCursor, QIcon
 from qtpy.QtSvgWidgets import QSvgWidget
 from qtpy.QtWidgets import (
     QButtonGroup,
@@ -41,8 +43,6 @@ from qtpy.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
-    QStyle,
-    QStyleOption,
     QVBoxLayout,
     QWidget,
 )
@@ -55,15 +55,23 @@ from napari_deeplabcut._reader import (
     is_video,
 )
 from napari_deeplabcut._writer import _form_df, _write_config, _write_image
+from napari_deeplabcut.config.models import ImageMetadata, PointsMetadata
+from napari_deeplabcut.core.metadata import infer_image_root, sync_points_from_image
+from napari_deeplabcut.core.paths import (
+    PathMatchPolicy,
+    canonicalize_path,
+)
+from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.misc import (
     build_color_cycles,
-    canonicalize_path,
     encode_categories,
     guarantee_multiindex_rows,
-    remap_array,
 )
 
 Tip = namedtuple("Tip", ["msg", "pos"])
+
+logger = logging.getLogger("napari-deeplabcut._widgets")
+logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp
 
 
 class Shortcuts(QDialog):
@@ -182,23 +190,6 @@ class Tutorial(QDialog):
     def update_nav_buttons(self):
         self.prev_button.setEnabled(self._current_tip > 0)
         self.next_button.setEnabled(self._current_tip < len(self._tips) - 1)
-
-
-def _get_and_try_preferred_reader(
-    self,
-    dialog,
-    *args,
-):
-    try:
-        self.viewer.open(
-            dialog._current_file,
-            plugin="napari-deeplabcut",
-        )
-    except ValueError:
-        self.viewer.open(
-            dialog._current_file,
-            plugin="builtins",
-        )
 
 
 # Hack to avoid napari's silly variable type guess,
@@ -561,24 +552,17 @@ class KeypointControls(QWidget):
         self.viewer.layers.events.inserted.connect(self.on_insert)
         self.viewer.layers.events.removed.connect(self.on_remove)
 
-        self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
-            _get_and_try_preferred_reader,
-            self.viewer.window.qt_viewer,
-        )
+        # self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
+        #     _get_and_try_preferred_reader,
+        #     self.viewer.window.qt_viewer,
+        # )
+        # Project data
+        self._project_path: str | None = None
 
         status_bar = self.viewer.window._qt_window.statusBar()
         self.last_saved_label = QLabel("")
         self.last_saved_label.hide()
         status_bar.addPermanentWidget(self.last_saved_label)
-
-        # Hack napari's Welcome overlay to show more relevant instructions
-        overlay = self.viewer.window._qt_viewer._welcome_widget
-        welcome_widget = overlay.layout().itemAt(1).widget()
-        welcome_widget.deleteLater()
-        w = QtWelcomeWidget(None)
-        overlay._overlay = w
-        overlay.addWidget(w)
-        # overlay._overlay.sig_dropped.connect(overlay.sig_dropped)
 
         self._color_mode = keypoints.ColorMode.default()
         self._label_mode = keypoints.LabelMode.default()
@@ -595,7 +579,7 @@ class KeypointControls(QWidget):
         # Storage for extra image metadata that are relevant to other layers.
         # These are updated anytime images are added to the Viewer
         # and passed on to the other layers upon creation.
-        self._images_meta = dict()
+        self._image_meta = ImageMetadata()
 
         # Add some more controls
         self._layout = QVBoxLayout(self)
@@ -696,6 +680,154 @@ class KeypointControls(QWidget):
         # There are to my knowledge no other way that is as concise and clean
         # (Of course this will be a problem if we start using it everywhere so do not reuse lightly)
         QTimer.singleShot(10, self.silently_dock_matplotlib_canvas)
+
+        # If layers already exist (user loaded data before opening this widget),
+        # adopt them so keypoint controls take ownership immediately.
+        QTimer.singleShot(0, self._adopt_existing_layers)
+
+    def _adopt_existing_layers(self) -> None:
+        """
+        When the widget is opened after layers already exist, we need to
+        run the same initialization as if they had been inserted.
+        """
+        # Iterate over a snapshot, because on_insert may modify layer order
+        layers_snapshot = list(self.viewer.layers)
+
+        for idx, layer in enumerate(layers_snapshot):
+            self._adopt_layer(layer, idx)
+
+        # After adoption, refresh UI state
+        try:
+            active = self.viewer.layers.selection.active
+            if active is not None:
+                # Force the GUI to update visibility of menus, etc.
+                self.on_active_layer_change(Event(type_name="active", value=active))
+        except Exception:
+            pass
+
+    def _adopt_layer(self, layer, index: int) -> None:
+        """
+        Run the relevant portion of on_insert() for an already-existing layer.
+        This avoids duplicating your logic and prevents reliance on napari's Event object.
+        """
+        try:
+            if isinstance(layer, Image):
+                # Mimic image insertion side effects (metadata capture + reorder timer)
+                self._handle_existing_image_layer(layer, index)
+
+            elif isinstance(layer, Points):
+                # If this Points layer hasn't been wired yet, wire it
+                if layer not in self._stores:
+                    self._handle_existing_points_layer(layer)
+
+            # After handling each layer, attempt safe remap
+            if not isinstance(layer, Image):
+                self._remap_frame_indices(layer)
+
+        except Exception:
+            logging.exception("Failed to adopt existing layer %r", getattr(layer, "name", layer))
+
+    def _handle_existing_image_layer(self, layer: Image, index: int) -> None:
+        """
+        Safe version of the Image branch from on_insert().
+        Uses your inference logic so builtins-loaded images don't crash.
+        """
+        paths = (layer.metadata or {}).get("paths")
+        if paths is None and is_video(layer.name):
+            self.video_widget.setVisible(True)
+
+        # Update authoritative image meta
+        self._update_image_meta_from_layer(layer)
+
+        # Sync points layers from image meta
+        self._sync_points_layers_from_image_meta()
+
+        QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, index))
+
+    def _handle_existing_points_layer(self, layer: Points) -> None:
+        """
+        Safe version of the Points branch from on_insert(), for adoption.
+        """
+        store = keypoints.KeypointStore(self.viewer, layer)
+        self._stores[layer] = store
+        if layer.metadata.get("header") is None:
+            self.viewer.status = (
+                "This Points layer does not look like a DLC keypoints layer. "
+                "Please load via napari-deeplabcut (config.yaml / labeled-data folder)."
+            )
+            return
+
+        # Keep save history consistent
+        if root := layer.metadata.get("root"):
+            update_save_history(root)
+
+        layer.metadata["controls"] = self
+        layer.text.visible = False
+
+        # Bind keys and patch behaviors like on_insert()
+        layer.bind_key("M", self.cycle_through_label_modes)
+        layer.bind_key("F", self.cycle_through_color_modes)
+
+        func = partial(_paste_data, store=store)
+        layer._paste_data = MethodType(func, layer)
+        layer.add = MethodType(keypoints._add, store)
+
+        layer.events.add(query_next_frame=Event)
+        layer.events.query_next_frame.connect(store._advance_step)
+
+        layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
+        layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
+        layer.bind_key("Down", store.next_keypoint, overwrite=True)
+        layer.bind_key("Up", store.prev_keypoint, overwrite=True)
+
+        layer.face_color_mode = "cycle"
+
+        # Create the dropdown menus
+        self._form_dropdown_menus(store)
+
+        # Update images meta "project" only if truthy
+        proj = layer.metadata.get("project")
+        if proj:
+            self._project_path = proj
+
+        # Enable GUI groups that are normally enabled on insert
+        self._radio_box.setEnabled(True)
+        self._color_grp.setEnabled(True)
+        self._trail_cb.setEnabled(True)
+        self._show_traj_plot_cb.setEnabled(True)
+
+        # Hide the color pickers, same as on_insert (guarded)
+        try:
+            controls = self.viewer.window.qt_viewer.dockLayerControls
+            point_controls = controls.widget().widgets[layer]
+
+            try:
+                face_color_controls = point_controls._face_color_control.face_color_edit
+                face_color_label = point_controls._face_color_control.face_color_label
+                face_color_controls.hide()
+                face_color_label.hide()
+            except AttributeError:
+                pass
+
+            try:
+                edge_color_controls = point_controls._border_color_control.border_color_edit
+                border_color_label = point_controls._border_color_control.border_color_edit_label
+                edge_color_controls.hide()
+                border_color_label.hide()
+            except AttributeError:
+                pass
+
+            try:
+                out_of_slice_controls = point_controls._out_slice_checkbox_control.out_of_slice_checkbox
+                out_of_slice_label = point_controls._out_slice_checkbox_control.out_of_slice_checkbox_label
+                out_of_slice_controls.hide()
+                out_of_slice_label.hide()
+            except AttributeError:
+                pass
+
+        except Exception:
+            # Never fail adoption due to UI private API differences
+            pass
 
     def _ensure_mpl_canvas_docked(self) -> None:
         """
@@ -823,6 +955,89 @@ class KeypointControls(QWidget):
             self.viewer.layers.move_selected(ind, 0)
             self.viewer.layers.select_next()  # Auto-select the Points layer
 
+    # ------------------------------------------------------------------
+    # Metadata helpers (authoritative models + napari-friendly dict sync)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _layer_source_path(layer) -> str | None:
+        """Best-effort access to napari layer source path (may not exist)."""
+        try:
+            src = getattr(layer, "source", None)
+            p = getattr(src, "path", None) if src is not None else None
+            return str(p) if p else None
+        except Exception:
+            return None
+
+    def _update_image_meta_from_layer(self, layer: Image) -> None:
+        """
+        Update authoritative self._images_meta using an Image layer.
+        Also keep a dict-like subset synced for other layers (non-breaking).
+        """
+        md = layer.metadata or {}
+
+        paths = md.get("paths")
+        shape = None
+        try:
+            shape = layer.level_shapes[0]
+        except Exception:
+            shape = None
+
+        root = infer_image_root(
+            explicit_root=md.get("root"),
+            paths=paths,
+            source_path=self._layer_source_path(layer),
+        )
+
+        incoming = ImageMetadata(
+            paths=list(paths) if paths else None,
+            root=str(root) if root else None,
+            shape=tuple(shape) if shape is not None else None,
+            name=getattr(layer, "name", None),
+        )
+
+        # Merge without clobbering already-known values
+        # (same behavior as old "only set if non-empty")
+        base = self._image_meta
+        merged = base.model_copy(deep=True)
+        for field, value in incoming.model_dump().items():
+            if getattr(merged, field) in (None, "", []) and value not in (None, "", []):
+                setattr(merged, field, value)
+
+        self._image_meta = merged
+
+    def _sync_points_layers_from_image_meta(self) -> None:
+        """
+        Ensure all Points layers have core fields required for saving.
+        Updates layer.metadata IN PLACE to avoid dropping runtime attachments.
+        """
+        if self._image_meta is None:
+            return
+
+        for ly in list(self.viewer.layers):
+            if not isinstance(ly, Points):
+                continue
+
+            if ly.metadata is None:
+                ly.metadata = {}
+            md = ly.metadata  # mutate in place
+
+            # Validate points metadata *authoritatively* (but do not overwrite controls)
+            try:
+                pts_model = PointsMetadata(**md)
+            except Exception:
+                # If legacy metadata is malformed, don't crash; only fill missing keys
+                pts_model = PointsMetadata()
+
+            synced = sync_points_from_image(self._image_meta, pts_model)
+
+            # Only fill missing values; never clobber existing non-empty values
+            for key, value in synced.model_dump(exclude_none=True).items():
+                if key == "controls":
+                    continue
+                if md.get(key) in (None, "", []):
+                    md[key] = value
+
     def _show_color_scheme(self):
         show = self._view_scheme_cb.isChecked()
         self._color_scheme_display.setVisible(show)
@@ -936,7 +1151,7 @@ class KeypointControls(QWidget):
                 df.to_hdf(filepath, key="df_with_missing")
 
     def _store_crop_coordinates(self, *args):
-        if not (project_path := self._images_meta.get("project")):
+        if not (project_path := self._project_path):
             return
         for layer in self.viewer.layers:
             if isinstance(layer, Shapes):
@@ -953,7 +1168,10 @@ class KeypointControls(QWidget):
                 temp = {"crop": ", ".join(map(str, [x1, x2, y1, y2]))}
                 config_path = os.path.join(project_path, "config.yaml")
                 cfg = _load_config(config_path)
-                cfg["video_sets"][os.path.join(project_path, "videos", self._images_meta["name"])] = temp
+                video_name = self._image_meta.name
+                if not video_name:
+                    return
+                cfg["video_sets"][os.path.join(project_path, "videos", video_name)] = temp
                 _write_config(config_path, cfg)
                 break
 
@@ -1042,130 +1260,51 @@ class KeypointControls(QWidget):
         - Always sync layer.metadata with self._images_meta when possible.
         """
         try:
-            # Need new image paths to define the reference order
-            new_paths_raw = self._images_meta.get("paths")
-            if not new_paths_raw:
+            new_paths = self._image_meta.paths
+            if not new_paths:
                 return
 
-            # Determine layer's stored paths
             md = layer.metadata or {}
-            old_paths_raw = md.get("paths") or []
-            # Always sync basic metadata (even if we can't remap)
+            old_paths = md.get("paths") or []
+
+            # Always sync basic metadata from image meta (in place)
             try:
-                layer.metadata.update(self._images_meta)
+                layer.metadata.update(self._image_meta.model_dump(exclude_none=True))
             except Exception:
                 pass
 
-            if not old_paths_raw:
+            if not old_paths:
                 return
 
-            # Try different canonicalization depths to find overlap
-            depth_used = None
-            for depth in (3, 2, 1):
-                new_keys = [canonicalize_path(p, depth) for p in new_paths_raw]
-                old_keys = [canonicalize_path(p, depth) for p in old_paths_raw]
-                overlap = set(new_keys) & set(old_keys)
-                if overlap:
-                    depth_used = depth
-                    break
-
-            if depth_used is None:
-                logging.warning(
-                    "Cannot remap %s: no path overlap found for all attempted matchings",
-                    getattr(layer, "name", str(layer)),
-                )
-                # logging.debug("Old keys (sample): %s... | New keys (sample): %s...", old_keys[:5], new_keys[:5])
-                # logging.debug("Old basename sample: %s", [Path(p).name for p in old_paths_raw[:5]])
-                # logging.debug("New basename sample: %s", [Path(p).name for p in new_paths_raw[:5]])
-                return
-
-            if old_keys == new_keys:
-                return
-
-            # Build map: canonical key -> new frame index
-            key_to_new_idx = {k: i for i, k in enumerate(new_keys)}
-
-            # Determine which column is time/frame
+            # Determine time column (napari-specific choice)
             time_col = 1 if isinstance(layer, Tracks) else 0
 
-            data = layer.data
-            if data is None:
-                return
+            res = remap_layer_data_by_paths(
+                data=layer.data,
+                old_paths=old_paths,
+                new_paths=new_paths,
+                time_col=time_col,
+                policy=PathMatchPolicy.ORDERED_DEPTHS,
+            )
 
-            # Napari layers differ: Points/Tracks are ndarray-like; Shapes is list-like
-            is_list_like = isinstance(data, list)
+            if res.changed and res.data is not None:
+                layer.data = res.data
 
-            # Build an "old index -> new index" dict when we can map safely
-            # We only map old indices that correspond to an old canonical key present in new_keys.
-            idx_map = {}
-            for old_idx, k in enumerate(old_keys):
-                new_idx = key_to_new_idx.get(k)
-                if new_idx is not None:
-                    idx_map[old_idx] = new_idx
-
-            if not idx_map:
-                # No overlap at all; safest is to do nothing.
-                logging.warning(
-                    f"Cannot remap {getattr(layer, 'name', str(layer))}:"
-                    " no overlap between layer paths and current image paths.",
-                )
-                # logging.debug(f"Old keys (sample): {old_keys[:5]}... | New keys (sample): {new_keys[:5]}...")
-                return
-
-            if is_list_like:
-                # Shapes-like: list of vertices arrays
-                new_data = []
-                for verts in data:
-                    arr = np.asarray(verts)
-                    if arr.size == 0:
-                        new_data.append(arr)
-                        continue
-
-                    arr2 = arr.copy()
-                    t = arr2[:, time_col]
-
-                    # If t isn't integer-like, attempt safe conversion
-                    try:
-                        t_int = np.asarray(t).astype(int, copy=False)
-                    except Exception:
-                        # Can't interpret time column; keep shape as-is
-                        new_data.append(arr2)
-                        continue
-
-                    arr2[:, time_col] = remap_array(t_int, idx_map)
-                    new_data.append(arr2)
-
-                layer.data = new_data
-
+            # Optional debug logging
+            if res.depth_used is None:
+                logger.debug("Remap skipped for %s: %s", getattr(layer, "name", str(layer)), res.message)
             else:
-                arr = np.asarray(data)
-                if arr.size == 0:
-                    return
-                if arr.ndim < 2 or arr.shape[1] <= time_col:
-                    return
-
-                arr2 = arr.copy()
-                t = arr2[:, time_col]
-
-                # Handle NaNs/float time indices safely
-                # (If conversion fails, we skip remap.)
-                try:
-                    t_int = np.asarray(t).astype(int, copy=False)
-                except Exception:
-                    logging.warning(
-                        f"Cannot remap {getattr(layer, 'name', str(layer))}: "
-                        "time column could not be converted to int.",
-                    )
-                    return
-
-                arr2[:, time_col] = remap_array(t_int, idx_map)
-                layer.data = arr2
+                logger.debug(
+                    "Remap %s for %s (depth=%s, mapped=%s): %s",
+                    "applied" if res.changed else "skipped",
+                    getattr(layer, "name", str(layer)),
+                    res.depth_used,
+                    res.mapped_count,
+                    res.message,
+                )
 
         except Exception:
-            logging.exception(
-                f"Failed to remap frame indices for layer {getattr(layer, 'name', str(layer))}",
-            )
-            # Intentionally do not raise, simply warn and skip remapping
+            logger.exception("Failed to remap frame indices for layer %s", getattr(layer, "name", str(layer)))
             return
 
     def on_insert(self, event):
@@ -1175,15 +1314,18 @@ class KeypointControls(QWidget):
             paths = layer.metadata.get("paths")
             if paths is None and is_video(layer.name):
                 self.video_widget.setVisible(True)
-            # Store the metadata and pass them on to the other layers
-            self._images_meta.update(
-                {
-                    "paths": paths,
-                    "shape": layer.level_shapes[0],
-                    "root": layer.metadata["root"],
-                    "name": layer.name,
-                }
+
+            # Update authoritative image meta
+            self._update_image_meta_from_layer(layer)
+
+            # Sync points layers metadata from image meta (non-breaking)
+            self._sync_points_layers_from_image_meta()
+
+            logger.debug(
+                "Synced points layers with new image metadata: %r",
+                self._image_meta,
             )
+
             # Delay layer sorting
             QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, event.index))
         elif isinstance(layer, Points):
@@ -1230,6 +1372,10 @@ class KeypointControls(QWidget):
 
             store = keypoints.KeypointStore(self.viewer, layer)
             self._stores[layer] = store
+            if not layer.metadata.get("root") and self._image_meta.root:
+                layer.metadata["root"] = self._image_meta.root
+            if not layer.metadata.get("paths") and self._image_meta.paths:
+                layer.metadata["paths"] = self._image_meta.paths
             # TODO Set default dir of the save file dialog
             if root := layer.metadata.get("root"):
                 update_save_history(root)
@@ -1250,11 +1396,9 @@ class KeypointControls(QWidget):
             layer.face_color_mode = "cycle"
             self._form_dropdown_menus(store)
 
-            self._images_meta.update(
-                {
-                    "project": layer.metadata.get("project"),
-                }
-            )
+            proj = layer.metadata.get("project")
+            if proj:
+                self._project_path = proj
             self._radio_box.setEnabled(True)
             self._color_grp.setEnabled(True)
             self._trail_cb.setEnabled(True)
@@ -1316,7 +1460,7 @@ class KeypointControls(QWidget):
             self._show_traj_plot_cb.setEnabled(False)
             self.last_saved_label.hide()
         elif isinstance(layer, Image):
-            self._images_meta = dict()
+            self._image_meta = ImageMetadata()
             paths = layer.metadata.get("paths")
             if paths is None:
                 self.video_widget.setVisible(False)
@@ -1548,116 +1692,6 @@ def create_dropdown_menu(store, items, attr):
 
     menu.currentIndexChanged.connect(item_changed)
     return menu
-
-
-# WelcomeWidget modified from:
-# https://github.com/napari/napari/blob/a72d512972a274380645dae16b9aa93de38c3ba2/napari/_qt/widgets/qt_welcome.py#L28
-class QtWelcomeWidget(QWidget):
-    """Welcome widget to display initial information and shortcuts to user."""
-
-    sig_dropped = Signal("QEvent")
-
-    def __init__(self, parent):
-        super().__init__(parent)
-
-        # Create colored icon using theme
-        self._image = QLabel()
-        self._image.setObjectName("logo_silhouette")
-        self._image.setMinimumSize(300, 300)
-        self._label = QtWelcomeLabel(
-            """
-            Drop a folder from within a DeepLabCut's labeled-data directory,
-            and,  if labeling from scratch,
-            the corresponding project's config.yaml file.
-            """
-        )
-
-        # Widget setup
-        self.setAutoFillBackground(True)
-        self.setAcceptDrops(True)
-        self._image.setAlignment(Qt.AlignCenter)
-        self._label.setAlignment(Qt.AlignCenter)
-
-        # Layout
-        text_layout = QVBoxLayout()
-        text_layout.addWidget(self._label)
-
-        layout = QVBoxLayout()
-        layout.addStretch()
-        layout.setSpacing(30)
-        layout.addWidget(self._image)
-        layout.addLayout(text_layout)
-        layout.addStretch()
-
-        self.setLayout(layout)
-
-    def paintEvent(self, event):
-        """Override Qt method.
-
-        Parameters
-        ----------
-        event : qtpy.QtCore.QEvent
-            Event from the Qt context.
-        """
-        option = QStyleOption()
-        option.initFrom(self)
-        p = QPainter(self)
-        self.style().drawPrimitive(QStyle.PE_Widget, option, p, self)
-
-    def _update_property(self, prop, value):
-        """Update properties of widget to update style.
-
-        Parameters
-        ----------
-        prop : str
-            Property name to update.
-        value : bool
-            Property value to update.
-        """
-        self.setProperty(prop, value)
-        self.style().unpolish(self)
-        self.style().polish(self)
-
-    def dragEnterEvent(self, event):
-        """Override Qt method.
-
-        Provide style updates on event.
-
-        Parameters
-        ----------
-        event : qtpy.QtCore.QEvent
-            Event from the Qt context.
-        """
-        self._update_property("drag", True)
-        if event.mimeData().hasUrls():
-            event.accept()
-        else:
-            event.ignore()
-
-    def dragLeaveEvent(self, event):
-        """Override Qt method.
-
-        Provide style updates on event.
-
-        Parameters
-        ----------
-        event : qtpy.QtCore.QEvent
-            Event from the Qt context.
-        """
-        self._update_property("drag", False)
-
-    def dropEvent(self, event):
-        """Override Qt method.
-
-        Provide style updates on event and emit the drop event.
-
-        Parameters
-        ----------
-        event : qtpy.QtCore.QEvent
-            Event from the Qt context.
-        """
-        self._update_property("drag", False)
-        self.sig_dropped.emit(event)
 
 
 class ClickableLabel(QLabel):
