@@ -207,68 +207,6 @@ def guess_continuous(property):
 color_manager.guess_continuous = guess_continuous
 
 
-def _paste_data(self, store):
-    """Paste only currently unannotated data."""
-    features = self._clipboard.pop("features", None)
-    if features is None:
-        return
-
-    unannotated = [
-        keypoints.Keypoint(label, id_) not in store.annotated_keypoints
-        for label, id_ in zip(features["label"], features["id"], strict=False)
-    ]
-    if not any(unannotated):
-        return
-
-    new_features = features.iloc[unannotated]
-    indices_ = self._clipboard.pop("indices")
-    text_ = self._clipboard.pop("text")
-    self._clipboard = {k: v[unannotated] for k, v in self._clipboard.items()}
-    self._clipboard["features"] = new_features
-    self._clipboard["indices"] = indices_
-    if text_ is not None:
-        new_text = {
-            "string": text_["string"][unannotated],
-            "color": text_["color"],
-        }
-        self._clipboard["text"] = new_text
-
-    npoints = len(self._view_data)
-    totpoints = len(self.data)
-
-    if len(self._clipboard.keys()) > 0:
-        not_disp = self._slice_input.not_displayed
-        data = deepcopy(self._clipboard["data"])
-        offset = [self._slice_indices[i] - self._clipboard["indices"][i] for i in not_disp]
-        data[:, not_disp] = data[:, not_disp] + np.array(offset)
-        self._data = np.append(self.data, data, axis=0)
-        self._shown = np.append(self.shown, deepcopy(self._clipboard["shown"]), axis=0)
-        self._size = np.append(self.size, deepcopy(self._clipboard["size"]), axis=0)
-        self._symbol = np.append(self.symbol, deepcopy(self._clipboard["symbol"]), axis=0)
-
-        self._feature_table.append(self._clipboard["features"])
-
-        self.text._paste(**self._clipboard["text"])
-
-        self._edge_width = np.append(
-            self.edge_width,
-            deepcopy(self._clipboard["edge_width"]),
-            axis=0,
-        )
-        self._edge._paste(
-            colors=self._clipboard["edge_color"],
-            properties=_features_to_properties(self._clipboard["features"]),
-        )
-        self._face._paste(
-            colors=self._clipboard["face_color"],
-            properties=_features_to_properties(self._clipboard["features"]),
-        )
-
-        self._selected_view = list(range(npoints, npoints + len(self._clipboard["data"])))
-        self._selected_data = set(range(totpoints, totpoints + len(self._clipboard["data"])))
-        self.refresh()
-
-
 def _safe_folder_anchor_from_points_layer(layer: Points) -> str | None:
     """Best-effort anchor folder for sidecar + CollectedData creation."""
     md = layer.metadata or {}
@@ -335,152 +273,6 @@ def _prompt_for_scorer(parent_widget, *, anchor: str, suggested: str) -> str | N
     if not scorer:
         return None
     return scorer
-
-
-def _ensure_promotion_save_target(self, layer: Points) -> bool:
-    """Ensure a prediction/machine source layer has a GT save_target set.
-
-    Returns True if save_target is set (or already existed), False if user cancels.
-    """
-    md = layer.metadata or {}
-    meta = md.setdefault("metadata", {})  # <-- nested metadata is authoritative for IO routing
-
-    pts = parse_points_metadata(meta)
-    io = pts.io
-    save_target = pts.save_target
-
-    # If save_target already set, nothing to do
-    if save_target is not None:
-        return True
-
-    # Only promote if source is machine/prediction
-    src_kind = getattr(io, "kind", None) if io is not None else None
-
-    # Only machine layers need promotion-to-GT
-    if src_kind is not AnnotationKind.MACHINE:
-        return True  # GT sources can save normally
-
-    anchor = _safe_folder_anchor_from_points_layer(layer)
-    if not anchor:
-        QMessageBox.warning(self, "Cannot save", "Could not determine a folder anchor for saving.")
-        return False
-
-    # 1) scorer from config.yaml if available
-    scorer = _find_config_scorer_nearby(anchor)
-
-    # 2) scorer from sidecar
-    if not scorer:
-        scorer = get_default_scorer(anchor)
-
-    # 3) prompt user if still missing
-    if not scorer:
-        suggested = _suggest_human_placeholder(anchor)
-        while True:
-            s = _prompt_for_scorer(self, anchor=anchor, suggested=suggested)
-            if s is None:
-                return False
-
-            if s.startswith("human_"):
-                choice = QMessageBox.question(
-                    self,
-                    "Generic scorer name",
-                    "You entered a generic scorer name starting with 'human_'.\n\n"
-                    "We strongly recommend using a real name or stable identifier.\n"
-                    "Using a generic scorer can cause confusion when merging datasets.\n\n"
-                    "Do you want to keep this generic scorer anyway?",
-                    QMessageBox.Yes | QMessageBox.No,
-                )
-                if choice == QMessageBox.No:
-                    suggested = s
-                    continue
-
-            scorer = s
-            break
-
-        # Persist to sidecar so we don't prompt again for this folder
-        try:
-            set_default_scorer(anchor, scorer)
-        except Exception:
-            logger.debug("Failed to persist default scorer to sidecar", exc_info=True)
-
-    # Compute deterministic GT target path (promotion)
-    target_name = f"CollectedData_{scorer}.h5"
-
-    # Store save_target as IOProvenance dict (plain dict in napari metadata)
-    st = IOProvenance(
-        project_root=anchor,
-        source_relpath_posix=target_name,
-        kind=AnnotationKind.GT,
-        dataset_key="keypoints",
-        scorer=scorer,
-    )
-
-    # IMPORTANT: writer expects save_target inside metadata["metadata"]
-    meta["save_target"] = st.model_dump(mode="python", exclude_none=True)
-
-    layer.metadata = md
-    return True
-
-
-# Hack to save a KeyPoints layer without showing the Save dialog
-def _save_layers_dialog(self, selected=False):
-    """Save layers (all or selected) to disk, using ``LayerList.save()``.
-    Parameters
-    ----------
-    selected : bool
-        If True, only layers that are selected in the viewer will be saved.
-        By default, all layers are saved.
-    """
-    selected_layers = list(self.viewer.layers.selection)
-    msg = ""
-    if not len(self.viewer.layers):
-        msg = "There are no layers in the viewer to save."
-    elif selected and not len(selected_layers):
-        msg = "Please select a Points layer to save."
-    if msg:
-        QMessageBox.warning(self, "Nothing to save", msg, QMessageBox.Ok)
-        return
-    if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
-        layer = selected_layers[0]
-
-        # Promotion-to-GT policy: never write back to machine/prediction sources.
-        ok = _ensure_promotion_save_target(self, layer)
-        if not ok:
-            return
-
-        self.viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
-        self.viewer.status = "Data successfully saved"
-    else:
-        dlg = QFileDialog()
-        hist = get_save_history()
-        dlg.setHistory(hist)
-        filename, _ = dlg.getSaveFileName(
-            caption=f"Save {'selected' if selected else 'all'} layers",
-            dir=hist[0],  # home dir by default
-        )
-        if filename:
-            self.viewer.layers.save(filename, selected=selected)
-        else:
-            return
-    self._is_saved = True
-    self.last_saved_label.setText(f"Last saved at {str(datetime.now().time()).split('.')[0]}")
-    self.last_saved_label.show()
-
-
-def on_close(self, event, widget):
-    if widget._stores and not widget._is_saved:
-        choice = QMessageBox.warning(
-            widget,
-            "Warning",
-            "Data were not saved. Are you certain you want to leave?",
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if choice == QMessageBox.Yes:
-            event.accept()
-        else:
-            event.ignore()
-    else:
-        event.accept()
 
 
 # Class taken from https://github.com/matplotlib/napari-matplotlib/blob/53aa5ec95c1f3901e21dedce8347d3f95efe1f79/src/napari_matplotlib/base.py#L309
@@ -732,11 +524,18 @@ class KeypointControls(QWidget):
         # Hold references to the KeypointStores
         self._stores = {}
         # Intercept close event if data were not saved
-        self.viewer.window._qt_window.closeEvent = partial(
-            on_close,
-            self.viewer.window._qt_window,
-            widget=self,
-        )
+        qt_win = self.viewer.window._qt_window
+        orig_close_event = qt_win.closeEvent
+
+        # Wrap event without overriding the original
+        # for future-proofing
+        def _close_event(event):
+            self.on_close(event)
+            # if accepted, call original
+            if event.isAccepted():
+                orig_close_event(event)
+
+        qt_win.closeEvent = _close_event
 
         # Storage for extra image metadata that are relevant to other layers.
         # These are updated anytime images are added to the Viewer
@@ -803,8 +602,7 @@ class KeypointControls(QWidget):
             if "save selected layer" in action_name:
                 action.triggered.disconnect()
                 action.triggered.connect(
-                    lambda: _save_layers_dialog(
-                        self,
+                    lambda: self._save_layers_dialog(
                         selected=True,
                     )
                 )
@@ -932,7 +730,7 @@ class KeypointControls(QWidget):
         layer.bind_key("M", self.cycle_through_label_modes)
         layer.bind_key("F", self.cycle_through_color_modes)
 
-        func = partial(_paste_data, store=store)
+        func = partial(self._paste_data, store=store)
         layer._paste_data = MethodType(func, layer)
         layer.add = MethodType(keypoints._add, store)
 
@@ -1055,8 +853,8 @@ class KeypointControls(QWidget):
             return
 
         super_animal, table = tables.popitem()
-        layer_data = io.load_superkeypoints_diagram(super_animal)
-        self.viewer.add_image(layer_data[0], metadata=layer_data[1])
+        image, md = io.load_superkeypoints_diagram(super_animal)
+        self.viewer.add_image(image, metadata=md)
         superkpts_dict = io.load_superkeypoints(super_animal)
         xy = []
         labels = []
@@ -1214,10 +1012,9 @@ class KeypointControls(QWidget):
 
     def _sync_points_layers_from_image_meta(self) -> None:
         """
-        Ensure all Points layers have core fields required for saving.
+                Ensure all Points layers have core fields required for saving.
 
-        IMPORTANT: The writer expects the DLC runtime header at layer.metadata["metadata"]["header"].
-        Therefore, we sync fields into layer.metadata["metadata"] (nested), not top-level.
+        +       PointsMetadata fields live at the top-level of layer.metadata.
         """
         if self._image_meta is None:
             return
@@ -1230,17 +1027,16 @@ class KeypointControls(QWidget):
                 ly.metadata = {}
 
             md = ly.metadata  # mutate in place
-            meta = md.setdefault("metadata", {})  # nested payload used by writer
+            existing_header = md.get("header", None)
 
             # Preserve header across any subsequent metadata operations
-            existing_header = meta.get("header", None)
 
             # Ensure IO provenance exists (operate on nested meta, not top-level)
-            self._ensure_io_from_source_h5(meta)
+            self._ensure_io_from_source_h5(md)
 
             # Validate points metadata from nested payload (authoritative for routing)
             try:
-                pts_model = PointsMetadata(**meta)
+                pts_model = PointsMetadata(**md)
             except Exception:
                 pts_model = PointsMetadata()
 
@@ -1251,12 +1047,12 @@ class KeypointControls(QWidget):
             for key, value in synced_dict.items():
                 if key == "controls":
                     continue
-                if meta.get(key) in (None, "", []):
-                    meta[key] = value
+                if md.get(key) in (None, "", []):
+                    md[key] = value
 
             # Restore header if it was present before
-            if existing_header is not None and meta.get("header") is None:
-                meta["header"] = existing_header
+            if existing_header is not None and md.get("header") is None:
+                md["header"] = existing_header
 
     def _show_color_scheme(self):
         show = self._view_scheme_cb.isChecked()
@@ -1605,7 +1401,7 @@ class KeypointControls(QWidget):
             layer.text.visible = False
             layer.bind_key("M", self.cycle_through_label_modes)
             layer.bind_key("F", self.cycle_through_color_modes)
-            func = partial(_paste_data, store=store)
+            func = partial(self._paste_data, store=store)
             layer._paste_data = MethodType(func, layer)
             layer.add = MethodType(keypoints._add, store)
             layer.events.add(query_next_frame=Event)
@@ -1690,6 +1486,209 @@ class KeypointControls(QWidget):
             self._trail_cb.setChecked(False)
             self._show_traj_plot_cb.setChecked(False)
             self._trails = None
+
+    def _paste_data(self, store):
+        """Paste only currently unannotated data."""
+        features = self._clipboard.pop("features", None)
+        if features is None:
+            return
+
+        unannotated = [
+            keypoints.Keypoint(label, id_) not in store.annotated_keypoints
+            for label, id_ in zip(features["label"], features["id"], strict=False)
+        ]
+        if not any(unannotated):
+            return
+
+        new_features = features.iloc[unannotated]
+        indices_ = self._clipboard.pop("indices")
+        text_ = self._clipboard.pop("text")
+        self._clipboard = {k: v[unannotated] for k, v in self._clipboard.items()}
+        self._clipboard["features"] = new_features
+        self._clipboard["indices"] = indices_
+        if text_ is not None:
+            new_text = {
+                "string": text_["string"][unannotated],
+                "color": text_["color"],
+            }
+            self._clipboard["text"] = new_text
+
+        npoints = len(self._view_data)
+        totpoints = len(self.data)
+
+        if len(self._clipboard.keys()) > 0:
+            not_disp = self._slice_input.not_displayed
+            data = deepcopy(self._clipboard["data"])
+            offset = [self._slice_indices[i] - self._clipboard["indices"][i] for i in not_disp]
+            data[:, not_disp] = data[:, not_disp] + np.array(offset)
+            self._data = np.append(self.data, data, axis=0)
+            self._shown = np.append(self.shown, deepcopy(self._clipboard["shown"]), axis=0)
+            self._size = np.append(self.size, deepcopy(self._clipboard["size"]), axis=0)
+            self._symbol = np.append(self.symbol, deepcopy(self._clipboard["symbol"]), axis=0)
+
+            self._feature_table.append(self._clipboard["features"])
+
+            self.text._paste(**self._clipboard["text"])
+
+            self._edge_width = np.append(
+                self.edge_width,
+                deepcopy(self._clipboard["edge_width"]),
+                axis=0,
+            )
+            self._edge._paste(
+                colors=self._clipboard["edge_color"],
+                properties=_features_to_properties(self._clipboard["features"]),
+            )
+            self._face._paste(
+                colors=self._clipboard["face_color"],
+                properties=_features_to_properties(self._clipboard["features"]),
+            )
+
+            self._selected_view = list(range(npoints, npoints + len(self._clipboard["data"])))
+            self._selected_data = set(range(totpoints, totpoints + len(self._clipboard["data"])))
+            self.refresh()
+
+    def _ensure_promotion_save_target(self, layer: Points) -> bool:
+        """Ensure a prediction/machine source layer has a GT save_target set.
+
+        Returns True if save_target is set (or already existed), False if user cancels.
+        """
+        md = layer.metadata or {}
+        self._ensure_io_from_source_h5(md)
+        pts = parse_points_metadata(md)
+        io = pts.io
+        save_target = pts.save_target
+
+        # If save_target already set, nothing to do
+        if save_target is not None:
+            return True
+
+        # Only promote if source is machine/prediction
+        src_kind = getattr(io, "kind", None) if io is not None else None
+
+        # Only machine layers need promotion-to-GT
+        if src_kind is not AnnotationKind.MACHINE:
+            return True  # GT sources can save normally
+
+        anchor = _safe_folder_anchor_from_points_layer(layer)
+        if not anchor:
+            QMessageBox.warning(self, "Cannot save", "Could not determine a folder anchor for saving.")
+            return False
+
+        # 1) scorer from config.yaml if available
+        scorer = _find_config_scorer_nearby(anchor)
+
+        # 2) scorer from sidecar
+        if not scorer:
+            scorer = get_default_scorer(anchor)
+
+        # 3) prompt user if still missing
+        if not scorer:
+            suggested = _suggest_human_placeholder(anchor)
+            while True:
+                s = _prompt_for_scorer(self, anchor=anchor, suggested=suggested)
+                if s is None:
+                    return False
+
+                if s.startswith("human_"):
+                    choice = QMessageBox.question(
+                        self,
+                        "Generic scorer name",
+                        "You entered a generic scorer name starting with 'human_'.\n\n"
+                        "We strongly recommend using a real name or stable identifier.\n"
+                        "Using a generic scorer can cause confusion when merging datasets.\n\n"
+                        "Do you want to keep this generic scorer anyway?",
+                        QMessageBox.Yes | QMessageBox.No,
+                    )
+                    if choice == QMessageBox.No:
+                        suggested = s
+                        continue
+
+                scorer = s
+                break
+
+            # Persist to sidecar so we don't prompt again for this folder
+            try:
+                set_default_scorer(anchor, scorer)
+            except Exception:
+                logger.debug("Failed to persist default scorer to sidecar", exc_info=True)
+
+        # Compute deterministic GT target path (promotion)
+        target_name = f"CollectedData_{scorer}.h5"
+
+        # Store save_target as IOProvenance dict (plain dict in napari metadata)
+        st = IOProvenance(
+            project_root=anchor,
+            source_relpath_posix=target_name,
+            kind=AnnotationKind.GT,
+            dataset_key="keypoints",
+            scorer=scorer,
+        )
+
+        # IMPORTANT: store at top level of layer.metadata
+        md["save_target"] = st.model_dump(mode="python", exclude_none=True)
+
+        layer.metadata = md
+        return True
+
+    # Hack to save a KeyPoints layer without showing the Save dialog
+    def _save_layers_dialog(self, selected=False):
+        """Save layers (all or selected) to disk, using ``LayerList.save()``.
+        Parameters
+        ----------
+        selected : bool
+            If True, only layers that are selected in the viewer will be saved.
+            By default, all layers are saved.
+        """
+        selected_layers = list(self.viewer.layers.selection)
+        msg = ""
+        if not len(self.viewer.layers):
+            msg = "There are no layers in the viewer to save."
+        elif selected and not len(selected_layers):
+            msg = "Please select a Points layer to save."
+        if msg:
+            QMessageBox.warning(self, "Nothing to save", msg, QMessageBox.Ok)
+            return
+        if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
+            layer = selected_layers[0]
+
+            # Promotion-to-GT policy: never write back to machine/prediction sources.
+            ok = self._ensure_promotion_save_target(layer)
+            if not ok:
+                return
+
+            self.viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+            self.viewer.status = "Data successfully saved"
+        else:
+            dlg = QFileDialog()
+            hist = get_save_history()
+            dlg.setHistory(hist)
+            filename, _ = dlg.getSaveFileName(
+                caption=f"Save {'selected' if selected else 'all'} layers",
+                dir=hist[0],  # home dir by default
+            )
+            if filename:
+                self.viewer.layers.save(filename, selected=selected)
+            else:
+                return
+        self._is_saved = True
+        self.last_saved_label.setText(f"Last saved at {str(datetime.now().time()).split('.')[0]}")
+        self.last_saved_label.show()
+
+    def on_close(self, event):
+        if self._stores and not self._is_saved:
+            choice = QMessageBox.warning(
+                self,
+                "Warning",
+                "Data were not saved. Are you certain you want to leave?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if choice == QMessageBox.Yes:
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
 
     def on_active_layer_change(self, event) -> None:
         """Updates the GUI when the active layer changes

@@ -9,8 +9,6 @@ import pytest
 from napari.layers import Points
 from qtpy.QtWidgets import QInputDialog, QMessageBox
 
-from napari_deeplabcut._widgets import _save_layers_dialog
-
 # -----------------------------------------------------------------------------
 # Fixtures: avoid modal hangs + control overwrite confirmation path
 # -----------------------------------------------------------------------------
@@ -866,7 +864,7 @@ def test_promotion_first_save_prompts_and_creates_sidecar(make_napari_viewer, qt
     controls.viewer.layers.selection.select_only(machine_layer)
 
     # Call your menu-hooked save action (this hits promotion logic)
-    _save_layers_dialog(controls, selected=True)
+    controls._save_layers_dialog(selected=True)
     qtbot.wait(200)
 
     # Sidecar created
@@ -921,7 +919,7 @@ def test_promotion_second_save_uses_sidecar_no_prompt(make_napari_viewer, qtbot,
     inputdialog.forbid()
 
     # Save via widget path
-    _save_layers_dialog(controls, selected=True)
+    controls._save_layers_dialog(selected=True)
     qtbot.wait(200)
 
     assert inputdialog.calls == 0

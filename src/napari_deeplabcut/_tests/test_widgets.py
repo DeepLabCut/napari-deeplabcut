@@ -28,8 +28,7 @@ def test_keypoint_controls(viewer, qtbot):
 def test_save_layers(viewer, points):
     controls = _widgets.KeypointControls(viewer)
     viewer.layers.selection.add(points)
-    # _save_layers_dialog bypasses napari's Save dialog for Points layers (used in headless tests)
-    _widgets._save_layers_dialog(controls)
+    controls._save_layers_dialog(controls)
 
 
 def test_show_trails(viewer, store):

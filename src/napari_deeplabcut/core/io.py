@@ -183,22 +183,32 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
 # NOTE: These are used to support DLCHeader superkeypoints workflows.
 
 
+def load_superkeypoints_json_from_path(json_path: str | Path):
+    path = Path(json_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Superkeypoints JSON file not found at {json_path}.")
+    with open(path) as f:
+        return json.load(f)
+
+
+def load_superkeypoints_diagram_from_path(image_path: str | Path):
+    path = Path(image_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Superkeypoints diagram not found at {image_path}.")
+    try:
+        return imread(path).squeeze(), {"root": ""}, "images"
+    except Exception as e:
+        raise RuntimeError(f"Superkeypoints diagram could not be loaded from {image_path}.") from e
+
+
 def load_superkeypoints_diagram(super_animal: str):
     path = resources.files("napari_deeplabcut") / "assets" / f"{super_animal}.jpg"
-    if not Path(path).is_file():
-        raise FileNotFoundError(f"Superkeypoints diagram not found for {super_animal}.")
-    try:
-        return imread(path), {"root": ""}, "images"
-    except Exception as e:
-        raise FileNotFoundError(f"Superkeypoints diagram not found for {super_animal}.") from e
+    return load_superkeypoints_diagram_from_path(path)
 
 
 def load_superkeypoints(super_animal: str):
     path = resources.files("napari_deeplabcut") / "assets" / f"{super_animal}.json"
-    if not Path(path).is_file():
-        raise FileNotFoundError(f"Superkeypoints JSON file not found for {super_animal}.")
-    with open(path) as f:
-        return json.load(f)
+    return load_superkeypoints_json_from_path(path)
 
 
 # =============================================================================

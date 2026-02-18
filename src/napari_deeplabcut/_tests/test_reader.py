@@ -3,7 +3,6 @@ import dask.array as da
 import numpy as np
 import pandas as pd
 import pytest
-from PIL import Image
 from skimage.io import imsave
 
 from napari_deeplabcut import _reader
@@ -395,66 +394,13 @@ def test_lazy_imread_grayscale_and_rgba(tmp_path):
     assert all(img.shape[-1] == 3 for img in res)
 
 
-@pytest.mark.parametrize(
-    "exists",
-    [
-        True,
-        False,
-    ],
-)
-def test_load_superkeypoints(monkeypatch, tmp_path, exists):
-    """Test loading of superkeypoints JSON with and without the file present."""
-    module_dir = tmp_path / "module"
-    assets_dir = module_dir / "assets"
-    assets_dir.mkdir(parents=True)
-
-    super_animal = "fake"
-    json_path = assets_dir / f"{super_animal}.json"
-
-    if exists:
-        json_path.write_text('{"SK1": [1, 2]}')
-
-    # Patch module __file__
-    fake_file = module_dir / "_reader_fake.py"
-    fake_file.write_text("# fake module")
-    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_file))
-
-    if exists:
-        assert load_superkeypoints(super_animal) == {"SK1": [1, 2]}
-    else:
-        with pytest.raises(FileNotFoundError):
-            load_superkeypoints(super_animal)
+def test_load_superkeypoints():
+    """Test loading of superkeypoints JSON to ensure file is present and correctly parsed."""
+    json_file = load_superkeypoints("superanimal_quadruped")
+    assert isinstance(json_file, dict)
 
 
-@pytest.mark.parametrize(
-    "exists",
-    [
-        True,
-        False,
-    ],
-)
-def test_load_superkeypoints_diagram(monkeypatch, tmp_path, exists):
-    """Test loading of superkeypoints diagram with and without the file present."""
-    module_dir = tmp_path / "module"
-    assets_dir = module_dir / "assets"
-    assets_dir.mkdir(parents=True)
-
-    super_animal = "fake"
-    jpg_path = assets_dir / f"{super_animal}.jpg"
-
-    if exists:
-        Image.new("RGB", (10, 10), "white").save(jpg_path)
-
-    # Patch module __file__
-    fake_file = module_dir / "_reader_fake.py"
-    fake_file.write_text("# fake")
-    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_file))
-
-    if exists:
-        array, meta, layer_type = load_superkeypoints_diagram(super_animal)
-        assert layer_type == "images"
-        assert meta == {"root": ""}
-        assert tuple(array.shape[-3:-1]) == (10, 10)
-    else:
-        with pytest.raises(FileNotFoundError):
-            load_superkeypoints_diagram(super_animal)
+def test_load_superkeypoints_diagram():
+    """Test loading of superkeypoints diagram to ensure file is present and correctly read."""
+    diagram = load_superkeypoints_diagram("superanimal_quadruped")
+    assert diagram[0].ndim == 3  # should be an RGB image

@@ -53,10 +53,19 @@ def _set_df_scorer(df: pd.DataFrame, scorer: str) -> pd.DataFrame:
     return df
 
 
-def _form_df(points_data, metadata):
+def _form_df(points_data, layer_meta):
+    """Form a DataFrame from the given points data and layer metadata, structured according to DLC conventions.
+
+    Arguments:
+    - points_data: numpy array of shape (N, 3) where columns are [frame_index, x, y]
+    - layer_meta: dict containing 'properties' with 'label', 'id', and 'likelihood' arrays,
+                and 'metadata' with 'header' containing column info.
+                DO NOT CONFUSE with our PointsMetadata; this is the raw metadata dict from the layer,
+                which may or may not contain a 'metadata' key with our structured metadata.
+    """
     temp = pd.DataFrame(points_data[:, -1:0:-1], columns=["x", "y"])
-    properties = metadata["properties"]
-    meta = metadata["metadata"]
+    properties = layer_meta["properties"]
+    meta = layer_meta["metadata"]
     temp["bodyparts"] = properties["label"]
     temp["individuals"] = properties["id"]
     temp["inds"] = points_data[:, 0].astype(int)
@@ -156,7 +165,7 @@ def write_hdf(filename, data, metadata):
     layer_name = metadata.get("name", "")
 
     out_path, target_scorer, source_kind = _resolve_output_path_from_metadata(metadata)
-    df_new = _form_df(data, metadata)
+    df_new = _form_df(data, layer_meta)
     # If promoting to GT and a target scorer is known, rewrite the scorer level.
     if target_scorer:
         df_new = _set_df_scorer(df_new, target_scorer)
