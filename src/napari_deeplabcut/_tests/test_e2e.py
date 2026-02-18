@@ -14,7 +14,7 @@ from napari_deeplabcut._widgets import _save_layers_dialog
 # -----------------------------------------------------------------------------
 # Fixtures: avoid modal hangs + control overwrite confirmation path
 # -----------------------------------------------------------------------------
-# TODO @C-Achard 17/02/26: Many of these can be moved to conftest
+# TODO @C-Achard 2026-02-17: Many of these can be moved to conftest
 # as they are useful for multiple test modules, and some can be made more generic.
 
 
@@ -229,39 +229,6 @@ def _make_labeled_folder_with_machine_only(tmp_path: Path) -> Path:
     df0.to_csv(str(folder / "machinelabels-iter0.csv"))
 
     return folder
-
-
-# -----------------------------------------------------------------------------
-# Helpers: multi-file DLC folders (multiple GT + optional machine file)
-# -----------------------------------------------------------------------------
-
-
-def _write_keypoints_h5(
-    path: Path,
-    *,
-    scorer: str,
-    img_rel: tuple[str, ...],
-    bodyparts=("bodypart1", "bodypart2"),
-    values=None,
-) -> Path:
-    """
-    Write a single-row DLC keypoints H5 in the same format used by _make_minimal_dlc_project.
-    `values` should be [b1x, b1y, b2x, b2y] where some can be NaN.
-    """
-    if values is None:
-        values = [10.0, 20.0, np.nan, np.nan]
-
-    cols = pd.MultiIndex.from_product(
-        [[scorer], list(bodyparts), ["x", "y"]],
-        names=["scorer", "bodyparts", "coords"],
-    )
-    idx = pd.MultiIndex.from_tuples([img_rel])
-    df = pd.DataFrame([values], index=idx, columns=cols)
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_hdf(path, key="keypoints", mode="w")
-    df.to_csv(str(path).replace(".h5", ".csv"))
-    return path
 
 
 # -----------------------------------------------------------------------------
