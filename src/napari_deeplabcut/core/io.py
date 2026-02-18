@@ -91,6 +91,13 @@ def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
 # and attaches provenance via attach_source_and_io.
 
 
+def read_hdf(filename: str) -> list[LayerData]:
+    layers = []
+    for file in Path(filename).parent.glob(Path(filename).name):
+        layers.extend(read_hdf_single(file))
+    return layers
+
+
 def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[LayerData]:
     """Read a single H5 file and attach provenance with optional explicit kind."""
     temp = pd.read_hdf(str(file))
@@ -162,7 +169,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
         attach_source_and_io(metadata, file)
         # Override kind in io to discovered kind
         if isinstance(meta.get("io"), dict):
-            meta["io"]["kind"] = kind.value  # stored as enum value for JSON safety
+            meta["io"]["kind"] = kind  # stored as enum value for JSON safety
     else:
         attach_source_and_io(metadata, file)
 

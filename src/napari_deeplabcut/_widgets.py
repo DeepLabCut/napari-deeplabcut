@@ -49,16 +49,17 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+# from napari_deeplabcut.core.io import (
+#     is_video,
+#     load_config,
+#     load_superkeypoints,
+#     load_superkeypoints_diagram,
+#     write_config,
+# )
+import napari_deeplabcut.core.io as io
 from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut._writer import _form_df, _write_image
 from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata, IOProvenance, PointsMetadata
-from napari_deeplabcut.core.io import (
-    is_video,
-    load_config,
-    load_superkeypoints,
-    load_superkeypoints_diagram,
-    write_config,
-)
 from napari_deeplabcut.core.metadata import (
     infer_image_root,
     parse_points_metadata,
@@ -309,7 +310,7 @@ def _find_config_scorer_nearby(anchor: str) -> str | None:
         # misc.find_project_config_path expects a path; anchor works fine as starting point.
         cfg_path = misc.find_project_config_path(anchor)
         if cfg_path:
-            cfg = load_config(cfg_path)
+            cfg = io.load_config(cfg_path)
             s = cfg.get("scorer")
             if isinstance(s, str) and s.strip():
                 return s.strip()
@@ -898,7 +899,7 @@ class KeypointControls(QWidget):
         Uses your inference logic so builtins-loaded images don't crash.
         """
         paths = (layer.metadata or {}).get("paths")
-        if paths is None and is_video(layer.name):
+        if paths is None and io.is_video(layer.name):
             self.video_widget.setVisible(True)
 
         # Update authoritative image meta
@@ -1058,9 +1059,9 @@ class KeypointControls(QWidget):
             return
 
         super_animal, table = tables.popitem()
-        layer_data = load_superkeypoints_diagram(super_animal)
+        layer_data = io.load_superkeypoints_diagram(super_animal)
         self.viewer.add_image(layer_data[0], metadata=layer_data[1])
-        superkpts_dict = load_superkeypoints(super_animal)
+        superkpts_dict = io.load_superkeypoints(super_animal)
         xy = []
         labels = []
         for kpt_ref, kpt_super in table.items():
@@ -1090,7 +1091,7 @@ class KeypointControls(QWidget):
             return
 
         xy = points_layer.data[:, 1:3]
-        superkpts_dict = load_superkeypoints(super_animal)
+        superkpts_dict = io.load_superkeypoints(super_animal)
         xy_ref = np.c_[[val for val in superkpts_dict.values()]]
         neighbors = keypoints._find_nearest_neighbors(xy, xy_ref)
         found = neighbors != -1
@@ -1099,7 +1100,7 @@ class KeypointControls(QWidget):
 
         project_path = points_layer.metadata["project"]
         config_path = str(Path(project_path) / "config.yaml")
-        cfg = load_config(config_path)
+        cfg = io.load_config(config_path)
         conversion_tables = cfg.get("SuperAnimalConversionTables", {})
         conversion_tables[super_animal] = dict(
             zip(
@@ -1109,7 +1110,7 @@ class KeypointControls(QWidget):
             )
         )
         cfg["SuperAnimalConversionTables"] = conversion_tables
-        write_config(config_path, cfg)
+        io.write_config(config_path, cfg)
         self.viewer.status = "Mapping to superkeypoint set successfully saved"
 
     def start_tutorial(self):
@@ -1377,12 +1378,12 @@ class KeypointControls(QWidget):
                 y2, x2 = bbox.max(axis=0)
                 temp = {"crop": ", ".join(map(str, [x1, x2, y1, y2]))}
                 config_path = os.path.join(project_path, "config.yaml")
-                cfg = load_config(config_path)
+                cfg = io.load_config(config_path)
                 video_name = self._image_meta.name
                 if not video_name:
                     return
                 cfg["video_sets"][os.path.join(project_path, "videos", video_name)] = temp
-                write_config(config_path, cfg)
+                io.write_config(config_path, cfg)
                 break
 
     def _form_dropdown_menus(self, store):
@@ -1522,7 +1523,7 @@ class KeypointControls(QWidget):
         logging.debug(f"Inserting Layer {layer}")
         if isinstance(layer, Image):
             paths = layer.metadata.get("paths")
-            if paths is None and is_video(layer.name):
+            if paths is None and io.is_video(layer.name):
                 self.video_widget.setVisible(True)
 
             # Update authoritative image meta
