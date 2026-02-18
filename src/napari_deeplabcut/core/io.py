@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Any, Callable
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import cv2
 import dask.array as da
