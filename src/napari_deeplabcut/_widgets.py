@@ -71,7 +71,7 @@ from napari_deeplabcut.misc import (
 Tip = namedtuple("Tip", ["msg", "pos"])
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp
 
 
 class Shortcuts(QDialog):
@@ -558,7 +558,6 @@ class KeypointControls(QWidget):
         # )
         # Project data
         self._project_path: str | None = None
-
 
         status_bar = self.viewer.window._qt_window.statusBar()
         self.last_saved_label = QLabel("")

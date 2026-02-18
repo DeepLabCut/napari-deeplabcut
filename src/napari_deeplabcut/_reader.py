@@ -82,7 +82,9 @@ def get_folder_parser(path):
     images = _filter_extensions(Path(path).iterdir(), valid_extensions=SUPPORTED_IMAGES)
 
     if not images:
-        raise OSError(f"No supported images were found in {path} with extensions {SUPPORTED_IMAGES}.")
+        # FIXME  @C-Achard This could be made to read he h5/csv data, at the risk of partially populated metadata.
+        return None
+        # raise OSError(f"No supported images were found in {path} with extensions {SUPPORTED_IMAGES}.")
 
     image_layer = read_images(images)
     layers.extend(image_layer)
