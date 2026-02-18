@@ -116,7 +116,7 @@ def test_form_df_multi_animal(fake_keypoints):
     # inds + (x,y)
     data = np.column_stack([np.arange(n), rng.random(n), rng.random(n)])
 
-    df = _writer._form_df(data, metadata)
+    df = _writer._form_df(data, layer_metadata=metadata["metadata"], layer_properties=metadata["properties"])
 
     assert isinstance(df, pd.DataFrame)
     assert len(df) == n
@@ -150,7 +150,7 @@ def test_form_df_single_animal(fake_keypoints):
 
     # inds + (x,y)
     points = np.column_stack([np.arange(n), rng.random(n), rng.random(n)])
-    out = _writer._form_df(points, metadata)
+    out = _writer._form_df(points, layer_metadata=metadata["metadata"], layer_properties=metadata["properties"])
 
     assert isinstance(out, pd.DataFrame)
     assert len(out) == n

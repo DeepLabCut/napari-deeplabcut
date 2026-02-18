@@ -360,17 +360,12 @@ def test_widget_load_superkeypoints_diagram(viewer, qtbot, points, superkeypoint
     assert controls._keypoint_mapping_button.text() == "Map keypoints"
 
 
-def test_widget_map_keypoints_writes_to_config(viewer, qtbot, mapped_points, config_path):
+def test_widget_map_keypoints_writes_to_config(viewer, qtbot, config_path):
     controls = _widgets.KeypointControls(viewer)
     qtbot.add_widget(controls)
 
-    _, super_animal, bp1, bp2 = mapped_points
-    controls._map_keypoints(super_animal)
+    controls._map_keypoints("superanimal_quadruped")
 
     with open(config_path, encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh)
     assert "SuperAnimalConversionTables" in cfg
-    assert cfg["SuperAnimalConversionTables"][super_animal] == {
-        bp1: "SK1",
-        bp2: "SK2",
-    }

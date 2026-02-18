@@ -403,4 +403,4 @@ def test_load_superkeypoints():
 def test_load_superkeypoints_diagram():
     """Test loading of superkeypoints diagram to ensure file is present and correctly read."""
     diagram = load_superkeypoints_diagram("superanimal_quadruped")
-    assert diagram[0].ndim == 3  # should be an RGB image
+    assert diagram.ndim == 3  # should be an RGB image

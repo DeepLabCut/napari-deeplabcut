@@ -196,7 +196,7 @@ def load_superkeypoints_diagram_from_path(image_path: str | Path):
     if not path.is_file():
         raise FileNotFoundError(f"Superkeypoints diagram not found at {image_path}.")
     try:
-        return imread(path).squeeze(), {"root": ""}, "images"
+        return imread(path).squeeze()
     except Exception as e:
         raise RuntimeError(f"Superkeypoints diagram could not be loaded from {image_path}.") from e
 

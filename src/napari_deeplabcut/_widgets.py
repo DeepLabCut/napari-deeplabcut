@@ -442,10 +442,8 @@ class KeypointMatplotlibCanvas(QWidget):
 
         self.df = _form_df(
             points_layer.data,
-            {
-                "metadata": points_layer.metadata,
-                "properties": points_layer.properties,
-            },
+            layer_metadata=points_layer.metadata,
+            layer_properties=points_layer.properties,
         )
         for keypoint in self.df.columns.get_level_values("bodyparts").unique():
             y = self.df.xs((keypoint, "y"), axis=1, level=["bodyparts", "coords"])
@@ -853,8 +851,8 @@ class KeypointControls(QWidget):
             return
 
         super_animal, table = tables.popitem()
-        image, md = io.load_superkeypoints_diagram(super_animal)
-        self.viewer.add_image(image, metadata=md)
+        image = io.load_superkeypoints_diagram(super_animal)
+        self.viewer.add_image(image, name=f"{super_animal} keypoint diagram", metadata={"super_animal": super_animal})
         superkpts_dict = io.load_superkeypoints(super_animal)
         xy = []
         labels = []
@@ -1150,10 +1148,8 @@ class KeypointControls(QWidget):
             if points_layer is not None:
                 df = _form_df(
                     points_layer.data,
-                    {
-                        "metadata": points_layer.metadata,
-                        "properties": points_layer.properties,
-                    },
+                    layer_metadata=points_layer.metadata,
+                    layer_properties=points_layer.properties,
                 )
                 df = df.iloc[ind : ind + 1]
                 canon = canonicalize_path(output_path, 3)

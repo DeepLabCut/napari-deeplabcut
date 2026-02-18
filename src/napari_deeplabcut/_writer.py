@@ -53,36 +53,41 @@ def _set_df_scorer(df: pd.DataFrame, scorer: str) -> pd.DataFrame:
     return df
 
 
-def _form_df(points_data, layer_meta):
+# TODO @C-Achard move this to a helper in io and test more directly
+# This is a crucial part of the data pipeline and it should really use the Metadata models instead of raw dicts
+def _form_df(
+    points_data,
+    layer_metadata: dict,
+    layer_properties: dict,
+):
     """Form a DataFrame from the given points data and layer metadata, structured according to DLC conventions.
 
     Arguments:
     - points_data: numpy array of shape (N, 3) where columns are [frame_index, x, y]
-    - layer_meta: dict containing 'properties' with 'label', 'id', and 'likelihood' arrays,
-                and 'metadata' with 'header' containing column info.
-                DO NOT CONFUSE with our PointsMetadata; this is the raw metadata dict from the layer,
-                which may or may not contain a 'metadata' key with our structured metadata.
+    - layer_metadata: metadata dict from the napari layer
+    - layer_properties: properties dict from the napari layer (optional, can be extracted from metadata if not provided)
     """
-    temp = pd.DataFrame(points_data[:, -1:0:-1], columns=["x", "y"])
-    properties = layer_meta["properties"]
-    meta = layer_meta["metadata"]
-    temp["bodyparts"] = properties["label"]
-    temp["individuals"] = properties["id"]
-    temp["inds"] = points_data[:, 0].astype(int)
-    temp["likelihood"] = properties["likelihood"]
-    temp["scorer"] = meta["header"].scorer
-    df = temp.set_index(["scorer", "individuals", "bodyparts", "inds"]).stack()
+    temp_df = pd.DataFrame(points_data[:, -1:0:-1], columns=["x", "y"])
+    temp_df["bodyparts"] = layer_properties["label"]
+    temp_df["individuals"] = layer_properties["id"]
+    temp_df["inds"] = points_data[:, 0].astype(int)
+    temp_df["likelihood"] = layer_properties["likelihood"]
+    temp_df["scorer"] = layer_metadata["header"].scorer
+
+    df = temp_df.set_index(["scorer", "individuals", "bodyparts", "inds"]).stack()
     df.index.set_names("coords", level=-1, inplace=True)
     df = df.unstack(["scorer", "individuals", "bodyparts", "coords"])
     df.index.name = None
-    if not properties["id"][0]:
+    if not layer_properties["id"][0]:
         df = df.droplevel("individuals", axis=1)
-    df = df.reindex(meta["header"].columns, axis=1)
+    df = df.reindex(layer_metadata["header"].columns, axis=1)
+
     # Fill unannotated rows with NaNs
     # df = df.reindex(range(len(meta['paths'])))
     # df.index = meta['paths']
-    if meta["paths"]:
-        df.index = [meta["paths"][i] for i in df.index]
+    if layer_metadata["paths"]:
+        df.index = [layer_metadata["paths"][i] for i in df.index]
+
     misc.guarantee_multiindex_rows(df)
     return df
 
@@ -147,6 +152,9 @@ def _resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str 
 def write_hdf(filename, data, metadata):
     """
     Write DLC keypoints to disk.
+    Napari-facing function that must respect the napari writer signature:
+    def write_function(path: str, data: Any, metadata: dict) -> Optional[str]:
+    The returned string is the path that was actually written, or None if the write was aborted
 
     SAFETY POLICY:
     - For ground-truth files (CollectedData_*), never delete existing labels silently.
@@ -155,17 +163,12 @@ def write_hdf(filename, data, metadata):
         * old values are preserved when new are NaN/missing
     - For machine/refinement files, keep existing behavior (special merging logic).
     """
-    layer_meta = metadata.get("metadata")
-    if not isinstance(layer_meta, dict):
-        layer_meta = {}
-    # root may be nested or top-level depending on napari/version/reader path
-    root = layer_meta.get("root") or metadata.get("root")
-    # paths may be nested or top-level too
-    paths = layer_meta.get("paths") or metadata.get("paths")
+    root = metadata.get("root")
+    paths = metadata.get("paths")
     layer_name = metadata.get("name", "")
 
     out_path, target_scorer, source_kind = _resolve_output_path_from_metadata(metadata)
-    df_new = _form_df(data, layer_meta)
+    df_new = _form_df(data, layer_metadata=metadata["metadata"], layer_properties=metadata["properties"])
     # If promoting to GT and a target scorer is known, rewrite the scorer level.
     if target_scorer:
         df_new = _set_df_scorer(df_new, target_scorer)
@@ -198,7 +201,7 @@ def write_hdf(filename, data, metadata):
         out_path = os.path.join(root, f"{layer_name}.h5")
 
     # Decide write mode based on DESTINATION (promotion writes to GT target).
-    pts = parse_points_metadata(layer_meta)
+    pts = parse_points_metadata(metadata)
     has_save_target = pts.save_target is not None
 
     if has_save_target:
@@ -258,8 +261,8 @@ def write_hdf(filename, data, metadata):
     df_out.to_csv(out_path.replace(".h5", ".csv"))
 
     # Mark the session as saved if KeypointControls was attached to the layer metadata
-    layer_meta = metadata.get("metadata", {})
-    controls = layer_meta.get("controls")
+    plugin_metadata = metadata.get("metadata", {})
+    controls = plugin_metadata.get("controls")
     if controls is not None:
         controls._is_saved = True
         # Guard UI updates (tests/headless may not have Qt widgets)
