@@ -17,58 +17,6 @@ from napari_deeplabcut.core.paths import canonicalize_path
 logger = logging.getLogger(__name__)
 
 
-# def canonicalize_path(p: str | Path, n: int = 3) -> str:
-#     """Return canonical POSIX path built from the last n path components.
-
-#     This is platform-agnostic: it normalizes both Windows (`\\`) and POSIX (`/`)
-#     separators *before* splitting, then returns a POSIX-joined tail of length `n`.
-
-#     Examples
-#     --------
-#     - "C:\\data\\frames\\test\\img001.png" -> "frames/test/img001.png" (n=3)
-#     - "/home/user/frames/test/img001.png" -> "frames/test/img001.png" (n=3)
-#     """
-#     if n <= 0:
-#         raise ValueError("n must be a positive integer")
-#     try:
-#         s = str(p)
-#     except Exception as e:
-#         logger.debug("Failed to stringify path %r (%s).", p, type(e).__name__, exc_info=True)
-#         return ""
-
-#     s = s.replace("\\", "/")
-#     s = s.rstrip("/")
-#     parts = [part for part in s.split("/") if part and part != "." and part != ".."]
-
-#     if not parts:
-#         return ""
-#     return "/".join(parts[-n:])
-
-
-# def remap_array(values, idx_map):
-#     """
-#     Remap integer frame indices using a mapping, safe for empty arrays.
-
-#     Args:
-#         values: Array-like of integer indices (e.g., a NumPy array) to be remapped.
-#         idx_map: Mapping from original integer indices to new integer indices.
-
-#     Returns:
-#         A NumPy array of integer indices where each element of ``values`` is
-#         replaced by ``idx_map[value]`` when present in the mapping; if a value
-#         is not found in ``idx_map``, it is left unchanged. Empty input arrays
-#         are returned unchanged.
-#     """
-#     values = values.astype(int, copy=False)
-
-#     if values.size == 0:
-#         return values  # important: allow empty arrays!
-
-#     # Build array of mapped values, falling back to identity
-#     mapped = np.fromiter((idx_map.get(v, v) for v in values), dtype=values.dtype, count=len(values))
-#     return mapped
-
-
 def find_project_config_path(labeled_data_path: str) -> str:
     return str(Path(labeled_data_path).parents[2] / "config.yaml")
 
