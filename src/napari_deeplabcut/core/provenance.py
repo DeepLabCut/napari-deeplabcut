@@ -17,7 +17,7 @@ def ensure_io_provenance(obj: IOProvenance | dict | None) -> IOProvenance | None
     """
     Validate/normalize IO provenance payload.
 
-    Policy: runtime must carry AnnotationKind objects (strings invalid).
+    Policy: runtime must carry AnnotationKind objects or valid string.
     Invalid dicts raise MissingProvenanceError for deterministic behavior.
     """
     if obj is None:
@@ -26,7 +26,7 @@ def ensure_io_provenance(obj: IOProvenance | dict | None) -> IOProvenance | None
         return obj
     if isinstance(obj, dict):
         try:
-            # This must succeed only if kinds are AnnotationKind instances
+            # This must succeed only if kinds are AnnotationKind instances or valid strings
             return IOProvenance.model_validate(obj)
         except (ValidationError, TypeError) as e:
             raise MissingProvenanceError(f"Invalid IO provenance payload: {e}") from e
