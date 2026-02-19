@@ -495,6 +495,57 @@ class KeypointMatplotlibCanvas(QWidget):
                 break
 
 
+def _is_nan_like(x) -> bool:
+    try:
+        return bool(np.isnan(x))
+    except Exception:
+        return False
+
+
+def _safe_enable_cycle_mode(points_layer: Points) -> bool:
+    """
+    Return True if we enabled cycle mode safely, False if we did not.
+    Avoid napari categorical colormap KeyError when current property is NaN
+    or layer is empty.
+    """
+    # 1) Empty layer => never enable cycle mode
+    try:
+        if points_layer.data is None or len(points_layer.data) == 0:
+            return False
+    except Exception:
+        return False
+
+    # 2) Determine which property we intend to cycle on
+    prop_name = getattr(points_layer, "face_color", None) or "label"
+
+    props = getattr(points_layer, "properties", {}) or {}
+    values = props.get(prop_name)
+
+    # If missing properties or empty list => unsafe
+    if values is None or len(values) == 0:
+        return False
+
+    # 3) current property value must not be NaN
+    # Napari cycle mode can try to map current value; if that's NaN it may KeyError.
+    try:
+        v0 = values[0]
+    except Exception:
+        return False
+
+    if _is_nan_like(v0):
+        return False
+
+    # 4) Ensure colormap cycles exist for this prop
+    md = points_layer.metadata or {}
+    cycles = md.get("face_color_cycles") or {}
+    if prop_name not in cycles:
+        return False
+
+    # OK: safe to enable cycle
+    points_layer.face_color_mode = "cycle"
+    return True
+
+
 class KeypointControls(QWidget):
     def __init__(self, napari_viewer):
         super().__init__()
@@ -703,10 +754,22 @@ class KeypointControls(QWidget):
 
         QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, index))
 
+    def _validate_header(self, layer) -> bool:
+        hdr = (layer.metadata or {}).get("header")
+        if hdr is None or not hasattr(hdr, "form_individual_bodypart_pairs"):
+            self.viewer.status = (
+                "This Points layer does not look like a DLC keypoints layer. Missing a valid DLC header."
+            )
+            return False
+        return True
+
     def _handle_existing_points_layer(self, layer: Points) -> None:
         """
         Safe version of the Points branch from on_insert(), for adoption.
         """
+        if not self._validate_header(layer):
+            return
+
         store = keypoints.KeypointStore(self.viewer, layer)
         self._stores[layer] = store
         if layer.metadata.get("header") is None:
@@ -742,7 +805,8 @@ class KeypointControls(QWidget):
         layer.bind_key("Down", store.next_keypoint, overwrite=True)
         layer.bind_key("Up", store.prev_keypoint, overwrite=True)
 
-        layer.face_color_mode = "cycle"
+        if not _safe_enable_cycle_mode(layer):
+            layer.face_color_mode = "direct"
 
         # Create the dropdown menus
         self._form_dropdown_menus(store)
@@ -1342,6 +1406,8 @@ class KeypointControls(QWidget):
             # Delay layer sorting
             QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, event.index))
         elif isinstance(layer, Points):
+            if not self._validate_header(layer):
+                return
             # If the current Points layer comes from a config file, some have already
             # been added and the body part names are different from the existing ones,
             # then we update store's metadata and menus.
@@ -1408,7 +1474,8 @@ class KeypointControls(QWidget):
 
             layer.bind_key("Down", store.next_keypoint, overwrite=True)
             layer.bind_key("Up", store.prev_keypoint, overwrite=True)
-            layer.face_color_mode = "cycle"
+            if not _safe_enable_cycle_mode(layer):
+                layer.face_color_mode = "direct"
             self._form_dropdown_menus(store)
 
             proj = layer.metadata.get("project")
