@@ -57,13 +57,17 @@ def only_deeplabcut_debug_logs():
             logger.setLevel(level)
 
 
-@pytest.fixture
 def make_real_header(bodyparts=("bodypart1", "bodypart2"), individuals=("",), scorer="S"):
     cols = pd.MultiIndex.from_product(
         [[scorer], list(individuals), list(bodyparts), ["x", "y"]],
         names=["scorer", "individuals", "bodyparts", "coords"],
     )
     return misc.DLCHeader(cols)
+
+
+@pytest.fixture
+def make_real_header_factory():
+    return make_real_header
 
 
 @pytest.fixture

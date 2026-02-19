@@ -72,3 +72,24 @@ def test_write_hdf_raises_ambiguous_when_multiple_gt_candidates_and_no_provenanc
 
     with pytest.raises(AmbiguousSaveError):
         write_hdf("__dlc__.h5", data, attrs)
+
+
+def test_write_hdf_aborts_machine_without_promotion_target(tmp_path: Path):
+    data = np.array([[0.0, 44.0, 55.0]], dtype=float)
+    attrs = {
+        "metadata": {
+            "root": str(tmp_path),
+            "io": {
+                "schema_version": 1,
+                "project_root": str(tmp_path),
+                "source_relpath_posix": "machinelabels-iter0.h5",
+                "kind": AnnotationKind.MACHINE,
+                "dataset_key": "keypoints",
+            },
+            "header": {"columns": [("S", "", "bp1", "x"), ("S", "", "bp1", "y")]},
+        },
+        "properties": {"label": ["bp1"], "id": [""], "likelihood": [1.0]},
+    }
+
+    with pytest.raises(MissingProvenanceError):
+        write_hdf("__dlc__.h5", data, attrs)

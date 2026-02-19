@@ -13,7 +13,7 @@ from napari.layers import Points
 from qtpy.QtWidgets import QInputDialog, QMessageBox
 
 from napari_deeplabcut.config.models import AnnotationKind
-from napari_deeplabcut.core.errors import UnresolvablePathError
+from napari_deeplabcut.core.errors import MissingProvenanceError
 
 logger = logging.getLogger(__name__)
 
@@ -795,8 +795,7 @@ def test_machine_layer_does_not_modify_gt_on_save(make_napari_viewer, qtbot, tmp
 
     viewer.layers.selection.active = machine_layer
 
-    # FIXME exception type
-    with pytest.raises(UnresolvablePathError):
+    with pytest.raises(MissingProvenanceError):
         viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
 
     qtbot.wait(200)

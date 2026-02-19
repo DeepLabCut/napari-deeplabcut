@@ -6,7 +6,7 @@ from napari_deeplabcut.core.layers import populate_keypoint_layer_metadata
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_on_insert_empty_points_layer_does_not_crash(make_napari_viewer, make_real_header):
+def test_on_insert_empty_points_layer_does_not_crash(make_napari_viewer, make_real_header_factory):
     """
     Contract: inserting an empty Points layer must not crash.
     This guards against KeyError: nan coming from napari cycle colormap logic.
@@ -18,7 +18,7 @@ def test_on_insert_empty_points_layer_does_not_crash(make_napari_viewer, make_re
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
-    header = make_real_header(individuals=("animal1",))  # either is fine
+    header = make_real_header_factory(individuals=("animal1",))  # either is fine
     md = populate_keypoint_layer_metadata(
         header,
         labels=[],  # empty properties
@@ -36,7 +36,7 @@ def test_on_insert_empty_points_layer_does_not_crash(make_napari_viewer, make_re
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_on_insert_empty_points_layer_does_not_enable_cycle_mode(make_napari_viewer, make_real_header):
+def test_on_insert_empty_points_layer_does_not_enable_cycle_mode(make_napari_viewer, make_real_header_factory):
     """
     Contract: for empty layers, widget should not set face_color_mode='cycle'
     (or should otherwise avoid the cycle colormap path that crashes on nan).
@@ -47,7 +47,7 @@ def test_on_insert_empty_points_layer_does_not_enable_cycle_mode(make_napari_vie
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
-    header = make_real_header(individuals=("",))  # single animal
+    header = make_real_header_factory(individuals=("",))  # single animal
     md = populate_keypoint_layer_metadata(
         header,
         labels=[],
@@ -66,7 +66,7 @@ def test_on_insert_empty_points_layer_does_not_enable_cycle_mode(make_napari_vie
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_adopt_existing_empty_points_layer_does_not_crash(make_napari_viewer, make_real_header):
+def test_adopt_existing_empty_points_layer_does_not_crash(make_napari_viewer, make_real_header_factory):
     """
     Contract: adoption path must not crash for empty points layers.
     This exercises _adopt_existing_layers -> _handle_existing_points_layer.
@@ -74,7 +74,7 @@ def test_adopt_existing_empty_points_layer_does_not_crash(make_napari_viewer, ma
     viewer = make_napari_viewer()
 
     # Add layer BEFORE creating the widget (forces adoption path)
-    header = make_real_header(individuals=("animal1",))
+    header = make_real_header_factory(individuals=("animal1",))
     md = populate_keypoint_layer_metadata(
         header,
         labels=[],
@@ -96,7 +96,7 @@ def test_adopt_existing_empty_points_layer_does_not_crash(make_napari_viewer, ma
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_layer_insert_does_not_crash_when_current_property_is_nan(make_napari_viewer, make_real_header):
+def test_layer_insert_does_not_crash_when_current_property_is_nan(make_napari_viewer, make_real_header_factory):
     """
     Contract: even if a property value is NaN (bad input), widget must not crash.
     It may fall back to direct mode or sanitize the property.
@@ -108,7 +108,7 @@ def test_layer_insert_does_not_crash_when_current_property_is_nan(make_napari_vi
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
-    header = make_real_header(individuals=("",))
+    header = make_real_header_factory(individuals=("",))
     md = populate_keypoint_layer_metadata(
         header,
         labels=["bodypart1"],
