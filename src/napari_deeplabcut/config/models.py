@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -159,6 +160,29 @@ class IOProvenance(BaseModel):
         if v is None:
             return None
         return v.replace("\\", "/")
+
+    @field_validator("kind")
+    @classmethod
+    def _validate_kind(cls, v: AnnotationKind | str | None) -> AnnotationKind | None:
+        """Validate that kind is either an AnnotationKind or a valid string."""
+        if v is None:
+            return None
+        if isinstance(v, AnnotationKind):
+            return v
+        try:
+            return AnnotationKind(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid annotation kind: {v!r}") from e
+
+    @field_validator("project_root")
+    @classmethod
+    def _validate_project_root(cls, v: str | None) -> str | None:
+        """Optionally validate that project_root is a directory path."""
+        if v is None:
+            return None
+        if not Path(v).exists() or not Path(v).is_dir():
+            raise ValueError(f"project_root must be a directory path, got: {v!r}")
+        return v
 
 
 class ImageMetadata(BaseModel):

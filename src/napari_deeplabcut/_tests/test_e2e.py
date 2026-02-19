@@ -1,5 +1,8 @@
 # src/napari_deeplabcut/_tests/test_e2e.py
+import hashlib
 import logging
+import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,11 +15,21 @@ from qtpy.QtWidgets import QInputDialog, QMessageBox
 from napari_deeplabcut.config.models import AnnotationKind
 from napari_deeplabcut.core.errors import UnresolvablePathError
 
+logger = logging.getLogger(__name__)
+
+
 # -----------------------------------------------------------------------------
 # Fixtures: avoid modal hangs + control overwrite confirmation path
 # -----------------------------------------------------------------------------
 # TODO @C-Achard 2026-02-17: Many of these can be moved to conftest
 # as they are useful for multiple test modules, and some can be made more generic.
+def file_sig(p: Path):
+    b = p.read_bytes()
+    return {
+        "mtime": os.path.getmtime(p),
+        "size": len(b),
+        "sha256": hashlib.sha256(b).hexdigest()[:16],
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -348,15 +361,92 @@ def _snapshot_coords(path: Path) -> dict[str, float]:
     }
 
 
+# -----------------------------------------------------------------------------#
+# Assertions on signatures of written files, with NaN-stable equality
+# This is required because in DLC h5s NaN means "unlabeled",
+# so NaN to value changes are meaningful and should be detected,
+# but NaN to NaN should be treated as unchanged  (remains unlabeled).
+# Below tests are meant to avoid any future regressions in this logic,
+# which is critical for correct writer behavior and testability.
+# -----------------------------------------------------------------------------#
+
+
+def sig_equal(a: dict, b: dict) -> bool:
+    """NaN-stable signature equality for test signatures."""
+    if a.keys() != b.keys():
+        return False
+    for k in a.keys():
+        va, vb = a[k], b[k]
+        # Handle float NaNs
+        if isinstance(va, float) and isinstance(vb, float):
+            if math.isnan(va) and math.isnan(vb):
+                continue
+        if va != vb:
+            return False
+    return True
+
+
+def assert_only_these_changed_nan_safe(before: dict[Path, dict], after: dict[Path, dict], changed: set[Path]):
+    for p in before:
+        if p in changed:
+            assert not sig_equal(before[p], after[p]), f"Expected {p.name} to change, but signature did not."
+        else:
+            assert sig_equal(before[p], after[p]), f"Expected {p.name} NOT to change, but signature changed."
+
+
+def test_sig_equal_treats_nan_as_equal():
+    a = {"b2x": float("nan"), "b2y": float("nan")}
+    b = {"b2x": float("nan"), "b2y": float("nan")}
+    assert sig_equal(a, b)
+
+
+def test_sig_equal_detects_nan_to_value_change():
+    a = {"b2x": float("nan")}
+    b = {"b2x": 77.0}
+    assert not sig_equal(a, b)
+
+
+def test_sig_equal_detects_value_change():
+    a = {"b1x": 10.0}
+    b = {"b1x": 11.0}
+    assert not sig_equal(a, b)
+
+
+def test_assert_only_these_changed_nan_safe_passes_expected_case(tmp_path: Path):
+    p1 = tmp_path / "A.h5"
+    p2 = tmp_path / "B.h5"
+
+    before = {
+        p1: {"b2x": float("nan")},
+        p2: {"b2x": float("nan")},
+    }
+    after = {
+        p1: {"b2x": float("nan")},  # unchanged
+        p2: {"b2x": 77.0},  # changed
+    }
+
+    assert_only_these_changed_nan_safe(before, after, changed={p2})
+
+
+def test_assert_only_these_changed_nan_safe_fails_when_unexpected_change(tmp_path: Path):
+    p1 = tmp_path / "A.h5"
+    before = {p1: {"b2x": float("nan")}}
+    after = {p1: {"b2x": 1.0}}
+
+    with pytest.raises(AssertionError):
+        assert_only_these_changed_nan_safe(before, after, changed=set())
+
+
 def _assert_only_these_files_changed(before: dict[Path, dict], after: dict[Path, dict], changed: set[Path]):
     """
     Assert that only the files in `changed` have different signatures.
     """
-    for p in before:
-        if p in changed:
-            assert before[p] != after[p], f"Expected {p.name} to change, but signature did not."
-        else:
-            assert before[p] == after[p], f"Expected {p.name} NOT to change, but signature changed."
+    # for p in before:
+    #     if p in changed:
+    #         assert before[p] != after[p], f"Expected {p.name} to change, but signature did not."
+    #     else:
+    #         assert before[p] == after[p], f"Expected {p.name} NOT to change, but signature changed."
+    return assert_only_these_changed_nan_safe(before, after, changed)
 
 
 def _get_points_layer_with_data(viewer) -> Points:
@@ -486,35 +576,35 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
 
     points = _get_points_layer_with_data(viewer)
 
-    logging.debug("points.name: %s", points.name)
-    logging.debug("points.data shape: %s", None if points.data is None else np.asarray(points.data).shape)
-    logging.debug("points.data[:5]: %s", None if points.data is None else np.asarray(points.data)[:5])
-    logging.debug(
+    logger.debug("points.name: %s", points.name)
+    logger.debug("points.data shape: %s", None if points.data is None else np.asarray(points.data).shape)
+    logger.debug("points.data[:5]: %s", None if points.data is None else np.asarray(points.data)[:5])
+    logger.debug(
         "any NaNs in points.data: %s", False if points.data is None else np.isnan(np.asarray(points.data)).any()
     )
-    logging.debug(
+    logger.debug(
         "any finite xy: %s", False if points.data is None else np.isfinite(np.asarray(points.data)[:, 1:3]).any()
     )
 
-    logging.debug("len(label): %s", len(points.properties.get("label", [])))
-    logging.debug("len(id): %s", len(points.properties.get("id", [])))
-    logging.debug("label[:10]: %s", points.properties.get("label", [])[:10])
-    logging.debug("id[:10]: %s", points.properties.get("id", [])[:10])
+    logger.debug("len(label): %s", len(points.properties.get("label", [])))
+    logger.debug("len(id): %s", len(points.properties.get("id", [])))
+    logger.debug("label[:10]: %s", points.properties.get("label", [])[:10])
+    logger.debug("id[:10]: %s", points.properties.get("id", [])[:10])
 
     hdr = points.metadata.get("header")
-    logging.debug("header type: %s", type(hdr))
+    logger.debug("header type: %s", type(hdr))
     if hdr is not None:
         cols = hdr.columns
-        logging.debug("header.columns type: %s", type(cols))
-        logging.debug("header.columns names: %s", getattr(cols, "names", None))
-        logging.debug("header.columns nlevels: %s", getattr(cols, "nlevels", None))
+        logger.debug("header.columns type: %s", type(cols))
+        logger.debug("header.columns names: %s", getattr(cols, "names", None))
+        logger.debug("header.columns nlevels: %s", getattr(cols, "nlevels", None))
 
-    logging.info("points.data[:5] = %s", points.data[:5])
-    logging.info("any NaNs in points.data = %s", np.isnan(points.data).any())
-    logging.info("labels[:10] = %s", points.properties.get("label")[:10])
-    logging.info("ids[:10] = %s", points.properties.get("id")[:10] if "id" in points.properties else None)
-    logging.info("header.columns.names = %s", points.metadata["header"].columns.names)
-    logging.info("header.columns.nlevels = %s", points.metadata["header"].columns.nlevels)
+    logger.info("points.data[:5] = %s", points.data[:5])
+    logger.info("any NaNs in points.data = %s", np.isnan(points.data).any())
+    logger.info("labels[:10] = %s", points.properties.get("label")[:10])
+    logger.info("ids[:10] = %s", points.properties.get("id")[:10] if "id" in points.properties else None)
+    logger.info("header.columns.names = %s", points.metadata["header"].columns.names)
+    logger.info("header.columns.nlevels = %s", points.metadata["header"].columns.nlevels)
     store = controls._stores.get(points)
     assert store is not None
 
@@ -650,11 +740,25 @@ def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qt
     # Fill NaNs for bodypart2 in B only (no overwrite dialog)
     _set_or_add_bodypart_xy(points_b, store_b, "bodypart2", x=77.0, y=66.0)
 
+    logger.info("BEFORE SAVE : name=%s, sig=%s", gt_paths[0].name, file_sig(gt_paths[0]))
+    logger.info("BEFORE SAVE : name=%s, sig=%s", gt_paths[1].name, file_sig(gt_paths[1]))
+
     viewer.layers.selection.active = points_b
+    logger.info("Layer selected for save: %s", points_b.name)
+    # logger.info("Layer metadata: %s", points_b.metadata)
     viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+
+    logger.info("AFTER SAVE : name=%s, sig=%s", gt_paths[0].name, file_sig(gt_paths[0]))
+    logger.info("AFTER SAVE : name=%s, sig=%s", gt_paths[1].name, file_sig(gt_paths[1]))
+
     qtbot.wait(200)
 
     after = {p: _snapshot_coords(p) for p in gt_paths}
+
+    logger.debug("Coords gt_a before: %s", before[gt_a])
+    logger.debug("Coords gt_b before: %s", before[gt_b])
+    logger.debug("Coords gt_a after: %s", after[gt_a])
+    logger.debug("Coords gt_b after: %s", after[gt_b])
 
     _assert_only_these_files_changed(before, after, changed={gt_b})
     assert after[gt_b]["b2x"] == 77.0

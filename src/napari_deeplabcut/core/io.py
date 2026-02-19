@@ -392,14 +392,12 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     logger.debug("HEADER nlevels: %s", ctx.meta.header.as_multiindex().nlevels)
     logger.debug("HEADER names: %s", ctx.meta.header.as_multiindex().names)
 
+    # Build df from points + plugin metadata + layer properties
     df_new = form_df_from_validated(ctx)
 
     logger.debug("DF_NEW columns nlevels: %s", df_new.columns.nlevels)
     logger.debug("DF_NEW columns names: %s", df_new.columns.names)
     logger.debug("DF_NEW finite count: %s", np.isfinite(df_new.to_numpy()).sum())
-
-    # Build df from points + plugin metadata + layer properties
-    df_new = form_df_from_validated(ctx)
 
     # Decide output path:
     # 1) User-requested path should be ignored in favor of provenance when available

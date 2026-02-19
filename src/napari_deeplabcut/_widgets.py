@@ -1011,9 +1011,9 @@ class KeypointControls(QWidget):
 
     def _sync_points_layers_from_image_meta(self) -> None:
         """
-                Ensure all Points layers have core fields required for saving.
+        Ensure all Points layers have core fields required for saving.
 
-        +       PointsMetadata fields live at the top-level of layer.metadata.
+        PointsMetadata fields live at the top-level of layer.metadata.
         """
         if self._image_meta is None:
             return
