@@ -144,3 +144,31 @@ def test_is_machine_layer_true_for_string_kind_logs_info(caplog, k):
 def test_is_machine_layer_false_for_missing_or_non_machine(metadata):
     layer = LayerStub(metadata=metadata)
     assert is_machine_layer(layer) is False
+
+
+def test_ids_as_pandas_series_single_animal_does_not_crash(patch_color_cycles):
+    import pandas as pd
+
+    header = HeaderStub(bodyparts=("bp1",), individuals=("",))
+    md = populate_keypoint_layer_metadata(header, labels=["bp1"], ids=pd.Series([""], name="individuals"))
+    assert md["face_color"] == "label"
+    assert md["text"] == "label"
+
+
+def test_ids_as_empty_pandas_series_does_not_crash_defaults_to_label(patch_color_cycles):
+    import pandas as pd
+
+    header = HeaderStub(bodyparts=("bp1",), individuals=("",))
+    md = populate_keypoint_layer_metadata(header, labels=["bp1"], ids=pd.Series([], dtype=str, name="individuals"))
+    assert md["face_color"] == "label"
+    assert md["text"] == "label"
+    assert md["properties"]["id"] == []
+
+
+def test_ids_as_pandas_series_multi_animal_uses_id(patch_color_cycles):
+    import pandas as pd
+
+    header = HeaderStub(bodyparts=("bp1",), individuals=("animal1",))
+    md = populate_keypoint_layer_metadata(header, labels=["bp1"], ids=pd.Series(["animal1"], name="individuals"))
+    assert md["face_color"] == "id"
+    assert md["text"] == "{id}–{label}"

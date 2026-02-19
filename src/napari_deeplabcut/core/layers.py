@@ -42,10 +42,21 @@ def populate_keypoint_layer_metadata(
     else:
         likelihood_arr = np.asarray(likelihood, dtype=float)
 
-    # Safe single-vs-multi discriminator:
-    # - empty ids => treat as single-animal semantics (label-based)
-    # - ids[0] == "" => also single-animal semantics
-    first_id = ids[0] if ids else ""
+    # 1) Normalize inputs to plain lists (Series-safe)
+    #    This prevents pandas Series truthiness errors.
+    labels_list = list(labels) if labels is not None else []
+    ids_list = list(ids) if ids is not None else []
+
+    # 2) Likelihood: always numeric ndarray for vector ops
+    if likelihood is None:
+        likelihood_arr = np.ones(len(labels_list), dtype=float)
+    else:
+        likelihood_arr = np.asarray(list(likelihood), dtype=float)
+
+    # 3) Determine single vs multi animal:
+    #    - empty ids => treat as single-animal (label-based)
+    #    - ids[0] == "" => also single-animal (label-based)
+    first_id = ids_list[0] if len(ids_list) > 0 else ""
     use_id = bool(first_id)
 
     face_color_cycle_maps = misc.build_color_cycles(header, colormap)
