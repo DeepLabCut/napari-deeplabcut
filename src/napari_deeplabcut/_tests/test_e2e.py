@@ -755,11 +755,6 @@ def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qt
 
     after = {p: _snapshot_coords(p) for p in gt_paths}
 
-    logger.debug("Coords gt_a before: %s", before[gt_a])
-    logger.debug("Coords gt_b before: %s", before[gt_b])
-    logger.debug("Coords gt_a after: %s", after[gt_a])
-    logger.debug("Coords gt_b after: %s", after[gt_b])
-
     _assert_only_these_files_changed(before, after, changed={gt_b})
     assert after[gt_b]["b2x"] == 77.0
 
@@ -768,6 +763,7 @@ def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qt
 def test_machine_layer_does_not_modify_gt_on_save(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
     """
     Contract: machine outputs must never save to their own file.
+    Users must explicitly provide a scorer name that is then used to save the h5.
     """
     overwrite_confirm.forbid()
 
@@ -807,7 +803,8 @@ def test_machine_layer_does_not_modify_gt_on_save(make_napari_viewer, qtbot, tmp
 
     after = {p: _snapshot_coords(p) for p in gt_paths + [machine_path]}
 
-    # Only machine file should change
+    # Machine file should be unchanged (no save path),
+    # and GT files should be unchanged (machine edits must not touch GT).
     _assert_only_these_files_changed(before, after, changed=set())
     # assert after[machine_path]["b2x"] == 55.0
 

@@ -23,25 +23,42 @@ def populate_keypoint_layer_metadata(
     colormap: str | None = "viridis",
 ) -> dict:
     """
-    - Must accept empty labels/ids/likelihood
-    - Must not assume ≥1 point
+    Populate metadata and display properties for a keypoint Points layer.
+
+    Notes
+    -----
+    - Single-animal DLC: "individuals" level is effectively absent; we represent
+      that as ids[0] == "" (falsy) => color/text by label.
+    - Multi-animal DLC: ids[0] is a non-empty individual identifier => color/text by id.
+    - Must accept empty labels/ids/likelihood and must not assume ≥ 1 entry.
     """
+
     if labels is None:
         labels = header.bodyparts
     if ids is None:
         ids = header.individuals
     if likelihood is None:
-        likelihood = np.ones(len(labels))
+        likelihood_arr = np.ones(len(labels), dtype=float)
+    else:
+        likelihood_arr = np.asarray(likelihood, dtype=float)
+
+    # Safe single-vs-multi discriminator:
+    # - empty ids => treat as single-animal semantics (label-based)
+    # - ids[0] == "" => also single-animal semantics
+    first_id = ids[0] if ids else ""
+    use_id = bool(first_id)
+
     face_color_cycle_maps = misc.build_color_cycles(header, colormap)
-    face_color_prop = "id" if ids[0] else "label"
+    face_color_prop = "id" if use_id else "label"
+
     return {
         "name": "keypoints",
-        "text": "{id}–{label}" if ids[0] else "label",
+        "text": "{id}–{label}" if use_id else "label",
         "properties": {
             "label": list(labels),
             "id": list(ids),
-            "likelihood": likelihood,
-            "valid": likelihood > pcutoff,
+            "likelihood": likelihood_arr,
+            "valid": likelihood_arr > pcutoff,
         },
         "face_color_cycle": face_color_cycle_maps[face_color_prop],
         "face_color": face_color_prop,
