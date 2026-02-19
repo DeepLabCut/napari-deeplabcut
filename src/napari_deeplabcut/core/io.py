@@ -171,6 +171,8 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     data[:, 0] = image_inds
     data[:, 1:] = df[["y", "x"]].to_numpy()
     finite = np.isfinite(data).all(axis=1)
+    # Keep only finite coords in data, but keep all rows in df for metadata completeness.
+    data = data[finite]
     df = df.loc[finite].reset_index(drop=True)
 
     metadata = populate_keypoint_layer_metadata(
@@ -301,7 +303,9 @@ def form_df(
     if header_obj is None:
         raise KeyError("layer_metadata['header'] is required to write DLC keypoints.")
 
-    if isinstance(header_obj, DLCHeaderModel):
+    if isinstance(header_obj, dict) and "columns" in header_obj:
+        header_model = DLCHeaderModel.model_validate(header_obj)
+    elif isinstance(header_obj, DLCHeaderModel):
         header_model = header_obj
     else:
         # Accept a misc.DLCHeader-like object (has .columns)

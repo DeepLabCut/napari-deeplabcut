@@ -21,6 +21,10 @@ class MissingProvenanceError(NapariDLCError):
 class AmbiguousSaveError(NapariDLCError):
     """Raised when multiple save targets are plausible and policy forbids guessing."""
 
+    def __init__(self, message: str, candidates: list[str] | None = None):
+        super().__init__(message)
+        self.candidates = candidates or []
+
 
 class UnresolvablePathError(NapariDLCError):
     """Raised when provenance exists but cannot be resolved to a concrete filesystem path."""
