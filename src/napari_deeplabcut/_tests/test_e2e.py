@@ -1,5 +1,8 @@
 # src/napari_deeplabcut/_tests/test_e2e.py
+import hashlib
 import logging
+import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -7,11 +10,26 @@ import numpy as np
 import pandas as pd
 import pytest
 from napari.layers import Points
-from qtpy.QtWidgets import QMessageBox
+from qtpy.QtWidgets import QInputDialog, QMessageBox
+
+from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.core.errors import MissingProvenanceError
+
+logger = logging.getLogger(__name__)
+
 
 # -----------------------------------------------------------------------------
 # Fixtures: avoid modal hangs + control overwrite confirmation path
 # -----------------------------------------------------------------------------
+# TODO @C-Achard 2026-02-17: Many of these can be moved to conftest
+# as they are useful for multiple test modules, and some can be made more generic.
+def file_sig(p: Path):
+    b = p.read_bytes()
+    return {
+        "mtime": os.path.getmtime(p),
+        "size": len(b),
+        "sha256": hashlib.sha256(b).hexdigest()[:16],
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -21,13 +39,45 @@ def _auto_accept_qmessagebox(monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
 
 
+@pytest.fixture
+def inputdialog(monkeypatch):
+    """
+    Controller for QInputDialog.getText used by promotion-to-GT first save prompt.
+    """
+    state = {"value": "Alice", "ok": True, "calls": 0, "forbid": False}
+
+    def _fake_getText(*args, **kwargs):
+        state["calls"] += 1
+        if state["forbid"]:
+            raise AssertionError("QInputDialog.getText was called but forbid=True")
+        return state["value"], state["ok"]
+
+    monkeypatch.setattr(QInputDialog, "getText", _fake_getText)
+
+    class Controller:
+        @property
+        def calls(self):
+            return state["calls"]
+
+        def set(self, value: str, ok: bool = True):
+            state["value"] = value
+            state["ok"] = ok
+            return self
+
+        def forbid(self):
+            state["forbid"] = True
+            return self
+
+    return Controller()
+
+
 @pytest.fixture(autouse=True)
 def overwrite_confirm(monkeypatch):
     """
     Control the overwrite-confirmation path used by the writer.
 
-    NOTE: the writer imports/uses _maybe_confirm_overwrite at module scope,
-    so we patch napari_deeplabcut._writer._maybe_confirm_overwrite.
+    NOTE: the io module imports/uses maybe_confirm_overwrite at module scope,
+    so we patch napari_deeplabcut.core.io.maybe_confirm_overwrite.
 
     API:
       - forbid(): fail test if confirmation is requested for a real overwrite
@@ -70,13 +120,13 @@ def overwrite_confirm(monkeypatch):
 
         # In "forbid" mode: allow calls only when there is no actual overwrite.
         if state["mode"] == "forbid" and n_pairs > 0:
-            raise AssertionError("_maybe_confirm_overwrite was called unexpectedly for a real overwrite (n_pairs > 0).")
+            raise AssertionError("maybe_confirm_overwrite was called unexpectedly for a real overwrite (n_pairs > 0).")
 
         return state["result"]
 
-    import napari_deeplabcut._writer as writer_mod
+    import napari_deeplabcut.core.io as io_mod
 
-    monkeypatch.setattr(writer_mod, "_maybe_confirm_overwrite", _patched_maybe_confirm_overwrite)
+    monkeypatch.setattr(io_mod, "maybe_confirm_overwrite", _patched_maybe_confirm_overwrite)
 
     class Controller:
         @property
@@ -161,6 +211,7 @@ def _make_minimal_dlc_project(tmp_path: Path):
         names=["scorer", "bodyparts", "coords"],
     )
     idx = pd.MultiIndex.from_tuples([img_rel])
+    # NaN implies "unlabeled" in DLC, so bodypart2 is unlabeled here.
     df0 = pd.DataFrame([[10.0, 20.0, np.nan, np.nan]], index=idx, columns=cols)
 
     h5_path = labeled / "CollectedData_John.h5"
@@ -170,11 +221,239 @@ def _make_minimal_dlc_project(tmp_path: Path):
     return project, config_path, labeled, h5_path
 
 
+def _make_labeled_folder_with_machine_only(tmp_path: Path) -> Path:
+    """
+    Folder contains:
+      - images
+      - machinelabels-iter0.h5 (no CollectedData*, no config.yaml)
+    """
+    folder = tmp_path / "shared" / "labeled-data" / "test"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    # image
+    _write_minimal_png(folder / "img000.png")
+
+    # machine h5 (minimal DLC-like structure)
+    cols = pd.MultiIndex.from_product(
+        [["machine"], ["bodypart1", "bodypart2"], ["x", "y"]],
+        names=["scorer", "bodyparts", "coords"],
+    )
+    df0 = pd.DataFrame([[np.nan, np.nan, np.nan, np.nan]], index=["img000.png"], columns=cols)
+    (folder / "machinelabels-iter0.h5").unlink(missing_ok=True)
+    df0.to_hdf(folder / "machinelabels-iter0.h5", key="keypoints", mode="w")
+    df0.to_csv(str(folder / "machinelabels-iter0.csv"))
+
+    return folder
+
+
+# -----------------------------------------------------------------------------
+# Helpers: multi-file DLC folders (multiple GT + optional machine file)
+# -----------------------------------------------------------------------------
+
+
+def _write_keypoints_h5(
+    path: Path,
+    *,
+    scorer: str,
+    img_rel: tuple[str, ...],
+    bodyparts=("bodypart1", "bodypart2"),
+    values=None,
+) -> Path:
+    """
+    Write a single-row DLC keypoints H5 in the same format used by _make_minimal_dlc_project.
+    `values` should be [b1x, b1y, b2x, b2y] where some can be NaN.
+    """
+    if values is None:
+        values = [10.0, 20.0, np.nan, np.nan]
+
+    cols = pd.MultiIndex.from_product(
+        [[scorer], list(bodyparts), ["x", "y"]],
+        names=["scorer", "bodyparts", "coords"],
+    )
+    idx = pd.MultiIndex.from_tuples([img_rel])
+    df = pd.DataFrame([values], index=idx, columns=cols)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_hdf(path, key="keypoints", mode="w")
+    df.to_csv(str(path).replace(".h5", ".csv"))
+    return path
+
+
+def _make_dlc_project_with_multiple_gt(
+    tmp_path: Path,
+    *,
+    scorers=("John", "Jane"),
+    with_machine: bool = False,
+):
+    """
+    Build a minimal DLC-like labeled-data folder with multiple GT files.
+
+      project/
+        config.yaml
+        labeled-data/test/img000.png
+        labeled-data/test/CollectedData_<scorer1>.h5
+        labeled-data/test/CollectedData_<scorer2>.h5
+        (optional) labeled-data/test/machinelabels-iter0.h5
+
+    Returns:
+      project, config_path, labeled_folder, gt_paths(list), machine_path(optional)
+    """
+    import yaml
+
+    project = tmp_path / "project"
+    labeled = project / "labeled-data" / "test"
+    labeled.mkdir(parents=True, exist_ok=True)
+
+    img_rel = ("labeled-data", "test", "img000.png")
+    img_path = project / Path(*img_rel)
+    _write_minimal_png(img_path)
+
+    cfg = {
+        "scorer": scorers[0],  # config scorer — not necessarily unique in folder
+        "bodyparts": ["bodypart1", "bodypart2"],
+        "dotsize": 8,
+        "pcutoff": 0.6,
+        "colormap": "viridis",
+    }
+    config_path = project / "config.yaml"
+    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+    gt_paths = []
+    # Make GT files distinct so we can tell which was modified
+    # Each scorer gets a different bodypart1 x,y and NaNs for bodypart2.
+    base = 10.0
+    for i, scorer in enumerate(scorers):
+        vals = [base + i * 100.0, base + i * 100.0 + 10.0, np.nan, np.nan]  # b1x, b1y, b2x, b2y
+        gt_path = labeled / f"CollectedData_{scorer}.h5"
+        _write_keypoints_h5(gt_path, scorer=scorer, img_rel=img_rel, values=vals)
+        gt_paths.append(gt_path)
+
+    machine_path = None
+    if with_machine:
+        # Machine file should look like a normal keypoints table for now.
+        # We'll edit bodypart2 there and ensure it doesn't touch GT.
+        machine_path = labeled / "machinelabels-iter0.h5"
+        _write_keypoints_h5(
+            machine_path,
+            scorer="machine",
+            img_rel=img_rel,
+            values=[np.nan, np.nan, np.nan, np.nan],
+        )
+
+    return project, config_path, labeled, gt_paths, machine_path
+
+
+def _read_h5_keypoints(path: Path) -> pd.DataFrame:
+    return pd.read_hdf(path, key="keypoints")
+
+
+def _snapshot_coords(path: Path) -> dict[str, float]:
+    """
+    Small “signature” of a keypoints file for stable comparisons:
+    b1x,b1y,b2x,b2y for img000.png.
+    """
+    df = _read_h5_keypoints(path)
+    return {
+        "b1x": _get_coord_from_df(df, "bodypart1", "x"),
+        "b1y": _get_coord_from_df(df, "bodypart1", "y"),
+        "b2x": _get_coord_from_df(df, "bodypart2", "x"),
+        "b2y": _get_coord_from_df(df, "bodypart2", "y"),
+    }
+
+
+# -----------------------------------------------------------------------------#
+# Assertions on signatures of written files, with NaN-stable equality
+# This is required because in DLC h5s NaN means "unlabeled",
+# so NaN to value changes are meaningful and should be detected,
+# but NaN to NaN should be treated as unchanged  (remains unlabeled).
+# Below tests are meant to avoid any future regressions in this logic,
+# which is critical for correct writer behavior and testability.
+# -----------------------------------------------------------------------------#
+
+
+def sig_equal(a: dict, b: dict) -> bool:
+    """NaN-stable signature equality for test signatures."""
+    if a.keys() != b.keys():
+        return False
+    for k in a.keys():
+        va, vb = a[k], b[k]
+        # Handle float NaNs
+        if isinstance(va, float) and isinstance(vb, float):
+            if math.isnan(va) and math.isnan(vb):
+                continue
+        if va != vb:
+            return False
+    return True
+
+
+def assert_only_these_changed_nan_safe(before: dict[Path, dict], after: dict[Path, dict], changed: set[Path]):
+    for p in before:
+        if p in changed:
+            assert not sig_equal(before[p], after[p]), f"Expected {p.name} to change, but signature did not."
+        else:
+            assert sig_equal(before[p], after[p]), f"Expected {p.name} NOT to change, but signature changed."
+
+
+def test_sig_equal_treats_nan_as_equal():
+    a = {"b2x": float("nan"), "b2y": float("nan")}
+    b = {"b2x": float("nan"), "b2y": float("nan")}
+    assert sig_equal(a, b)
+
+
+def test_sig_equal_detects_nan_to_value_change():
+    a = {"b2x": float("nan")}
+    b = {"b2x": 77.0}
+    assert not sig_equal(a, b)
+
+
+def test_sig_equal_detects_value_change():
+    a = {"b1x": 10.0}
+    b = {"b1x": 11.0}
+    assert not sig_equal(a, b)
+
+
+def test_assert_only_these_changed_nan_safe_passes_expected_case(tmp_path: Path):
+    p1 = tmp_path / "A.h5"
+    p2 = tmp_path / "B.h5"
+
+    before = {
+        p1: {"b2x": float("nan")},
+        p2: {"b2x": float("nan")},
+    }
+    after = {
+        p1: {"b2x": float("nan")},  # unchanged
+        p2: {"b2x": 77.0},  # changed
+    }
+
+    assert_only_these_changed_nan_safe(before, after, changed={p2})
+
+
+def test_assert_only_these_changed_nan_safe_fails_when_unexpected_change(tmp_path: Path):
+    p1 = tmp_path / "A.h5"
+    before = {p1: {"b2x": float("nan")}}
+    after = {p1: {"b2x": 1.0}}
+
+    with pytest.raises(AssertionError):
+        assert_only_these_changed_nan_safe(before, after, changed=set())
+
+
+def _assert_only_these_files_changed(before: dict[Path, dict], after: dict[Path, dict], changed: set[Path]):
+    """
+    Assert that only the files in `changed` have different signatures.
+    """
+    # for p in before:
+    #     if p in changed:
+    #         assert before[p] != after[p], f"Expected {p.name} to change, but signature did not."
+    #     else:
+    #         assert before[p] == after[p], f"Expected {p.name} NOT to change, but signature changed."
+    return assert_only_these_changed_nan_safe(before, after, changed)
+
+
 def _get_points_layer_with_data(viewer) -> Points:
     """Return the first Points layer with actual data; fallback to first Points layer."""
     pts = [ly for ly in viewer.layers if isinstance(ly, Points)]
     assert pts, "Expected at least one Points layer in viewer."
-    return next((ly for ly in pts if ly.data is not None and np.any(ly.data)), pts[0])
+    return next((ly for ly in pts if ly.data is not None and np.isfinite(np.asarray(ly.data)[:, 1:3]).any()), pts[0])
 
 
 def _index_mask_for_img(df: pd.DataFrame, basename: str) -> np.ndarray:
@@ -264,7 +543,7 @@ def test_config_first_hazard_regression_no_silent_deletion(make_napari_viewer, q
     placeholder.add(np.array([0.0, 33.0, 44.0], dtype=float))
 
     viewer.layers.selection.active = placeholder
-    viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(200)
 
     post = pd.read_hdf(h5_path, key="keypoints")
@@ -296,6 +575,36 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
     qtbot.wait(200)
 
     points = _get_points_layer_with_data(viewer)
+
+    logger.debug("points.name: %s", points.name)
+    logger.debug("points.data shape: %s", None if points.data is None else np.asarray(points.data).shape)
+    logger.debug("points.data[:5]: %s", None if points.data is None else np.asarray(points.data)[:5])
+    logger.debug(
+        "any NaNs in points.data: %s", False if points.data is None else np.isnan(np.asarray(points.data)).any()
+    )
+    logger.debug(
+        "any finite xy: %s", False if points.data is None else np.isfinite(np.asarray(points.data)[:, 1:3]).any()
+    )
+
+    logger.debug("len(label): %s", len(points.properties.get("label", [])))
+    logger.debug("len(id): %s", len(points.properties.get("id", [])))
+    logger.debug("label[:10]: %s", points.properties.get("label", [])[:10])
+    logger.debug("id[:10]: %s", points.properties.get("id", [])[:10])
+
+    hdr = points.metadata.get("header")
+    logger.debug("header type: %s", type(hdr))
+    if hdr is not None:
+        cols = hdr.columns
+        logger.debug("header.columns type: %s", type(cols))
+        logger.debug("header.columns names: %s", getattr(cols, "names", None))
+        logger.debug("header.columns nlevels: %s", getattr(cols, "nlevels", None))
+
+    logger.info("points.data[:5] = %s", points.data[:5])
+    logger.info("any NaNs in points.data = %s", np.isnan(points.data).any())
+    logger.info("labels[:10] = %s", points.properties.get("label")[:10])
+    logger.info("ids[:10] = %s", points.properties.get("id")[:10] if "id" in points.properties else None)
+    logger.info("header.columns.names = %s", points.metadata["header"].columns.names)
+    logger.info("header.columns.nlevels = %s", points.metadata["header"].columns.nlevels)
     store = controls._stores.get(points)
     assert store is not None
 
@@ -303,7 +612,7 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
     _set_or_add_bodypart_xy(points, store, "bodypart2", x=44.0, y=33.0)
 
     viewer.layers.selection.active = points
-    viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(200)
 
     post = pd.read_hdf(h5_path, key="keypoints")
@@ -338,7 +647,7 @@ def test_overwrite_warning_triggers_on_conflict(make_napari_viewer, qtbot, tmp_p
     _set_or_add_bodypart_xy(points, store, "bodypart1", x=99.0, y=88.0)
 
     viewer.layers.selection.active = points
-    viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(200)
 
     assert len(overwrite_confirm.calls) == 1, "Expected overwrite confirmation to be requested once."
@@ -380,7 +689,7 @@ def test_overwrite_warning_cancel_aborts_write(make_napari_viewer, qtbot, tmp_pa
 
     viewer.layers.selection.active = points
     try:
-        viewer.layers.save("", selected=True, plugin="napari-deeplabcut")
+        viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     except Exception:
         # Some napari/npe2 versions may raise when writer aborts; file integrity is what matters.
         pass
@@ -392,3 +701,367 @@ def test_overwrite_warning_cancel_aborts_write(make_napari_viewer, qtbot, tmp_pa
     post = pd.read_hdf(h5_path, key="keypoints")
     assert _get_coord_from_df(post, "bodypart1", "x") == b1x_pre
     assert _get_coord_from_df(post, "bodypart1", "y") == b1y_pre
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+    """
+    Contract: Saving a Points layer must write back ONLY to the file it came from.
+    No 'first CollectedData*.h5' selection when multiple exist.
+    """
+    overwrite_confirm.forbid()
+
+    project, config_path, labeled_folder, gt_paths, _ = _make_dlc_project_with_multiple_gt(
+        tmp_path, scorers=("John", "Jane"), with_machine=False
+    )
+    gt_a, gt_b = gt_paths
+
+    before = {p: _snapshot_coords(p) for p in gt_paths}
+
+    viewer = make_napari_viewer()
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    # Open both GT files explicitly so we get two Points layers
+    viewer.open(str(gt_a), plugin="napari-deeplabcut")
+    viewer.open(str(gt_b), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len([ly for ly in viewer.layers if isinstance(ly, Points)]) >= 2, timeout=10_000)
+    qtbot.wait(200)
+
+    # Select the layer corresponding to gt_b
+    points_b = next((ly for ly in viewer.layers if isinstance(ly, Points) and ly.name == gt_b.stem), None)
+    assert points_b is not None, f"Expected a Points layer named {gt_b.stem}"
+
+    store_b = controls._stores.get(points_b)
+    assert store_b is not None
+
+    # Fill NaNs for bodypart2 in B only (no overwrite dialog)
+    _set_or_add_bodypart_xy(points_b, store_b, "bodypart2", x=77.0, y=66.0)
+
+    logger.info("BEFORE SAVE : name=%s, sig=%s", gt_paths[0].name, file_sig(gt_paths[0]))
+    logger.info("BEFORE SAVE : name=%s, sig=%s", gt_paths[1].name, file_sig(gt_paths[1]))
+
+    viewer.layers.selection.active = points_b
+    logger.info("Layer selected for save: %s", points_b.name)
+    # logger.info("Layer metadata: %s", points_b.metadata)
+    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+
+    logger.info("AFTER SAVE : name=%s, sig=%s", gt_paths[0].name, file_sig(gt_paths[0]))
+    logger.info("AFTER SAVE : name=%s, sig=%s", gt_paths[1].name, file_sig(gt_paths[1]))
+
+    qtbot.wait(200)
+
+    after = {p: _snapshot_coords(p) for p in gt_paths}
+
+    _assert_only_these_files_changed(before, after, changed={gt_b})
+    assert after[gt_b]["b2x"] == 77.0
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_machine_layer_does_not_modify_gt_on_save(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+    """
+    Contract: machine outputs must never save to their own file.
+    Users must explicitly provide a scorer name that is then used to save the h5.
+    """
+    overwrite_confirm.forbid()
+
+    project, config_path, labeled_folder, gt_paths, machine_path = _make_dlc_project_with_multiple_gt(
+        tmp_path, scorers=("John", "Jane"), with_machine=True
+    )
+    assert machine_path is not None
+
+    before = {p: _snapshot_coords(p) for p in gt_paths + [machine_path]}
+
+    viewer = make_napari_viewer()
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    viewer.open(str(machine_path), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len([ly for ly in viewer.layers if isinstance(ly, Points)]) >= 1, timeout=10_000)
+    qtbot.wait(200)
+
+    machine_layer = next((ly for ly in viewer.layers if isinstance(ly, Points) and ly.name == machine_path.stem), None)
+    assert machine_layer is not None
+
+    store = controls._stores.get(machine_layer)
+    assert store is not None
+
+    # Fill NaNs in machine file (no overwrite prompt)
+    _set_or_add_bodypart_xy(machine_layer, store, "bodypart2", x=55.0, y=44.0)
+
+    viewer.layers.selection.active = machine_layer
+
+    with pytest.raises(MissingProvenanceError):
+        viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+
+    qtbot.wait(200)
+
+    after = {p: _snapshot_coords(p) for p in gt_paths + [machine_path]}
+
+    # Machine file should be unchanged (no save path),
+    # and GT files should be unchanged (machine edits must not touch GT).
+    _assert_only_these_files_changed(before, after, changed=set())
+    # assert after[machine_path]["b2x"] == 55.0
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_layer_rename_does_not_change_save_target(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+    """
+    Contract: layer renaming must not redirect output or create new file.
+    """
+    overwrite_confirm.forbid()
+
+    project, config_path, labeled_folder, gt_paths, _ = _make_dlc_project_with_multiple_gt(
+        tmp_path, scorers=("John", "Jane"), with_machine=False
+    )
+    gt_a = gt_paths[0]
+
+    before = {p: _snapshot_coords(p) for p in gt_paths}
+
+    viewer = make_napari_viewer()
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    viewer.open(str(gt_a), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len([ly for ly in viewer.layers if isinstance(ly, Points)]) >= 1, timeout=10_000)
+    qtbot.wait(200)
+
+    layer = next((ly for ly in viewer.layers if isinstance(ly, Points) and ly.name == gt_a.stem), None)
+    assert layer is not None
+    store = controls._stores.get(layer)
+    assert store is not None
+
+    # Rename in UI
+    layer.name = "foo"
+
+    # Fill NaNs so no overwrite dialog
+    _set_or_add_bodypart_xy(layer, store, "bodypart2", x=12.0, y=34.0)
+
+    viewer.layers.selection.active = layer
+    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+    qtbot.wait(200)
+
+    # Must not create foo.h5 in the folder
+    assert not (gt_a.parent / "foo.h5").exists(), "Renaming must not create foo.h5"
+
+    after = {p: _snapshot_coords(p) for p in gt_paths}
+    _assert_only_these_files_changed(before, after, changed={gt_a})
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_ambiguous_placeholder_save_aborts_when_multiple_gt_exist(
+    make_napari_viewer, qtbot, tmp_path, overwrite_confirm
+):
+    """
+    Contract: If provenance is missing and multiple candidate GT files exist,
+    save must refuse (deterministic) rather than silently choosing.
+    """
+    overwrite_confirm.forbid()
+
+    project, config_path, labeled_folder, gt_paths, _ = _make_dlc_project_with_multiple_gt(
+        tmp_path, scorers=("John", "Jane"), with_machine=False
+    )
+
+    before = {p: _snapshot_coords(p) for p in gt_paths}
+
+    viewer = make_napari_viewer()
+    from napari_deeplabcut import keypoints
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    # Open config first => placeholder points layer
+    viewer.open(str(config_path), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len([ly for ly in viewer.layers if isinstance(ly, Points)]) >= 1, timeout=5_000)
+    qtbot.wait(200)
+
+    placeholder = next((ly for ly in viewer.layers if isinstance(ly, Points)), None)
+    assert placeholder is not None
+
+    # Ensure it's a placeholder (no actual data)
+    assert placeholder.data is None or len(placeholder.data) == 0
+
+    # Open labeled folder (images) so root/paths are present for saving attempt
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.wait(200)
+
+    store = controls._stores.get(placeholder)
+    assert store is not None
+
+    # Add a point to placeholder
+    store.current_keypoint = keypoints.Keypoint("bodypart2", "")
+    placeholder.add(np.array([0.0, 33.0, 44.0], dtype=float))
+
+    viewer.layers.selection.active = placeholder
+
+    # Expect save to abort deterministically
+    try:
+        viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+    except Exception:
+        pass  # acceptable in headless/test mode
+
+    qtbot.wait(200)
+
+    after = {p: _snapshot_coords(p) for p in gt_paths}
+    _assert_only_these_files_changed(before, after, changed=set())
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_folder_open_loads_all_h5_when_multiple_exist(make_napari_viewer, qtbot, tmp_path):
+    """
+    Contract: Opening a labeled-data folder with multiple H5 files should not
+    silently pick the first one. Preferred policy: load all as separate Points layers.
+    """
+    project, config_path, labeled_folder, gt_paths, machine_path = _make_dlc_project_with_multiple_gt(
+        tmp_path, scorers=("John", "Jane"), with_machine=True
+    )
+
+    viewer = make_napari_viewer()
+
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)  # images + points at least
+    qtbot.wait(200)
+
+    pts = [ly for ly in viewer.layers if isinstance(ly, Points)]
+    # Expected: one points layer per H5 file (2 GT + 1 machine)
+    assert len(pts) == 3, f"Expected 3 Points layers (2 GT + 1 machine), got {len(pts)}: {[p.name for p in pts]}"
+    # ------------------------------------------------------------------
+    # New assertion: each Points layer must carry authoritative source_h5
+    # matching the file it originated from (stable across layer renames).
+    # ------------------------------------------------------------------
+    all_expected = list(gt_paths) + ([machine_path] if machine_path is not None else [])
+    expected_by_stem = {p.stem: str(p.expanduser().resolve()) for p in all_expected}
+
+    for ly in pts:
+        assert "source_h5" in ly.metadata, f"Missing source_h5 in layer.metadata for {ly.name}"
+        # Ensure it points to the actual file for that layer stem
+        assert ly.metadata["source_h5"] == expected_by_stem[ly.name], (
+            f"Layer {ly.name} has wrong source_h5:\n"
+            f"  got: {ly.metadata['source_h5']}\n"
+            f"  expected: {expected_by_stem[ly.name]}"
+        )
+
+        assert "io" in (ly.metadata or {}), f"Missing io provenance dict in layer.metadata for {ly.name}"
+        assert ly.metadata["io"].get("source_relpath_posix"), f"io.source_relpath_posix missing for {ly.name}"
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_promotion_first_save_prompts_and_creates_sidecar(make_napari_viewer, qtbot, tmp_path, inputdialog):
+    """
+    First save on a machine/prediction layer (no config.yaml, no sidecar):
+    - prompts for scorer
+    - writes .napari-deeplabcut.json sidecar
+    - creates CollectedData_<scorer>.h5
+    - does NOT modify machinelabels-iter0.h5
+    """
+    labeled_folder = _make_labeled_folder_with_machine_only(tmp_path)
+
+    machine_path = labeled_folder / "machinelabels-iter0.h5"
+    machine_pre = pd.read_hdf(machine_path, key="keypoints")
+
+    viewer = make_napari_viewer()
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    # Open folder
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
+    qtbot.wait(200)
+
+    # Find machine points layer
+    pts_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
+    assert any(p.name == "machinelabels-iter0" for p in pts_layers)
+    machine_layer = next(p for p in pts_layers if p.name == "machinelabels-iter0")
+
+    # Edit: add bodypart2 (use helper that works across versions)
+    store = controls._stores.get(machine_layer)
+    assert store is not None
+    _set_or_add_bodypart_xy(machine_layer, store, "bodypart2", x=44.0, y=33.0)
+
+    # Set user input for scorer
+    inputdialog.set("Alice", ok=True)
+
+    # Save via the widget path (ensures prompt runs)
+    viewer.layers.selection.active = machine_layer
+    controls.viewer.layers.selection.active = machine_layer
+    controls.viewer.layers.selection.select_only(machine_layer)
+
+    assert "io" in machine_layer.metadata
+    assert machine_layer.metadata["io"].get("kind") in ("machine", AnnotationKind.MACHINE)
+
+    # Call your menu-hooked save action (this hits promotion logic)
+    controls._save_layers_dialog(selected=True)
+    qtbot.wait(200)
+    assert "save_target" in machine_layer.metadata, machine_layer.metadata.keys()
+
+    # Sidecar created
+    sidecar = labeled_folder / ".napari-deeplabcut.json"
+    assert sidecar.exists()
+    assert "Alice" in sidecar.read_text(encoding="utf-8")
+
+    # GT created
+    gt_path = labeled_folder / "CollectedData_Alice.h5"
+    assert gt_path.exists()
+
+    # Machine file unchanged
+    machine_post = pd.read_hdf(machine_path, key="keypoints")
+    pd.testing.assert_frame_equal(machine_pre, machine_post)
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_promotion_second_save_uses_sidecar_no_prompt(make_napari_viewer, qtbot, tmp_path, inputdialog):
+    """
+    After sidecar exists, saving again must not prompt:
+    - QInputDialog.getText not called
+    - writes/updates same CollectedData_<scorer>.h5
+    - machine file unchanged
+    """
+    labeled_folder = _make_labeled_folder_with_machine_only(tmp_path)
+
+    # Pre-create sidecar (as if first run already happened)
+    sidecar = labeled_folder / ".napari-deeplabcut.json"
+    sidecar.write_text('{"schema_version": 1, "default_scorer": "Alice"}', encoding="utf-8")
+
+    machine_path = labeled_folder / "machinelabels-iter0.h5"
+    machine_pre = pd.read_hdf(machine_path, key="keypoints")
+
+    viewer = make_napari_viewer()
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
+    qtbot.wait(200)
+
+    pts_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
+    machine_layer = next(p for p in pts_layers if p.name == "machinelabels-iter0")
+
+    store = controls._stores.get(machine_layer)
+    assert store is not None
+    _set_or_add_bodypart_xy(machine_layer, store, "bodypart1", x=99.0, y=88.0)
+
+    # No prompt expected
+    inputdialog.forbid()
+
+    # Save via widget path
+    controls._save_layers_dialog(selected=True)
+    qtbot.wait(200)
+
+    assert inputdialog.calls == 0
+
+    gt_path = labeled_folder / "CollectedData_Alice.h5"
+    assert gt_path.exists()
+
+    machine_post = pd.read_hdf(machine_path, key="keypoints")
+    pd.testing.assert_frame_equal(machine_pre, machine_post)

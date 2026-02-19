@@ -6,7 +6,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from napari_deeplabcut import _reader, misc
+from napari_deeplabcut import misc
+from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows, merge_multiple_scorers
+from napari_deeplabcut.core.io import load_config
 
 
 # ----------------------------
@@ -308,7 +310,7 @@ def test_merge_multiple_scorers_no_likelihood(fake_keypoints):
     temp = fake_keypoints.copy(deep=True)
     temp.columns = temp.columns.set_levels(["you"], level="scorer")
     df = fake_keypoints.merge(temp, left_index=True, right_index=True)
-    df = misc.merge_multiple_scorers(df)
+    df = merge_multiple_scorers(df)
     pd.testing.assert_frame_equal(df, fake_keypoints)
 
 
@@ -324,7 +326,7 @@ def test_merge_multiple_scorers(fake_keypoints):
     fake_keypoints.iloc[:5] = np.nan
     temp.iloc[5:] = np.nan
     df = fake_keypoints.merge(temp, left_index=True, right_index=True)
-    df = misc.merge_multiple_scorers(df)
+    df = merge_multiple_scorers(df)
     pd.testing.assert_index_equal(df.columns, fake_keypoints.columns)
     assert not df.isna().any(axis=None)
 
@@ -335,13 +337,13 @@ def test_merge_multiple_scorers(fake_keypoints):
 def test_guarantee_multiindex_rows():
     fake_index = [f"labeled-data/subfolder_{i}/image_{j}" for i in range(3) for j in range(10)]
     df = pd.DataFrame(index=fake_index)
-    misc.guarantee_multiindex_rows(df)
+    guarantee_multiindex_rows(df)
     assert isinstance(df.index, pd.MultiIndex)
 
     # Substitute index with frame numbers
     frame_numbers = list(range(df.shape[0]))
     df.index = frame_numbers
-    misc.guarantee_multiindex_rows(df)
+    guarantee_multiindex_rows(df)
     assert df.index.to_list() == frame_numbers
 
 
@@ -384,7 +386,7 @@ def test_dlc_header():
 
 
 def test_dlc_header_from_config_multi(config_path):
-    config = _reader._load_config(config_path)
+    config = load_config(config_path)
     config["multianimalproject"] = True
     config["individuals"] = ["animal"]
     config["multianimalbodyparts"] = list("abc")

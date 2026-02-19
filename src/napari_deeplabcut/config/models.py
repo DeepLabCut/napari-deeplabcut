@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-from napari_deeplabcut.core.paths import PathMatchPolicy
+import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 
 # -----------------------------------------------------------------------------
 # Enums
@@ -20,43 +22,167 @@ class MetadataKind(str, Enum):
 # -----------------------------------------------------------------------------
 # Header model (authoritative wrapper)
 # -----------------------------------------------------------------------------
-
-
 class DLCHeaderModel(BaseModel):
-    """
-    Structured representation of a DLC header.
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+    columns: Any = Field(...)
 
-    Invariants
-    ----------
-    - `columns` must be a pandas.MultiIndex at runtime
-    - This model does NOT serialize columns directly
-      (napari metadata may contain non-JSON objects)
+    def as_multiindex(self) -> pd.MultiIndex:
+        # FIXME @C-Achard 2026-02-18 ensure we are not mixing 3/4 level formats,
+        # or that we are not losing information by coercing to 4-level form
+        cols = self.columns
 
-    This model allows opaque runtime storage.
-    """
+        # Already a MultiIndex: return as-is
+        if isinstance(cols, pd.MultiIndex):
+            return cols
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+        # List/tuple of tuples: infer tuple length
+        if isinstance(cols, (list, tuple)) and cols:
+            first = cols[0]
+            if not isinstance(first, (list, tuple)):
+                raise TypeError(f"columns must be tuples, got {type(first)!r}")
 
-    columns: Any = Field(
-        ...,
-        description="pandas.MultiIndex defining scorer / individuals / bodyparts / coords",
-    )
+            n = len(first)
+
+            # 4-level canonical
+            if n == 4:
+                tuples = [tuple(map(str, t)) for t in cols]
+                return pd.MultiIndex.from_tuples(
+                    tuples,
+                    names=["scorer", "individuals", "bodyparts", "coords"],
+                )
+
+            # 3-level legacy/single-animal: insert empty individuals level
+            if n == 3:
+                tuples = [(str(t[0]), "", str(t[1]), str(t[2])) for t in cols]
+                return pd.MultiIndex.from_tuples(
+                    tuples,
+                    names=["scorer", "individuals", "bodyparts", "coords"],
+                )
+
+            # Anything else: either error or accept without names
+            tuples = [tuple(map(str, t)) for t in cols]
+            return pd.MultiIndex.from_tuples(tuples, names=[None] * n)
+
+        raise TypeError(f"Unsupported columns type: {type(cols)!r}")
+
+    @property
+    def scorer(self) -> str | None:
+        cols = self.as_multiindex()
+        if "scorer" in (cols.names or []):
+            vals = cols.get_level_values("scorer")
+            return str(vals[0]) if len(vals) else None
+        # fallback: if names are missing, assume first level is scorer
+        return str(cols.to_list()[0][0]) if len(cols) else None
 
     @property
     def individuals(self) -> list[str]:
-        inds = getattr(self.columns, "levels", None)
-        if inds is None or "individuals" not in self.columns.names:
+        cols = self.as_multiindex()
+        if "individuals" not in (cols.names or []):
             return [""]
-        return list(dict.fromkeys(self.columns.get_level_values("individuals")))
+        return list(dict.fromkeys(cols.get_level_values("individuals")))
 
     @property
     def bodyparts(self) -> list[str]:
-        return list(dict.fromkeys(self.columns.get_level_values("bodyparts")))
+        cols = self.as_multiindex()
+        if "bodyparts" in (cols.names or []):
+            return list(dict.fromkeys(cols.get_level_values("bodyparts")))
+        # fallback: assume bodyparts is level 2 in canonical form
+        return list(dict.fromkeys([t[2] for t in cols.to_list()]))
 
 
 # -----------------------------------------------------------------------------
-# Metadata models
+# Metadata & I/O models
 # -----------------------------------------------------------------------------
+
+
+class AnnotationKind(str, Enum):
+    """Semantic kind of keypoint annotations for deterministic IO routing.
+
+    Notes
+    -----
+    This is used to enforce safe saving policies:
+    - ``gt``: ground-truth labels (e.g. ``CollectedData_*.h5``)
+    - ``machine``: machine predictions/refinements (e.g. ``machinelabels*.h5``)
+
+    The napari layer display name must never be used to infer this value.
+    """
+
+    GT = "gt"
+    MACHINE = "machine"
+
+
+class IOProvenance(BaseModel):
+    """Authoritative provenance for a Points layer.
+
+    This model captures *identity* for IO, independent of the napari layer name.
+
+    Design goals
+    ------------
+    - Prefer project-relative, OS-agnostic paths.
+    - Store relative paths using POSIX separators ('/'), even on Windows.
+    - Be explicit about annotation kind so saving never relies on directory ordering.
+
+    Fields
+    ------
+    schema_version:
+        Version marker for forward-compatible evolution.
+    project_root:
+        Optional project root directory. When set, ``source_relpath_posix`` is
+        interpreted relative to this root.
+    source_relpath_posix:
+        Project-relative path encoded with POSIX separators ('/').
+        Example: ``labeled-data/test/CollectedData_John.h5``.
+    kind:
+        Whether this layer is ground-truth or machine output.
+    dataset_key:
+        HDF5 key used for the keypoints table (default: ``keypoints``).
+    """
+
+    # Keep minimal but resilient to future additions
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: int = Field(default=1, description="Provenance schema version")
+    project_root: str | None = Field(default=None, description="Project root directory")
+    source_relpath_posix: str | None = Field(
+        default=None,
+        description="Project-relative POSIX path to the source .h5 (forward slashes).",
+    )
+    kind: AnnotationKind | None = Field(default=None, description="Annotation kind for routing", strict=True)
+    dataset_key: str = Field(default="keypoints", description="HDF5 key for keypoints table")
+
+    @field_validator("source_relpath_posix")
+    @classmethod
+    def _normalize_relpath(cls, v: str | None) -> str | None:
+        """Normalize provenance paths to POSIX separators.
+
+        This keeps stored metadata OS-agnostic and stable across platforms.
+        """
+        if v is None:
+            return None
+        return v.replace("\\", "/")
+
+    @field_validator("kind")
+    @classmethod
+    def _validate_kind(cls, v: AnnotationKind | str | None) -> AnnotationKind | None:
+        """Validate that kind is either an AnnotationKind or a valid string."""
+        if v is None:
+            return None
+        if isinstance(v, AnnotationKind):
+            return v
+        try:
+            return AnnotationKind(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid annotation kind: {v!r}") from e
+
+    @field_validator("project_root")
+    @classmethod
+    def _validate_project_root(cls, v: str | None) -> str | None:
+        """Optionally validate that project_root is a directory path."""
+        if v is None:
+            return None
+        if not Path(v).exists() or not Path(v).is_dir():
+            raise ValueError(f"project_root must be a directory path, got: {v!r}")
+        return v
 
 
 class ImageMetadata(BaseModel):
@@ -71,7 +197,9 @@ class ImageMetadata(BaseModel):
     - root, if present, is a directory path
     """
 
-    kind: MetadataKind = Field(default=MetadataKind.IMAGE)
+    model_config = ConfigDict(extra="allow")
+
+    kind: MetadataKind = Field(default=MetadataKind.IMAGE, strict=True)
     paths: list[str] | None = None
     root: str | None = None
     shape: tuple[int, ...] | None = None
@@ -110,6 +238,8 @@ class PointsMetadata(BaseModel):
 
     project: str | None = None
     header: DLCHeaderModel | None = None
+    io: IOProvenance | None = None
+    save_target: IOProvenance | None = None
 
     face_color_cycles: dict[str, dict[str, Any]] | None = None
     colormap_name: str | None = None
@@ -119,4 +249,4 @@ class PointsMetadata(BaseModel):
     # Non-serializable runtime attachments (allowed but ignored by pydantic)
     controls: Any | None = Field(default=None, exclude=True)
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
