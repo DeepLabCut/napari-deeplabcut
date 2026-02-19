@@ -1,32 +1,12 @@
 import numpy as np
-import pandas as pd
 import pytest
 from napari.layers import Points
 
-from napari_deeplabcut import misc
 from napari_deeplabcut.core.layers import populate_keypoint_layer_metadata
 
 
-def _minimal_header_stub(bodyparts=("bodypart1", "bodypart2"), individuals=("",)):
-    # Small stub matching what populate_keypoint_layer_metadata uses
-    class Header:
-        def __init__(self):
-            self.bodyparts = list(bodyparts)
-            self.individuals = list(individuals)
-
-    return Header()
-
-
-def make_real_header(bodyparts=("bodypart1", "bodypart2"), individuals=("",), scorer="S"):
-    cols = pd.MultiIndex.from_product(
-        [[scorer], list(individuals), list(bodyparts), ["x", "y"]],
-        names=["scorer", "individuals", "bodyparts", "coords"],
-    )
-    return misc.DLCHeader(cols)
-
-
 @pytest.mark.usefixtures("qtbot")
-def test_on_insert_empty_points_layer_does_not_crash(make_napari_viewer):
+def test_on_insert_empty_points_layer_does_not_crash(make_napari_viewer, make_real_header):
     """
     Contract: inserting an empty Points layer must not crash.
     This guards against KeyError: nan coming from napari cycle colormap logic.
@@ -38,7 +18,7 @@ def test_on_insert_empty_points_layer_does_not_crash(make_napari_viewer):
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
-    header = _minimal_header_stub(individuals=("animal1",))  # either is fine
+    header = make_real_header(individuals=("animal1",))  # either is fine
     md = populate_keypoint_layer_metadata(
         header,
         labels=[],  # empty properties
@@ -56,7 +36,7 @@ def test_on_insert_empty_points_layer_does_not_crash(make_napari_viewer):
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_on_insert_empty_points_layer_does_not_enable_cycle_mode(make_napari_viewer):
+def test_on_insert_empty_points_layer_does_not_enable_cycle_mode(make_napari_viewer, make_real_header):
     """
     Contract: for empty layers, widget should not set face_color_mode='cycle'
     (or should otherwise avoid the cycle colormap path that crashes on nan).
@@ -67,7 +47,7 @@ def test_on_insert_empty_points_layer_does_not_enable_cycle_mode(make_napari_vie
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
-    header = _minimal_header_stub(individuals=("",))  # single animal
+    header = make_real_header(individuals=("",))  # single animal
     md = populate_keypoint_layer_metadata(
         header,
         labels=[],
@@ -86,7 +66,7 @@ def test_on_insert_empty_points_layer_does_not_enable_cycle_mode(make_napari_vie
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_adopt_existing_empty_points_layer_does_not_crash(make_napari_viewer):
+def test_adopt_existing_empty_points_layer_does_not_crash(make_napari_viewer, make_real_header):
     """
     Contract: adoption path must not crash for empty points layers.
     This exercises _adopt_existing_layers -> _handle_existing_points_layer.
@@ -94,7 +74,7 @@ def test_adopt_existing_empty_points_layer_does_not_crash(make_napari_viewer):
     viewer = make_napari_viewer()
 
     # Add layer BEFORE creating the widget (forces adoption path)
-    header = _minimal_header_stub(individuals=("animal1",))
+    header = make_real_header(individuals=("animal1",))
     md = populate_keypoint_layer_metadata(
         header,
         labels=[],
@@ -116,7 +96,7 @@ def test_adopt_existing_empty_points_layer_does_not_crash(make_napari_viewer):
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_cycle_mode_does_not_crash_when_current_property_is_nan(make_napari_viewer):
+def test_layer_insert_does_not_crash_when_current_property_is_nan(make_napari_viewer, make_real_header):
     """
     Contract: even if a property value is NaN (bad input), widget must not crash.
     It may fall back to direct mode or sanitize the property.
@@ -144,4 +124,8 @@ def test_cycle_mode_does_not_crash_when_current_property_is_nan(make_napari_view
 
     # Must not raise on insertion
     layer = viewer.add_points(data, **md)
+    # Plot cannot be formed because of the NaN,
+    # but the layer must still be added and cycle mode must not be enabled.
+    assert controls._matplotlib_canvas.df is None
     assert isinstance(layer, Points)
+    assert layer.face_color_mode != "cycle"

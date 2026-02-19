@@ -11,7 +11,7 @@ import pytest
 from qtpy.QtWidgets import QDockWidget
 from skimage.io import imsave
 
-from napari_deeplabcut import keypoints
+from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut.core import io as napari_dlc_io
 
 # os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
@@ -55,6 +55,15 @@ def only_deeplabcut_debug_logs():
         for name, level in original_levels.items():
             logger = logging.getLogger(name)
             logger.setLevel(level)
+
+
+@pytest.fixture
+def make_real_header(bodyparts=("bodypart1", "bodypart2"), individuals=("",), scorer="S"):
+    cols = pd.MultiIndex.from_product(
+        [[scorer], list(individuals), list(bodyparts), ["x", "y"]],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
+    return misc.DLCHeader(cols)
 
 
 @pytest.fixture

@@ -441,11 +441,15 @@ class KeypointMatplotlibCanvas(QWidget):
         self.show()  # Silly hack so the window does not hang the first time it is shown
         self.hide()
 
-        self.df = io.form_df(
-            points_layer.data,
-            layer_metadata=points_layer.metadata,
-            layer_properties=points_layer.properties,
-        )
+        try:
+            self.df = io.form_df(
+                points_layer.data,
+                layer_metadata=points_layer.metadata,
+                layer_properties=points_layer.properties,
+            )
+        except Exception as e:
+            logger.error("Failed to form DataFrame from points layer: %r", e, exc_info=True)
+            return
         for keypoint in self.df.columns.get_level_values("bodyparts").unique():
             y = self.df.xs((keypoint, "y"), axis=1, level=["bodyparts", "coords"])
             x = np.arange(len(y))
@@ -515,8 +519,12 @@ def _safe_enable_cycle_mode(points_layer: Points) -> bool:
     except Exception:
         return False
 
-    # 2) Determine which property we intend to cycle on
-    prop_name = getattr(points_layer, "face_color", None) or "label"
+    # 2) Determine which property we intend to cycle on.
+    # NOTE: points_layer.face_color is often an RGBA array, not a property name.
+    md = getattr(points_layer, "metadata", None) or {}
+    prop_name = md.get("face_color") or "label"
+    if not isinstance(prop_name, str) or not prop_name:
+        prop_name = "label"
 
     props = getattr(points_layer, "properties", {}) or {}
     values = props.get(prop_name)
@@ -526,7 +534,6 @@ def _safe_enable_cycle_mode(points_layer: Points) -> bool:
         return False
 
     # 3) current property value must not be NaN
-    # Napari cycle mode can try to map current value; if that's NaN it may KeyError.
     try:
         v0 = values[0]
     except Exception:
@@ -536,7 +543,6 @@ def _safe_enable_cycle_mode(points_layer: Points) -> bool:
         return False
 
     # 4) Ensure colormap cycles exist for this prop
-    md = points_layer.metadata or {}
     cycles = md.get("face_color_cycles") or {}
     if prop_name not in cycles:
         return False

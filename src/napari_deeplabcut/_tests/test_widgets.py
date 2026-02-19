@@ -9,6 +9,7 @@ from qtpy.QtSvgWidgets import QSvgWidget
 from vispy import keys
 
 from napari_deeplabcut import _widgets
+from napari_deeplabcut.core.io import populate_keypoint_layer_metadata
 
 
 def test_guess_continuous():
@@ -268,6 +269,30 @@ def test_ensure_mpl_canvas_docked_missing_window(viewer, qtbot):
 
     # Nothing should change; crucially, no exceptions should be raised
     assert controls._mpl_docked is False
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_trajectory_loader_ignores_invalid_properties(make_napari_viewer, make_real_header):
+    viewer = make_napari_viewer()
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    header = make_real_header(individuals=("",))
+    md = populate_keypoint_layer_metadata(
+        header,
+        labels=["bodypart1"],
+        ids=[""],
+        likelihood=np.array([1.0], dtype=float),
+        paths=[],
+        colormap="viridis",
+    )
+    md["properties"]["label"] = [np.nan]  # invalid
+
+    layer = viewer.add_points(np.array([[0.0, 10.0, 20.0]]), **md)
+    assert layer is not None
+    assert controls._matplotlib_canvas.df is None  # loader should have bailed out safely
 
 
 def test_ensure_mpl_canvas_docked_missing_qt_window(viewer, qtbot):
