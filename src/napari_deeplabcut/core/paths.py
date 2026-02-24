@@ -1,3 +1,20 @@
+"""
+Regarding root anchor :
+The "root anchor" is a configurable directory used to resolve project-relative
+paths in IO provenance.
+
+Motivation
+----------
+We may not always load a full DLC project (config.yaml may be missing).
+In particular there may only be a labeled-data folder containing images + h5/csv files.
+Therefore the root anchor must be inferable from what the user opened:
+
+- If the user opens a file: the default anchor is the file's parent directory.
+- If the user opens a folder: the anchor is that folder.
+- If a config.yaml exists nearby: the anchor *may* be elevated to the project
+  root, but must remain configurable and must not be required.
+"""
+
 # src/napari_deeplabcut/core/paths.py
 from __future__ import annotations
 
@@ -10,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # -----------------------------------------------------------------------------
-# Canonicalization (REUSED, behavior-preserving)
+# Canonicalization (REUSED for now, behavior-preserving)
 # -----------------------------------------------------------------------------
 
 
@@ -124,6 +141,8 @@ def has_dlc_datafiles(folder: str | Path) -> bool:
     - CollectedData*.h5 / .csv
     - machinelabels*.h5 / .csv
     """
+    # FUTURE NOTE @C-Achard 2026-02-17: Do not hardcode these patterns
+    # and clearly expose these if data file formats change or expand.
     p = Path(folder)
     if not p.exists() or not p.is_dir():
         return False
@@ -177,3 +196,132 @@ def should_force_dlc_reader(paths: str | Path | Iterable[str | Path]) -> bool:
         return True
 
     return False
+
+
+# -----------------------------------------------------------------------------
+# Root-anchor inference utilities
+# -----------------------------------------------------------------------------
+
+
+def infer_root_anchor(
+    opened: str | Path,
+    *,
+    explicit_root: str | Path | None = None,
+) -> str | None:
+    """Infer a best-effort root anchor given a user-opened path.
+
+    Parameters
+    ----------
+    opened:
+        Path that the user opened (file or directory).
+    explicit_root:
+        If provided, this wins and is returned as-is.
+
+    Returns
+    -------
+    str | None
+        A directory path to use as anchor, or None if inference fails.
+
+    Notes
+    -----
+    This is intentionally conservative and does not search globally.
+    """
+    if explicit_root:
+        return str(Path(explicit_root))
+
+    try:
+        p = Path(opened)
+    except Exception:
+        return None
+
+    if p.is_dir():
+        return str(p)
+
+    if p.is_file():
+        return str(p.parent)
+
+    # If path does not exist (e.g., virtual/remote), give up.
+    return None
+
+
+def find_nearest_project_root(
+    start: str | Path,
+    *,
+    max_levels: int = 5,
+) -> str | None:
+    """Walk parents upwards to find a folder containing config.yaml.
+
+    This is used as an *optional* enhancement. The result should be treated as
+    a candidate anchor, not as a required project root.
+
+    Parameters
+    ----------
+    start:
+        Starting file or directory.
+    max_levels:
+        Maximum number of parent levels to inspect.
+
+    Returns
+    -------
+    str | None
+        Directory containing config.yaml if found, else None.
+    """
+    try:
+        p = Path(start)
+    except Exception:
+        return None
+
+    if p.is_file():
+        p = p.parent
+
+    cur = p
+    for _ in range(max_levels + 1):
+        cfg = cur / "config.yaml"
+        if is_config_yaml(cfg):
+            return str(cur)
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+
+    return None
+
+
+def choose_anchor_candidate(
+    *,
+    opened: str | Path,
+    explicit_root: str | Path | None = None,
+    prefer_project_root: bool = False,
+) -> str | None:
+    """Choose a root anchor candidate.
+
+    Strategy
+    --------
+    1) If explicit_root provided -> use it.
+    2) Infer anchor from opened path (file parent or directory).
+    3) If prefer_project_root is True and a nearby config.yaml exists ->
+       return the nearest project root.
+
+    This does *not* validate existence of expected DLC files; callers may.
+    """
+    if explicit_root:
+        return str(Path(explicit_root))
+
+    anchor = infer_root_anchor(opened)
+    if not anchor:
+        return None
+
+    if prefer_project_root:
+        pr = find_nearest_project_root(anchor)
+        if pr:
+            return pr
+
+    return anchor
+
+
+def anchor_contains_dlc_artifacts(anchor: str | Path) -> bool:
+    """Return True if the anchor folder appears to contain DLC artifacts."""
+    try:
+        return has_dlc_datafiles(anchor)
+    except Exception:
+        logger.debug("Failed to check DLC artifacts for %r", anchor, exc_info=True)
+        return False

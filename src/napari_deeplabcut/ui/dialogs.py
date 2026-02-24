@@ -2,7 +2,7 @@
 import pandas as pd
 from qtpy.QtWidgets import QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QSizePolicy, QVBoxLayout
 
-from napari_deeplabcut import misc
+from napari_deeplabcut.core.dataframes import summarize_keypoint_conflicts
 
 
 def _conflict_stats(key_conflict: pd.DataFrame) -> tuple[int, int]:
@@ -24,11 +24,11 @@ def _build_overwrite_warning_text(key_conflict: pd.DataFrame, max_items: int = 1
     """
     n_pairs, n_images = _conflict_stats(key_conflict)
     summary = f"{n_pairs} existing keypoint(s) will be overwritten across {n_images} image(s)."
-    details = misc.summarize_keypoint_conflicts(key_conflict, max_items=max_items)
+    details = summarize_keypoint_conflicts(key_conflict, max_items=max_items)
     return summary, details
 
 
-def _maybe_confirm_overwrite(metadata: dict, key_conflict: pd.DataFrame) -> bool:
+def maybe_confirm_overwrite(metadata: dict, key_conflict: pd.DataFrame) -> bool:
     """
     Returns True if save should proceed, False if user cancels.
     If no GUI controls are present, returns True (non-interactive).
