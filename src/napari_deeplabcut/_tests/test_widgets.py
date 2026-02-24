@@ -1,14 +1,17 @@
 # src/napari_deeplabcut/_tests/test_widgets.py
 import os
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
 import yaml
+from napari.layers import Image
 from qtpy.QtSvgWidgets import QSvgWidget
 from vispy import keys
 
-from napari_deeplabcut import _widgets
+from napari_deeplabcut import _widgets, keypoints
+from napari_deeplabcut.core import io
 from napari_deeplabcut.core.io import populate_keypoint_layer_metadata
 
 
@@ -391,30 +394,109 @@ def test_display_shortcuts_dialog(viewer, qtbot):
 # these tests currently exercise only a narrow "everything fine" path and rely on specific metadata
 # layout and SuperAnimal conversion-table conventions, which makes them susceptible to API changes
 @pytest.mark.usefixtures("qtbot")
-def test_widget_load_superkeypoints_diagram(viewer, qtbot, points, superkeypoints_assets):
+def test_widget_load_superkeypoints_diagram(viewer, qtbot, points, monkeypatch):
     controls = _widgets.KeypointControls(viewer)
     qtbot.add_widget(controls)
 
-    # Inject conversion table into the existing Points layer
+    # Arrange: conversion table uses *realistic* keys (not SK1/SK2),
+    # and does not depend on any asset conventions.
     layer = points
-    super_animal = superkeypoints_assets["super_animal"]
-    layer.metadata["tables"] = {super_animal: {"kp1": "SK1", "kp2": "SK2"}}
+    super_animal = "superanimal_quadruped"
+    layer.metadata["tables"] = {super_animal: {"kp1": "nose", "kp2": "upper_jaw"}}
+
+    # Arrange: stub I/O so the test doesn't depend on installed assets
+    dummy_img = np.zeros((8, 8), dtype=np.uint8)
+    dummy_superkpts = {
+        "nose": [1.0, 2.0],
+        "upper_jaw": [3.0, 4.0],
+    }
+    monkeypatch.setattr(io, "load_superkeypoints_diagram", lambda name: dummy_img)
+    monkeypatch.setattr(io, "load_superkeypoints", lambda name: dummy_superkpts)
 
     n_layers_before = len(viewer.layers)
+
+    # Act
     controls.load_superkeypoints_diagram()
 
+    # Assert: one new image layer is added
     assert len(viewer.layers) == n_layers_before + 1
+    assert isinstance(viewer.layers[-1], Image)
+    assert viewer.layers[-1].data.shape == dummy_img.shape
+
+    # Assert: labels match the table keys (reference keypoints)
     assert list(layer.properties["label"]) == ["kp1", "kp2"]
+
+    # Assert: points data updated to [0, x, y] for each mapping
+    assert layer.data.shape == (2, 3)
+    assert np.allclose(layer.data[:, 0], 0.0)
+    assert np.allclose(layer.data[:, 1:], np.array([[1.0, 2.0], [3.0, 4.0]]))
+
+    # Assert: UI updated
+    assert controls._keypoint_mapping_button.text() == "Map keypoints"
     assert controls._keypoint_mapping_button.text() == "Map keypoints"
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_widget_map_keypoints_writes_to_config(viewer, qtbot, config_path):
+def test_widget_map_keypoints_writes_to_config(viewer, qtbot, points, config_path, monkeypatch):
     controls = _widgets.KeypointControls(viewer)
     qtbot.add_widget(controls)
 
+    # Arrange: ensure the points layer has some data (shape: [t, x, y])
+    points.data = np.array(
+        [
+            [0.0, 10.0, 20.0],
+            [0.0, 30.0, 40.0],
+        ],
+        dtype=float,
+    )
+
+    # Arrange: provide the metadata that _map_keypoints expects
+    # _map_keypoints builds config_path as Path(project)/"config.yaml"
+    project_dir = Path(config_path).parent
+    points.metadata["project"] = str(project_dir)
+    points.metadata["tables"] = {"superanimal_quadruped": {}}
+
+    class DummyHeader:
+        bodyparts = ["bp1", "bp2"]
+
+    points.metadata["header"] = DummyHeader()
+
+    # Ensure config file exists (some setups create it already; this is safe)
+    Path(config_path).write_text("{}", encoding="utf-8")
+
+    # Arrange: stub superkeypoints + nearest-neighbor results to be deterministic
+    # Your JSON is dict(key -> [x,y]) so we mimic that.
+    dummy_superkpts = {"nose": [0.0, 0.0], "upper_jaw": [1.0, 1.0]}
+    monkeypatch.setattr(io, "load_superkeypoints", lambda name: dummy_superkpts)
+
+    # neighbors indices correspond to ordering of list(dummy_superkpts)
+    # Here: ["nose", "upper_jaw"] -> indices [0, 1]
+    monkeypatch.setattr(keypoints, "_find_nearest_neighbors", lambda xy, xy_ref: np.array([0, 1]))
+
+    # If your io.load_config / io.write_config do more than YAML I/O,
+    # you can keep them. Otherwise stubbing them makes the test isolated.
+    def _load_config(path):
+        with open(path, encoding="utf-8") as fh:
+            return yaml.safe_load(fh) or {}
+
+    def _write_config(path, cfg):
+        with open(path, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(cfg, fh, sort_keys=False)
+
+    monkeypatch.setattr(io, "load_config", _load_config)
+    monkeypatch.setattr(io, "write_config", _write_config)
+
+    # Act
     controls._map_keypoints("superanimal_quadruped")
 
+    # Assert
     with open(config_path, encoding="utf-8") as fh:
-        cfg = yaml.safe_load(fh)
+        cfg = yaml.safe_load(fh) or {}
+
     assert "SuperAnimalConversionTables" in cfg
+
+    # Optional stronger assertion: verify the mapping is written as expected
+    assert cfg["SuperAnimalConversionTables"]["superanimal_quadruped"] == {
+        "bp1": "nose",
+        "bp2": "upper_jaw",
+    }

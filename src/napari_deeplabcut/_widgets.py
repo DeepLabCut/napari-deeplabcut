@@ -610,7 +610,7 @@ class KeypointControls(QWidget):
 
         # form helper display
         self._keypoint_mapping_button = None
-        self._func_id = None
+        self._load_superkeypoints_action = None
         help_buttons = self._form_help_buttons()
         self._layout.addLayout(help_buttons)
 
@@ -935,7 +935,10 @@ class KeypointControls(QWidget):
         properties["label"] = np.array(labels)
         points_layer.properties = properties
         self._keypoint_mapping_button.setText("Map keypoints")
-        self._keypoint_mapping_button.clicked.disconnect(self._func_id)
+        try:
+            self._keypoint_mapping_button.clicked.disconnect(self._load_superkeypoints_action)
+        except TypeError:
+            pass
         self._keypoint_mapping_button.clicked.connect(lambda: self._map_keypoints(super_animal))
 
     def _map_keypoints(self, super_animal: str):
@@ -958,7 +961,7 @@ class KeypointControls(QWidget):
         xy_ref = np.c_[[val for val in superkpts_dict.values()]]
         neighbors = keypoints._find_nearest_neighbors(xy, xy_ref)
         found = neighbors != -1
-        if ~np.any(found):
+        if not np.any(found):
             return
 
         project_path = points_layer.metadata["project"]
@@ -1194,7 +1197,9 @@ class KeypointControls(QWidget):
         help_buttons_layout.addWidget(tutorial)
         layout.addLayout(help_buttons_layout)
         self._keypoint_mapping_button = QPushButton("Load superkeypoints diagram")
-        self._func_id = self._keypoint_mapping_button.clicked.connect(self.load_superkeypoints_diagram)
+        self._load_superkeypoints_action = self._keypoint_mapping_button.clicked.connect(
+            self.load_superkeypoints_diagram
+        )
         self._keypoint_mapping_button.hide()
         layout.addWidget(self._keypoint_mapping_button)
         return layout

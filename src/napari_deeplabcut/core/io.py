@@ -549,8 +549,7 @@ def load_superkeypoints_diagram(super_animal: str):
 
 def load_superkeypoints(super_animal: str):
     path = resources.files("napari_deeplabcut") / "assets" / f"{super_animal}.json"
-    payload = load_superkeypoints_json_from_path(path)
-    return payload.get("data", payload) if isinstance(payload, dict) else payload
+    return load_superkeypoints_json_from_path(path)
 
 
 # =============================================================================
