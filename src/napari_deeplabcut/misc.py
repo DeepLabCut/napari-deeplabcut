@@ -173,3 +173,26 @@ class CycleEnum(Enum, metaclass=CycleEnumMeta):
 
     def __str__(self):
         return self.value
+
+
+def _is_nan_like(x) -> bool:
+    try:
+        return bool(np.isnan(x))
+    except Exception:
+        return False
+
+
+def _is_nan_value(x) -> bool:
+    try:
+        return bool(np.isnan(x))
+    except Exception:
+        return False
+
+
+def _array_has_nan(arr) -> bool:
+    try:
+        a = np.asarray(arr)
+        # object arrays: check elementwise
+        return any(_is_nan_value(v) for v in a.ravel())
+    except Exception:
+        return False

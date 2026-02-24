@@ -499,57 +499,50 @@ class KeypointMatplotlibCanvas(QWidget):
                 break
 
 
-def _is_nan_like(x) -> bool:
-    try:
-        return bool(np.isnan(x))
-    except Exception:
-        return False
+# def _safe_enable_cycle_mode(points_layer: Points) -> bool:
+#     """
+#     Return True if we enabled cycle mode safely, False if we did not.
+#     Avoid napari categorical colormap KeyError when current property is NaN
+#     or layer is empty.
+#     """
+#     # 1) Empty layer => never enable cycle mode
+#     try:
+#         if points_layer.data is None or len(points_layer.data) == 0:
+#             return False
+#     except Exception:
+#         return False
 
+#     # 2) Determine which property we intend to cycle on.
+#     # NOTE: points_layer.face_color is often an RGBA array, not a property name.
+#     md = getattr(points_layer, "metadata", None) or {}
+#     prop_name = md.get("face_color") or "label"
+#     if not isinstance(prop_name, str) or not prop_name:
+#         prop_name = "label"
 
-def _safe_enable_cycle_mode(points_layer: Points) -> bool:
-    """
-    Return True if we enabled cycle mode safely, False if we did not.
-    Avoid napari categorical colormap KeyError when current property is NaN
-    or layer is empty.
-    """
-    # 1) Empty layer => never enable cycle mode
-    try:
-        if points_layer.data is None or len(points_layer.data) == 0:
-            return False
-    except Exception:
-        return False
+#     props = getattr(points_layer, "properties", {}) or {}
+#     values = props.get(prop_name)
 
-    # 2) Determine which property we intend to cycle on.
-    # NOTE: points_layer.face_color is often an RGBA array, not a property name.
-    md = getattr(points_layer, "metadata", None) or {}
-    prop_name = md.get("face_color") or "label"
-    if not isinstance(prop_name, str) or not prop_name:
-        prop_name = "label"
+#     # If missing properties or empty list => unsafe
+#     if values is None or len(values) == 0:
+#         return False
 
-    props = getattr(points_layer, "properties", {}) or {}
-    values = props.get(prop_name)
+#     # 3) current property value must not be NaN
+#     try:
+#         v0 = values[0]
+#     except Exception:
+#         return False
 
-    # If missing properties or empty list => unsafe
-    if values is None or len(values) == 0:
-        return False
+#     if _is_nan_like(v0):
+#         return False
 
-    # 3) current property value must not be NaN
-    try:
-        v0 = values[0]
-    except Exception:
-        return False
+#     # 4) Ensure colormap cycles exist for this prop
+#     cycles = md.get("face_color_cycles") or {}
+#     if prop_name not in cycles:
+#         return False
 
-    if _is_nan_like(v0):
-        return False
-
-    # 4) Ensure colormap cycles exist for this prop
-    cycles = md.get("face_color_cycles") or {}
-    if prop_name not in cycles:
-        return False
-
-    # OK: safe to enable cycle
-    points_layer.face_color_mode = "cycle"
-    return True
+#     # OK: safe to enable cycle
+#     points_layer.face_color_mode = "cycle"
+#     return True
 
 
 class KeypointControls(QWidget):
@@ -597,6 +590,8 @@ class KeypointControls(QWidget):
         # These are updated anytime images are added to the Viewer
         # and passed on to the other layers upon creation.
         self._image_meta = ImageMetadata()
+        # Storage for layers requiring recoloring
+        self._recolor_pending = set()
 
         # Add some more controls
         self._layout = QVBoxLayout(self)
@@ -701,6 +696,180 @@ class KeypointControls(QWidget):
         # adopt them so keypoint controls take ownership immediately.
         QTimer.singleShot(0, self._adopt_existing_layers)
 
+    # ######################## #
+    # Layer setup core methods #
+    # ######################## #
+
+    def _setup_image_layer(self, layer: Image, index: int | None = None, *, reorder: bool = True) -> None:
+        md = layer.metadata or {}
+        paths = md.get("paths")
+        if paths is None and io.is_video(layer.name):
+            self.video_widget.setVisible(True)
+
+        self._update_image_meta_from_layer(layer)
+        self._sync_points_layers_from_image_meta()
+
+        if reorder and index is not None:
+            QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, index))
+
+    def _maybe_merge_config_points_layer(self, layer: Points) -> bool:
+        if not layer.metadata.get("project", "") or not self._stores:
+            return False
+
+        new_metadata = layer.metadata.copy()
+
+        keypoints_menu = self._menus[0].menus["label"]
+        current_keypoint_set = {keypoints_menu.itemText(i) for i in range(keypoints_menu.count())}
+        new_keypoint_set = set(new_metadata["header"].bodyparts)
+        diff = new_keypoint_set.difference(current_keypoint_set)
+
+        if diff:
+            answer = QMessageBox.question(self, "", "Do you want to display the new keypoints only?")
+            if answer == QMessageBox.Yes:
+                self.viewer.layers[-2].shown = False
+
+            self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
+            for _layer, store in self._stores.items():
+                _layer.metadata["header"] = new_metadata["header"]
+                store.layer = _layer
+
+            for menu in self._menus:
+                menu._map_individuals_to_bodyparts()
+                menu._update_items()
+
+        QTimer.singleShot(10, self.viewer.layers.pop)
+
+        # apply the new color cycles + recolor safely
+        for _layer, store in self._stores.items():
+            _layer.metadata["face_color_cycles"] = new_metadata["face_color_cycles"]
+            _layer.metadata["colormap_name"] = new_metadata.get("colormap_name", _layer.metadata.get("colormap_name"))
+            self._apply_points_coloring_from_metadata(_layer)  # << use your unified coloring
+            store.layer = _layer
+
+        self._update_color_scheme()
+        return True
+
+    def _wire_points_layer(self, layer: Points) -> keypoints.KeypointStore | None:
+        if not self._validate_header(layer):
+            return None
+
+        # ensure presence of IO metadata for saving & routing
+        self._ensure_io_from_source_h5(layer.metadata)
+
+        store = keypoints.KeypointStore(self.viewer, layer)
+        self._stores[layer] = store
+
+        # default root/paths from current image meta if missing
+        if not layer.metadata.get("root") and self._image_meta.root:
+            layer.metadata["root"] = self._image_meta.root
+        if not layer.metadata.get("paths") and self._image_meta.paths:
+            layer.metadata["paths"] = self._image_meta.paths
+
+        # save history
+        if root := layer.metadata.get("root"):
+            update_save_history(root)
+
+        layer.metadata["controls"] = self
+        layer.text.visible = False
+
+        # key bindings
+        layer.bind_key("M", self.cycle_through_label_modes)
+        layer.bind_key("F", self.cycle_through_color_modes)
+
+        # patch paste + add
+        func = partial(self._paste_data, store=store)
+        layer._paste_data = MethodType(func, layer)
+
+        # IMPORTANT: wrap add to schedule recolor (see Part 2 below)
+        self._install_add_wrapper(layer, store)
+
+        # store events / navigation
+        layer.events.add(query_next_frame=Event)
+        layer.events.query_next_frame.connect(store._advance_step)
+
+        # navigation keys
+        layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
+        layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
+        layer.bind_key("Down", store.next_keypoint, overwrite=True)
+        layer.bind_key("Up", store.prev_keypoint, overwrite=True)
+
+        if len(self._stores) == 1 and self._is_multianimal(layer):
+            # set internal mode without triggering recolor storms
+            self._color_mode = keypoints.ColorMode.INDIVIDUAL
+            # update button state so UI matches (optional but good)
+            for btn in self._color_mode_selector.buttons():
+                if btn.text().lower() == str(self._color_mode).lower():
+                    btn.setChecked(True)
+                    break
+
+        # apply cycles (works even if empty; see method)
+        self._apply_points_coloring_from_metadata(layer)
+
+        # menus
+        self._form_dropdown_menus(store)
+
+        # project path
+        proj = layer.metadata.get("project")
+        if proj:
+            self._project_path = proj
+
+        # enable GUI groups
+        self._radio_box.setEnabled(True)
+        self._color_grp.setEnabled(True)
+        self._trail_cb.setEnabled(True)
+        self._show_traj_plot_cb.setEnabled(True)
+
+        return store
+
+    def _apply_points_layer_ui_tweaks(self, layer: Points) -> None:
+        try:
+            controls = self.viewer.window.qt_viewer.dockLayerControls
+            point_controls = controls.widget().widgets[layer]
+        except Exception:
+            return
+
+        # hide face/border editors/out-of-slice toggle (guarded)
+        for attr_path in [
+            ("_face_color_control", "face_color_edit"),
+            ("_face_color_control", "face_color_label"),
+            ("_border_color_control", "border_color_edit"),
+            ("_border_color_control", "border_color_edit_label"),
+            ("_out_slice_checkbox_control", "out_of_slice_checkbox"),
+            ("_out_slice_checkbox_control", "out_of_slice_checkbox_label"),
+        ]:
+            try:
+                obj = getattr(point_controls, attr_path[0])
+                widget = getattr(obj, attr_path[1])
+                widget.hide()
+            except Exception:
+                pass
+
+        # add colormap selector
+        try:
+            colormap_selector = DropdownMenu(plt.colormaps, self)
+            colormap_selector.update_to(layer.metadata.get("colormap_name", "viridis"))
+            colormap_selector.currentTextChanged.connect(self._update_colormap)
+            point_controls.layout().addRow("colormap", colormap_selector)
+        except Exception:
+            pass
+
+    def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
+        if not self._validate_header(layer):
+            return
+
+        if allow_merge and self._maybe_merge_config_points_layer(layer):
+            return
+
+        if layer.metadata.get("tables", ""):
+            self._keypoint_mapping_button.show()
+
+        store = self._wire_points_layer(layer)
+        if store is None:
+            return
+
+        self._apply_points_layer_ui_tweaks(layer)
+        self._update_color_scheme()
+
     def _adopt_existing_layers(self) -> None:
         """
         When the widget is opened after layers already exist, we need to
@@ -726,39 +895,13 @@ class KeypointControls(QWidget):
         Run the relevant portion of on_insert() for an already-existing layer.
         This avoids duplicating your logic and prevents reliance on napari's Event object.
         """
-        try:
-            if isinstance(layer, Image):
-                # Mimic image insertion side effects (metadata capture + reorder timer)
-                self._handle_existing_image_layer(layer, index)
-
-            elif isinstance(layer, Points):
-                # If this Points layer hasn't been wired yet, wire it
-                if layer not in self._stores:
-                    self._handle_existing_points_layer(layer)
-
-            # After handling each layer, attempt safe remap
-            if not isinstance(layer, Image):
-                self._remap_frame_indices(layer)
-
-        except Exception:
-            logging.exception("Failed to adopt existing layer %r", getattr(layer, "name", layer))
-
-    def _handle_existing_image_layer(self, layer: Image, index: int) -> None:
-        """
-        Safe version of the Image branch from on_insert().
-        Uses your inference logic so builtins-loaded images don't crash.
-        """
-        paths = (layer.metadata or {}).get("paths")
-        if paths is None and io.is_video(layer.name):
-            self.video_widget.setVisible(True)
-
-        # Update authoritative image meta
-        self._update_image_meta_from_layer(layer)
-
-        # Sync points layers from image meta
-        self._sync_points_layers_from_image_meta()
-
-        QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, index))
+        if isinstance(layer, Image):
+            self._setup_image_layer(layer, index, reorder=True)
+        elif isinstance(layer, Points):
+            if layer not in self._stores:
+                self._setup_points_layer(layer, allow_merge=False)  # typically don’t merge during adopt
+        if not isinstance(layer, Image):
+            self._remap_frame_indices(layer)
 
     def _validate_header(self, layer) -> bool:
         hdr = (layer.metadata or {}).get("header")
@@ -769,97 +912,22 @@ class KeypointControls(QWidget):
             return False
         return True
 
-    def _handle_existing_points_layer(self, layer: Points) -> None:
-        """
-        Safe version of the Points branch from on_insert(), for adoption.
-        """
-        if not self._validate_header(layer):
+    def _schedule_recolor(self, layer: Points) -> None:
+        if not hasattr(self, "_recolor_pending"):
+            self._recolor_pending = set()
+
+        if layer in self._recolor_pending:
             return
 
-        store = keypoints.KeypointStore(self.viewer, layer)
-        self._stores[layer] = store
-        if layer.metadata.get("header") is None:
-            self.viewer.status = (
-                "This Points layer does not look like a DLC keypoints layer. "
-                "Please load via napari-deeplabcut (config.yaml / labeled-data folder)."
-            )
-            return
+        self._recolor_pending.add(layer)
 
-        # Keep save history consistent
-        if root := layer.metadata.get("root"):
-            update_save_history(root)
-
-        layer.metadata["controls"] = self
-        layer.text.visible = False
-
-        self._ensure_io_from_source_h5(layer.metadata)
-
-        # Bind keys and patch behaviors like on_insert()
-        layer.bind_key("M", self.cycle_through_label_modes)
-        layer.bind_key("F", self.cycle_through_color_modes)
-
-        func = partial(self._paste_data, store=store)
-        layer._paste_data = MethodType(func, layer)
-        layer.add = MethodType(keypoints._add, store)
-
-        layer.events.add(query_next_frame=Event)
-        layer.events.query_next_frame.connect(store._advance_step)
-
-        # FIXME @C-Achard 2026-02-17 duplicated code for now
-        layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
-        layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
-        layer.bind_key("Down", store.next_keypoint, overwrite=True)
-        layer.bind_key("Up", store.prev_keypoint, overwrite=True)
-
-        if not _safe_enable_cycle_mode(layer):
-            layer.face_color_mode = "direct"
-
-        # Create the dropdown menus
-        self._form_dropdown_menus(store)
-
-        # Update images meta "project" only if truthy
-        proj = layer.metadata.get("project")
-        if proj:
-            self._project_path = proj
-
-        # Enable GUI groups that are normally enabled on insert
-        self._radio_box.setEnabled(True)
-        self._color_grp.setEnabled(True)
-        self._trail_cb.setEnabled(True)
-        self._show_traj_plot_cb.setEnabled(True)
-
-        # Hide the color pickers, same as on_insert (guarded)
-        try:
-            controls = self.viewer.window.qt_viewer.dockLayerControls
-            point_controls = controls.widget().widgets[layer]
-
+        def _do():
             try:
-                face_color_controls = point_controls._face_color_control.face_color_edit
-                face_color_label = point_controls._face_color_control.face_color_label
-                face_color_controls.hide()
-                face_color_label.hide()
-            except AttributeError:
-                pass
+                self._apply_points_coloring_from_metadata(layer)
+            finally:
+                self._recolor_pending.discard(layer)
 
-            try:
-                edge_color_controls = point_controls._border_color_control.border_color_edit
-                border_color_label = point_controls._border_color_control.border_color_edit_label
-                edge_color_controls.hide()
-                border_color_label.hide()
-            except AttributeError:
-                pass
-
-            try:
-                out_of_slice_controls = point_controls._out_slice_checkbox_control.out_of_slice_checkbox
-                out_of_slice_label = point_controls._out_slice_checkbox_control.out_of_slice_checkbox_label
-                out_of_slice_controls.hide()
-                out_of_slice_label.hide()
-            except AttributeError:
-                pass
-
-        except Exception:
-            # Never fail adoption due to UI private API differences
-            pass
+        QTimer.singleShot(0, _do)
 
     def _ensure_mpl_canvas_docked(self) -> None:
         """
@@ -934,6 +1002,7 @@ class KeypointControls(QWidget):
         properties = deepcopy(points_layer.properties)
         properties["label"] = np.array(labels)
         points_layer.properties = properties
+        self._apply_points_coloring_from_metadata(points_layer)
         self._keypoint_mapping_button.setText("Map keypoints")
         try:
             self._keypoint_mapping_button.clicked.disconnect(self._load_superkeypoints_action)
@@ -953,12 +1022,12 @@ class KeypointControls(QWidget):
                 points_layer = layer
                 break
 
-        if points_layer is None or ~np.any(points_layer.data):
+        if points_layer is None or not np.any(points_layer.data):
             return
 
         xy = points_layer.data[:, 1:3]
         superkpts_dict = io.load_superkeypoints(super_animal)
-        xy_ref = np.c_[[val for val in superkpts_dict.values()]]
+        xy_ref = np.asarray(list(superkpts_dict.values()), dtype=float)
         neighbors = keypoints._find_nearest_neighbors(xy, xy_ref)
         found = neighbors != -1
         if not np.any(found):
@@ -1338,6 +1407,101 @@ class KeypointControls(QWidget):
                     {name: to_hex(color) for name, color in layer.metadata["face_color_cycles"][mode].items()}
                 )
 
+    def _apply_points_coloring_from_metadata(self, layer: Points) -> None:
+        """Apply categorical (cycle) coloring if safe, otherwise fall back without crashing."""
+        md = layer.metadata or {}
+        cycles = md.get("face_color_cycles") or {}
+        if not cycles:
+            return
+
+        try:
+            if layer.data is None or len(layer.data) == 0:
+                layer.face_color_mode = "direct"
+                return
+        except Exception:
+            layer.face_color_mode = "direct"
+            return
+
+        # Choose prop:
+        # - Multi-animal defaults to id (restores test_toggle_face_color expectation)
+        # - Otherwise use global setting
+        prop = "label"
+        try:
+            header = md.get("header")
+            bool(header and getattr(header, "individuals", None) and header.individuals[0] != "")
+        except Exception:
+            pass
+
+        prop = "label"
+        if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL) and "id" in cycles:
+            prop = "id"
+        elif "label" not in cycles and "id" in cycles:
+            prop = "id"
+
+        if prop not in cycles:
+            layer.face_color_mode = "direct"
+            return
+
+        # Ensure properties exist and are valid (no NaNs) for the prop we want to cycle on
+        props = getattr(layer, "properties", {}) or {}
+        values = props.get(prop, None)
+        if values is None or len(values) == 0:
+            layer.face_color_mode = "direct"
+            return
+
+        # If any NaNs exist in the property array, do NOT enable cycle mode.
+        # This is the KeyError: nan crash path in napari categorical colormap.
+        if misc._array_has_nan(values):
+            layer.face_color_mode = "direct"
+            return
+
+        # Ensure current_properties[prop] exists and is a real key (not NaN/None/"")
+        try:
+            cp = layer.current_properties
+            bad_current = (
+                prop not in cp
+                or cp[prop] is None
+                or len(cp[prop]) == 0
+                or cp[prop][0] in ("", None)
+                or misc._is_nan_value(cp[prop][0])
+            )
+            if bad_current:
+                default_val = None
+
+                # Prefer header-derived default
+                if header is not None:
+                    if prop == "label" and getattr(header, "bodyparts", None):
+                        default_val = str(header.bodyparts[0])
+                    elif prop == "id" and getattr(header, "individuals", None):
+                        default_val = str(header.individuals[0]) if header.individuals else ""
+
+                # Fallback to first cycle key
+                if default_val is None:
+                    keys = list(cycles[prop].keys())
+                    default_val = str(keys[0]) if keys else ""
+
+                cp[prop] = np.array([default_val], dtype=object)
+                layer.current_properties = cp
+        except Exception:
+            # If we can't safely set current props, do not enable cycle mode
+            layer.face_color_mode = "direct"
+            return
+
+        # Apply cycle configuration
+        try:
+            layer.face_color = prop
+            layer.face_color_cycle = cycles[prop]
+
+            # This line triggers napari validation; guard it.
+            layer.face_color_mode = "cycle"
+            layer.events.face_color()
+        except Exception:
+            # Last-resort: never crash insert; fall back to direct mode
+            try:
+                layer.face_color_mode = "direct"
+            except Exception:
+                pass
+
     def _remap_frame_indices(self, layer):
         """
         Best-effort remap of time/frame indices in non-Image layers to match current Image order.
@@ -1395,142 +1559,22 @@ class KeypointControls(QWidget):
             logger.exception("Failed to remap frame indices for layer %s", getattr(layer, "name", str(layer)))
             return
 
+    def _install_add_wrapper(self, layer: Points, store) -> None:
+        orig_add = MethodType(keypoints._add, store)
+
+        def add_and_recolor(this, *args, **kwargs):
+            res = orig_add(*args, **kwargs)
+            self._schedule_recolor(this)
+            return res
+
+        layer.add = MethodType(add_and_recolor, layer)
+
     def on_insert(self, event):
         layer = event.source[-1]
-        logging.debug(f"Inserting Layer {layer}")
         if isinstance(layer, Image):
-            paths = layer.metadata.get("paths")
-            if paths is None and io.is_video(layer.name):
-                self.video_widget.setVisible(True)
-
-            # Update authoritative image meta
-            self._update_image_meta_from_layer(layer)
-
-            # Sync points layers metadata from image meta (non-breaking)
-            self._sync_points_layers_from_image_meta()
-
-            logger.debug(
-                "Synced points layers with new image metadata: %r",
-                self._image_meta,
-            )
-
-            # Delay layer sorting
-            QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, event.index))
+            self._setup_image_layer(layer, event.index, reorder=True)
         elif isinstance(layer, Points):
-            if not self._validate_header(layer):
-                return
-            # If the current Points layer comes from a config file, some have already
-            # been added and the body part names are different from the existing ones,
-            # then we update store's metadata and menus.
-            if layer.metadata.get("project", "") and self._stores:
-                new_metadata = layer.metadata.copy()
-
-                keypoints_menu = self._menus[0].menus["label"]
-                current_keypoint_set = {keypoints_menu.itemText(i) for i in range(keypoints_menu.count())}
-                new_keypoint_set = set(new_metadata["header"].bodyparts)
-                diff = new_keypoint_set.difference(current_keypoint_set)
-                if diff:
-                    answer = QMessageBox.question(self, "", "Do you want to display the new keypoints only?")
-                    if answer == QMessageBox.Yes:
-                        self.viewer.layers[-2].shown = False
-
-                    self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
-                    for _layer, store in self._stores.items():
-                        _layer.metadata["header"] = new_metadata["header"]
-                        store.layer = _layer
-
-                    for menu in self._menus:
-                        menu._map_individuals_to_bodyparts()
-                        menu._update_items()
-
-                # Remove the unnecessary layer newly added
-                QTimer.singleShot(10, self.viewer.layers.pop)
-
-                # Always update the colormap to reflect the one in the config.yaml file
-                for _layer, store in self._stores.items():
-                    _layer.metadata["face_color_cycles"] = new_metadata["face_color_cycles"]
-                    _layer.face_color = "label"
-                    _layer.face_color_cycle = new_metadata["face_color_cycles"]["label"]
-                    _layer.events.face_color()
-                    store.layer = _layer
-                self._update_color_scheme()
-
-                return
-
-            if layer.metadata.get("tables", ""):
-                self._keypoint_mapping_button.show()
-
-            self._ensure_io_from_source_h5(layer.metadata)
-
-            store = keypoints.KeypointStore(self.viewer, layer)
-            self._stores[layer] = store
-            if not layer.metadata.get("root") and self._image_meta.root:
-                layer.metadata["root"] = self._image_meta.root
-            if not layer.metadata.get("paths") and self._image_meta.paths:
-                layer.metadata["paths"] = self._image_meta.paths
-            # TODO Set default dir of the save file dialog
-            if root := layer.metadata.get("root"):
-                update_save_history(root)
-            layer.metadata["controls"] = self
-            layer.text.visible = False
-            layer.bind_key("M", self.cycle_through_label_modes)
-            layer.bind_key("F", self.cycle_through_color_modes)
-            func = partial(self._paste_data, store=store)
-            layer._paste_data = MethodType(func, layer)
-            layer.add = MethodType(keypoints._add, store)
-            layer.events.add(query_next_frame=Event)
-            layer.events.query_next_frame.connect(store._advance_step)
-            layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
-            layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
-
-            layer.bind_key("Down", store.next_keypoint, overwrite=True)
-            layer.bind_key("Up", store.prev_keypoint, overwrite=True)
-            if not _safe_enable_cycle_mode(layer):
-                layer.face_color_mode = "direct"
-            self._form_dropdown_menus(store)
-
-            proj = layer.metadata.get("project")
-            if proj:
-                self._project_path = proj
-            self._radio_box.setEnabled(True)
-            self._color_grp.setEnabled(True)
-            self._trail_cb.setEnabled(True)
-            self._show_traj_plot_cb.setEnabled(True)
-
-            # Hide the color pickers, as colormaps are strictly defined by users
-            controls = self.viewer.window.qt_viewer.dockLayerControls
-            point_controls = controls.widget().widgets[layer]
-            # Attempt to hide several napari UI elements.
-            # To avoid potential breakage, we pass if they don't exist.
-            try:
-                face_color_controls = point_controls._face_color_control.face_color_edit
-                face_color_label = point_controls._face_color_control.face_color_label
-                face_color_controls.hide()
-                face_color_label.hide()
-            except AttributeError:
-                pass
-            try:
-                # Border color edit in latest napari versions (0.6.6)
-                edge_color_controls = point_controls._border_color_control.border_color_edit
-                border_color_label = point_controls._border_color_control.border_color_edit_label
-                edge_color_controls.hide()
-                border_color_label.hide()
-            except AttributeError:
-                pass
-            # Hide out of slice checkbox
-            try:
-                out_of_slice_controls = point_controls._out_slice_checkbox_control.out_of_slice_checkbox
-                out_of_slice_label = point_controls._out_slice_checkbox_control.out_of_slice_checkbox_label
-                out_of_slice_controls.hide()
-                out_of_slice_label.hide()
-            except AttributeError:
-                pass
-
-            # Add dropdown menu for colormap picking
-            colormap_selector = DropdownMenu(plt.colormaps, self)
-            colormap_selector.update_to(layer.metadata["colormap_name"])
-            colormap_selector.currentTextChanged.connect(self._update_colormap)
-            point_controls.layout().addRow("colormap", colormap_selector)
+            self._setup_points_layer(layer, allow_merge=True)
 
         for layer_ in self.viewer.layers:
             if not isinstance(layer_, Image):
@@ -1622,6 +1666,11 @@ class KeypointControls(QWidget):
             self._selected_view = list(range(npoints, npoints + len(self._clipboard["data"])))
             self._selected_data = set(range(totpoints, totpoints + len(self._clipboard["data"])))
             self.refresh()
+
+            try:
+                self._schedule_recolor(store.layer)
+            except Exception:
+                pass
 
     def _ensure_promotion_save_target(self, layer: Points) -> bool:
         """Ensure a prediction/machine source layer has a GT save_target set.
@@ -1791,22 +1840,17 @@ class KeypointControls(QWidget):
             else:
                 menu.setHidden(True)
 
-    def _update_colormap(self, colormap_name):
+    def _update_colormap(self, colormap_name: str):
         for layer in self.viewer.layers.selection:
-            if isinstance(layer, Points) and layer.metadata:
-                face_color_cycle_maps = build_color_cycles(
-                    layer.metadata["header"],
-                    colormap_name,
-                )
-                layer.metadata["face_color_cycles"] = face_color_cycle_maps
-                face_color_prop = "label"
-                if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL):
-                    face_color_prop = "id"
+            if not isinstance(layer, Points) or not layer.metadata:
+                continue
 
-                layer.face_color = face_color_prop
-                layer.face_color_cycle = face_color_cycle_maps[face_color_prop]
-                layer.events.face_color()
-                self._update_color_scheme()
+            layer.metadata["colormap_name"] = colormap_name
+            layer.metadata["face_color_cycles"] = build_color_cycles(layer.metadata["header"], colormap_name)
+
+            self._apply_points_coloring_from_metadata(layer)
+
+        self._update_color_scheme()
 
     @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):
@@ -1844,16 +1888,11 @@ class KeypointControls(QWidget):
     @color_mode.setter
     def color_mode(self, mode: str | keypoints.ColorMode):
         self._color_mode = keypoints.ColorMode(mode)
-        if self._color_mode == keypoints.ColorMode.BODYPART:
-            face_color_mode = "label"
-        else:
-            face_color_mode = "id"
 
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata:
-                layer.face_color = face_color_mode
-                layer.face_color_cycle = layer.metadata["face_color_cycles"][face_color_mode]
-                layer.events.face_color()
+                self._apply_points_coloring_from_metadata(layer)
+        self._update_color_scheme()
 
         for btn in self._color_mode_selector.buttons():
             if btn.text().lower() == str(mode).lower():
