@@ -88,6 +88,10 @@ class KeypointsDropdownMenu(QWidget):
         layout1.addWidget(group_box)
         self.setLayout(layout1)
 
+    def _get_ids(self) -> list[str]:
+        ids = self.store.ids
+        return ids if ids else [""]  # single-animal case: fake one id for consistent logic
+
     def _map_individuals_to_bodyparts(self) -> None:
         self.id2label.clear()  # preserve config order
         for keypoint in self.store._keypoints:
@@ -97,7 +101,10 @@ class KeypointsDropdownMenu(QWidget):
                 self.id2label[id_].append(label)
 
     def _populate_menus(self) -> None:
-        id_ = self.store.ids[0]
+        ids = self._get_ids()
+        if not ids:
+            return
+        id_ = ids[0]
         if id_:
             menu = create_dropdown_menu(self.store, list(self.id2label), "id")
             menu.currentTextChanged.connect(self.refresh_label_menu)
@@ -105,7 +112,10 @@ class KeypointsDropdownMenu(QWidget):
         self.menus["label"] = create_dropdown_menu(self.store, self.id2label[id_], "label")
 
     def _update_items(self) -> None:
-        id_ = self.store.ids[0]
+        ids = self._get_ids()
+        if not ids:
+            return
+        id_ = ids[0]
         if id_:
             self.menus["id"].update_items(list(self.id2label))
         self.menus["label"].update_items(self.id2label[id_])

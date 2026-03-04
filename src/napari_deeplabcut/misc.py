@@ -6,15 +6,22 @@ from collections.abc import Sequence
 from enum import Enum, EnumMeta
 from itertools import cycle
 from pathlib import Path
+from typing import Protocol
 
 import numpy as np
-import pandas as pd
 from napari.utils import colormaps
 from natsort import natsorted
 
 from napari_deeplabcut.core.paths import canonicalize_path
 
 logger = logging.getLogger(__name__)
+
+
+class HeaderLike(Protocol):
+    @property
+    def bodyparts(self) -> list[str]: ...
+    @property
+    def individuals(self) -> list[str]: ...
 
 
 def find_project_config_path(labeled_data_path: str) -> str:
@@ -31,12 +38,6 @@ def is_latest_version():
     contents = urllib.request.urlopen(url).read()
     latest_version = json.loads(contents)["info"]["version"]
     return __version__ == latest_version, latest_version
-
-
-def unsorted_unique(array: Sequence) -> np.ndarray:
-    """Return the unsorted unique elements of an array."""
-    _, inds = np.unique(array, return_index=True)
-    return np.asarray(array)[np.sort(inds)]
 
 
 def encode_categories(categories: Sequence, return_unique: bool = False, is_path: bool = True, do_sort: bool = True):
@@ -75,7 +76,7 @@ def build_color_cycle(n_colors: int, colormap: str | None = "viridis") -> np.nda
     return cmap.map(np.linspace(0, 1, n_colors))
 
 
-def build_color_cycles(header: DLCHeader, colormap: str | None = "viridis"):
+def build_color_cycles(header: HeaderLike, colormap: str | None = "viridis"):
     label_colors = build_color_cycle(len(header.bodyparts), colormap)
     id_colors = build_color_cycle(len(header.individuals), colormap)
     return {
@@ -84,69 +85,69 @@ def build_color_cycles(header: DLCHeader, colormap: str | None = "viridis"):
     }
 
 
-# FIXME @C-Achard replace with schema in core
-class DLCHeader:
-    def __init__(self, columns: pd.MultiIndex):
-        self.columns = columns
+# # FIXME @C-Achard replace with schema in core
+# class DLCHeader:
+#     def __init__(self, columns: pd.MultiIndex):
+#         self.columns = columns
 
-    @classmethod
-    def from_config(cls, config: dict) -> DLCHeader:
-        multi = config.get("multianimalproject", False)
-        scorer = [config["scorer"]]
-        if multi:
-            columns = pd.MultiIndex.from_product(
-                [
-                    scorer,
-                    config["individuals"],
-                    config["multianimalbodyparts"],
-                    ["x", "y"],
-                ]
-            )
-            if len(config["uniquebodyparts"]):
-                temp = pd.MultiIndex.from_product([scorer, ["single"], config["uniquebodyparts"], ["x", "y"]])
-                columns = columns.append(temp)
-            columns.set_names(["scorer", "individuals", "bodyparts", "coords"], inplace=True)
-        else:
-            columns = pd.MultiIndex.from_product(
-                [scorer, config["bodyparts"], ["x", "y"]],
-                names=["scorer", "bodyparts", "coords"],
-            )
-        return cls(columns)
+#     @classmethod
+#     def from_config(cls, config: dict) -> DLCHeader:
+#         multi = config.get("multianimalproject", False)
+#         scorer = [config["scorer"]]
+#         if multi:
+#             columns = pd.MultiIndex.from_product(
+#                 [
+#                     scorer,
+#                     config["individuals"],
+#                     config["multianimalbodyparts"],
+#                     ["x", "y"],
+#                 ]
+#             )
+#             if len(config["uniquebodyparts"]):
+#                 temp = pd.MultiIndex.from_product([scorer, ["single"], config["uniquebodyparts"], ["x", "y"]])
+#                 columns = columns.append(temp)
+#             columns.set_names(["scorer", "individuals", "bodyparts", "coords"], inplace=True)
+#         else:
+#             columns = pd.MultiIndex.from_product(
+#                 [scorer, config["bodyparts"], ["x", "y"]],
+#                 names=["scorer", "bodyparts", "coords"],
+#             )
+#         return cls(columns)
 
-    def form_individual_bodypart_pairs(self) -> list[tuple[str]]:
-        to_drop = [name for name in self.columns.names if name not in ("individuals", "bodyparts")]
-        temp = self.columns.droplevel(to_drop).unique()
-        if "individuals" not in temp.names:
-            temp = pd.MultiIndex.from_product([self.individuals, temp])
-        return temp.to_list()
+#     def form_individual_bodypart_pairs(self) -> list[tuple[str]]:
+#         to_drop = [name for name in self.columns.names if name not in ("individuals", "bodyparts")]
+#         temp = self.columns.droplevel(to_drop).unique()
+#         if "individuals" not in temp.names:
+#             temp = pd.MultiIndex.from_product([self.individuals, temp])
+#         return temp.to_list()
 
-    @property
-    def scorer(self) -> str:
-        return self._get_unique("scorer")[0]
+#     @property
+#     def scorer(self) -> str:
+#         return self._get_unique("scorer")[0]
 
-    @scorer.setter
-    def scorer(self, scorer: str):
-        self.columns = self.columns.set_levels([scorer], level="scorer")
+#     @scorer.setter
+#     def scorer(self, scorer: str):
+#         self.columns = self.columns.set_levels([scorer], level="scorer")
 
-    @property
-    def individuals(self) -> list[str]:
-        individuals = self._get_unique("individuals")
-        if individuals is None:
-            return [""]
-        return individuals
+#     @property
+#     def individuals(self) -> list[str]:
+#         individuals = self._get_unique("individuals")
+#         if individuals is None:
+#             return [""]
+#         return individuals
 
-    @property
-    def bodyparts(self) -> list[str]:
-        return self._get_unique("bodyparts")
+#     @property
+#     def bodyparts(self) -> list[str]:
+#         return self._get_unique("bodyparts")
 
-    @property
-    def coords(self) -> list[str]:
-        return self._get_unique("coords")
+#     @property
+#     def coords(self) -> list[str]:
+#         return self._get_unique("coords")
 
-    def _get_unique(self, name: str) -> list | None:
-        if name in self.columns.names:
-            return list(unsorted_unique(self.columns.get_level_values(name)))
-        return None
+#     def _get_unique(self, name: str) -> list | None:
+#         if name in self.columns.names:
+#             return list(unsorted_unique(self.columns.get_level_values(name)))
+#         return None
 
 
 class CycleEnumMeta(EnumMeta):

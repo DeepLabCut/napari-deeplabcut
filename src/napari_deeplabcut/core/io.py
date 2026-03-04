@@ -73,8 +73,7 @@ def load_config(config_path: str):
 # Read config file and create keypoint layer metadata
 def read_config(configname: str) -> list[LayerData]:
     config = load_config(configname)
-    # FIXME duplicated DLCHeader misc/models
-    header = misc.DLCHeader.from_config(config)
+    header = DLCHeaderModel.from_config(config)
     metadata = populate_keypoint_layer_metadata(
         header,
         size=config["dotsize"],
@@ -123,7 +122,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     """
     temp = pd.read_hdf(str(file))
     temp = merge_multiple_scorers(temp)
-    header = misc.DLCHeader(temp.columns)
+    header = DLCHeaderModel(columns=temp.columns)
     temp = temp.droplevel("scorer", axis=1)
 
     # Handle legacy/single-animal column layout by inserting empty "individuals" level.
@@ -289,7 +288,7 @@ def form_df(
     points_data:
         array-like of shape (N, 3) in napari-style [frame, y, x]
     layer_metadata:
-        dict that must contain at least: 'header' (DLCHeader-like or DLCHeaderModel), optional 'paths'
+        dict that must contain at least: 'header' (DLCHeaderModel), optional 'paths'
     layer_properties:
         dict that must contain: 'label', 'id', optional 'likelihood'
     """
@@ -308,7 +307,7 @@ def form_df(
     elif isinstance(header_obj, DLCHeaderModel):
         header_model = header_obj
     else:
-        # Accept a misc.DLCHeader-like object (has .columns)
+        # Accept a DLCHeaderModel-like object (has .columns)
         cols = getattr(header_obj, "columns", None)
         if cols is None:
             raise TypeError("layer_metadata['header'] must be a DLCHeaderModel or an object with a .columns attribute.")
@@ -482,7 +481,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
 
         # Normalize columns to DLC header if possible
         try:
-            header = misc.DLCHeader(df_out.columns)
+            header = DLCHeaderModel(columns=df_out.columns)
             df_out = df_out.reindex(header.columns, axis=1)
         except Exception:
             pass
@@ -517,7 +516,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
 # =============================================================================
 # SUPERKEYPOINTS (assets: diagram + JSON)
 # =============================================================================
-# NOTE: These are used to support DLCHeader superkeypoints workflows.
+# NOTE: These are used to support DLCHeaderModel superkeypoints workflows.
 
 
 def load_superkeypoints_json_from_path(json_path: str | Path):

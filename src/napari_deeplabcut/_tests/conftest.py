@@ -11,7 +11,8 @@ import pytest
 from qtpy.QtWidgets import QDockWidget
 from skimage.io import imsave
 
-from napari_deeplabcut import keypoints, misc
+from napari_deeplabcut import keypoints
+from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.core import io as napari_dlc_io
 
 # os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
@@ -62,7 +63,7 @@ def make_real_header(bodyparts=("bodypart1", "bodypart2"), individuals=("",), sc
         [[scorer], list(individuals), list(bodyparts), ["x", "y"]],
         names=["scorer", "individuals", "bodyparts", "coords"],
     )
-    return misc.DLCHeader(cols)
+    return DLCHeaderModel(cols)
 
 
 @pytest.fixture
@@ -231,7 +232,7 @@ def multianimal_config_project(tmp_path: Path):
         "dotsize": 8,
         "pcutoff": 0.6,
         "colormap": "viridis",
-        # DLC multi-animal flags/fields expected by napari_deeplabcut.misc.DLCHeader.from_config
+        # DLC multi-animal flags/fields expected by napari_deeplabcut.config.models.DLCHeaderModel.from_config
         "multianimalproject": True,
         "individuals": ["animal1", "animal2"],
         "multianimalbodyparts": ["bodypart1", "bodypart2"],

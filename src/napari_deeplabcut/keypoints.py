@@ -1,3 +1,5 @@
+# src/napari_deeplabcut/keypoints.py
+import logging
 from collections import namedtuple
 from collections.abc import Sequence
 from enum import auto
@@ -7,9 +9,14 @@ from napari._qt.layer_controls.qt_points_controls import QtPointsControls
 from napari.layers import Points
 from napari.layers.points._points_constants import SYMBOL_TRANSLATION_INVERTED
 from napari.layers.points._points_utils import coerce_symbols
+from pydantic import ValidationError
 from scipy.spatial import cKDTree
 
+from napari_deeplabcut.config.models import DLCHeaderModel
+from napari_deeplabcut.core.metadata import read_points_meta
 from napari_deeplabcut.misc import CycleEnum
+
+logger = logging.getLogger(__name__)
 
 
 # Monkeypatch the point size slider
@@ -33,6 +40,35 @@ def _change_symbol(self, text):
 
 QtPointsControls.changeCurrentSize = _change_size
 QtPointsControls.changeCurrentSymbol = _change_symbol
+
+
+def _get_controls(layer):
+    """
+    Controls are runtime-only and may be dropped by metadata validation/writes.
+    Prefer attribute storage, fall back to metadata for backward compatibility.
+    """
+    ctrl = getattr(layer, "_napari_deeplabcut_controls", None)
+    if ctrl is not None:
+        return ctrl
+    md = getattr(layer, "metadata", None) or {}
+    if isinstance(md, dict):
+        return md.get("controls", None)
+    try:
+        return dict(md).get("controls", None)
+    except Exception:
+        return None
+
+
+def _validate_points_meta_best_effort(layer) -> bool:
+    """
+    Phase-2 friendly: validate points metadata without mutating it.
+    We drop header + controls during validation to avoid runtime-object issues.
+    """
+    res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=True)
+    if isinstance(res, ValidationError):
+        logger.debug("Points metadata invalid for layer=%r: %s", getattr(layer, "name", layer), res)
+        return False
+    return True
 
 
 class ColorMode(CycleEnum):
@@ -88,6 +124,7 @@ class KeypointStore:
     def __init__(self, viewer, layer: Points):
         self.viewer = viewer
         self._keypoints = []
+        self._header: DLCHeaderModel | None = None
         self.layer = layer
         self.viewer.dims.set_current_step(0, 0)
 
@@ -98,10 +135,24 @@ class KeypointStore:
     @layer.setter
     def layer(self, layer):
         self._layer = layer
-        all_pairs = self.layer.metadata["header"].form_individual_bodypart_pairs()
-        self._keypoints = [
-            Keypoint(label, id_) for id_, label in all_pairs
-        ]  # Ordered references to all possible keypoints
+
+        res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
+        if isinstance(res, ValidationError) or res.header is None:
+            self._header = None
+            self._keypoints = []
+            return
+
+        self._header = res.header
+        pairs = self._header.form_individual_bodypart_pairs()
+        self._keypoints = [Keypoint(label, id_) for id_, label in pairs]
+
+    @property
+    def labels(self) -> list[str]:
+        return self._header.bodyparts if self._header is not None else []
+
+    @property
+    def ids(self) -> list[str]:
+        return self._header.individuals if self._header is not None else []
 
     @property
     def current_step(self):
@@ -124,8 +175,16 @@ class KeypointStore:
 
     @property
     def current_keypoint(self) -> Keypoint:
-        props = self.layer.current_properties
-        return Keypoint(label=props["label"][0], id=props["id"][0])
+        props = getattr(self.layer, "current_properties", {}) or {}
+        try:
+            label = props.get("label", [""])[0]
+        except Exception:
+            label = ""
+        try:
+            id_ = props.get("id", [""])[0]
+        except Exception:
+            id_ = ""
+        return Keypoint(label=label, id=id_)
 
     @current_keypoint.setter
     def current_keypoint(self, keypoint: Keypoint):
@@ -147,10 +206,6 @@ class KeypointStore:
             self.current_keypoint = self._keypoints[ind]
 
     @property
-    def labels(self) -> list[str]:
-        return self.layer.metadata["header"].bodyparts
-
-    @property
     def current_label(self) -> str:
         return self.layer.current_properties["label"][0]
 
@@ -160,10 +215,6 @@ class KeypointStore:
             current_properties = self.layer.current_properties
             current_properties["label"] = np.asarray([label])
             self.layer.current_properties = current_properties
-
-    @property
-    def ids(self) -> list[str]:
-        return self.layer.metadata["header"].individuals
 
     @property
     def current_id(self) -> str:
@@ -192,8 +243,8 @@ class KeypointStore:
 def _add(store, coord):
     coord = np.atleast_2d(coord)
 
-    # Controls may be missing if metadata was replaced/filtered.
-    controls = (store.layer.metadata or {}).get("controls", None)
+    # Controls are runtime-only; prefer layer attribute, fall back to metadata.
+    controls = _get_controls(store.layer)
     label_mode = getattr(controls, "_label_mode", None)
 
     if store.current_keypoint not in store.annotated_keypoints:

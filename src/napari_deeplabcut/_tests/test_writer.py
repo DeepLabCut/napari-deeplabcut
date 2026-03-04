@@ -6,8 +6,8 @@ import pytest
 import yaml
 from skimage.io import imread
 
-from napari_deeplabcut import _writer, misc
-from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut import _writer
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 from napari_deeplabcut.core import io as napari_dlc_io
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.errors import MissingProvenanceError
@@ -49,7 +49,7 @@ def _fake_metadata_for_df(df, paths):
     """
     from itertools import cycle, islice, product
 
-    header = misc.DLCHeader(df.columns)
+    header = DLCHeaderModel(columns=df.columns)
     n_rows = len(df)
 
     # Build a cyclic sequence of (id, label) pairs from header
@@ -172,7 +172,7 @@ def test_write_hdf_basic(tmp_path, fake_keypoints):
     root.mkdir()
 
     fake_keypoints.to_hdf(root / "data.h5", key="data")
-    header = misc.DLCHeader(fake_keypoints.columns)
+    header = DLCHeaderModel(fake_keypoints.columns)
 
     # Build per-row properties (length == n_rows)
     n_rows = len(fake_keypoints)
@@ -234,7 +234,7 @@ def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, m
     # Always allow overwrite confirmation in unit test
     monkeypatch.setattr(napari_dlc_io, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
 
-    header = misc.DLCHeader(fake_keypoints.columns)
+    header = DLCHeaderModel(fake_keypoints.columns)
 
     n_rows = len(fake_keypoints)
     from itertools import cycle, islice, product
@@ -308,7 +308,7 @@ def test_write_hdf_machine_source_without_save_target_aborts(tmp_path, fake_keyp
     root = tmp_path / "proj"
     root.mkdir()
 
-    header = misc.DLCHeader(fake_keypoints.columns)
+    header = DLCHeaderModel(fake_keypoints.columns)
     n_rows = len(fake_keypoints)
 
     from itertools import cycle, islice, product
@@ -352,7 +352,7 @@ def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, m
 
     monkeypatch.setattr(napari_dlc_io, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
 
-    header = misc.DLCHeader(fake_keypoints.columns)
+    header = DLCHeaderModel(fake_keypoints.columns)
     n_rows = len(fake_keypoints)
 
     from itertools import cycle, islice, product

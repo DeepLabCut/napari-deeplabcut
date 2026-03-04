@@ -13,7 +13,7 @@ except Exception:  # pragma: no cover
     Image = Points = Shapes = Tracks = Layer = object  # type: ignore
 
 from napari_deeplabcut import misc
-from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 
 T = TypeVar("T")
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Helper to populate keypoint layer metadata
 def populate_keypoint_layer_metadata(
-    header: misc.DLCHeader,
+    header: DLCHeaderModel,
     *,
     labels: Sequence[str] | None = None,
     ids: Sequence[str] | None = None,

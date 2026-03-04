@@ -20,6 +20,7 @@ from napari.layers.utils import color_manager
 from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
+from pydantic import ValidationError
 from qtpy.QtCore import QSettings, Qt, QTimer
 from qtpy.QtGui import QAction
 from qtpy.QtWidgets import (
@@ -50,9 +51,13 @@ from napari_deeplabcut.core.layers import (
     is_machine_layer,
 )
 from napari_deeplabcut.core.metadata import (
+    MergePolicy,
     infer_image_root,
+    migrate_points_layer_metadata,
     parse_points_metadata,
+    read_points_meta,
     sync_points_from_image,
+    write_points_meta,
 )
 from napari_deeplabcut.core.paths import (
     PathMatchPolicy,
@@ -366,7 +371,13 @@ class KeypointControls(QWidget):
             return None
 
         # ensure presence of IO metadata for saving & routing
-        self._ensure_io_from_source_h5(layer.metadata)
+        mig = migrate_points_layer_metadata(layer)
+        if hasattr(mig, "errors"):
+            logger.warning(
+                "Points metadata validation failed during wiring for layer=%r: %s",
+                getattr(layer, "name", layer),
+                mig,
+            )
 
         store = keypoints.KeypointStore(self.viewer, layer)
         self._stores[layer] = store
@@ -382,6 +393,10 @@ class KeypointControls(QWidget):
             update_save_history(root)
 
         layer.metadata["controls"] = self
+        layer._napari_deeplabcut_store = self
+        hdr = (layer.metadata or {}).get("header", None)
+        if hdr is not None:
+            layer._napari_deeplabcut_header = hdr
         layer.text.visible = False
 
         # key bindings
@@ -516,8 +531,8 @@ class KeypointControls(QWidget):
             self._remap_frame_indices(layer)
 
     def _validate_header(self, layer) -> bool:
-        hdr = (layer.metadata or {}).get("header")
-        if hdr is None or not hasattr(hdr, "form_individual_bodypart_pairs"):
+        res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
+        if isinstance(res, ValidationError) or res.header is None:
             self.viewer.status = (
                 "This Points layer does not look like a DLC keypoints layer. Missing a valid DLC header."
             )
@@ -665,48 +680,6 @@ class KeypointControls(QWidget):
     # Metadata helpers (authoritative models + napari-friendly dict sync)
     # ------------------------------------------------------------------
     @staticmethod
-    def _ensure_io_from_source_h5(md: dict) -> None:
-        """
-        Migration helper: if io is missing but source_h5 exists, build io.
-        This keeps provenance stable even for legacy sessions/layers.
-        """
-        if not isinstance(md, dict):
-            return
-
-        # If io already present, never overwrite it
-        if md.get("io"):
-            return
-
-        src = md.get("source_h5")
-        if not isinstance(src, str) or not src:
-            return
-
-        try:
-            p = Path(src).expanduser().resolve()
-        except Exception:
-            p = Path(src)
-
-        # Anchor defaults to file parent (works for shared labeled-data folders)
-        anchor = str(p.parent)
-
-        # Infer kind from filename (NOT from layer name)
-        low = p.name.lower()
-        kind = None
-        if low.startswith("collecteddata"):
-            kind = AnnotationKind.GT
-        elif low.startswith("machinelabels"):
-            kind = AnnotationKind.MACHINE
-
-        relposix = canonicalize_path(p, n=1)
-        io = IOProvenance(
-            project_root=anchor,
-            source_relpath_posix=relposix,
-            kind=kind,
-            dataset_key="keypoints",
-        )
-        md["io"] = io.model_dump(exclude_none=True)
-
-    @staticmethod
     def _layer_source_path(layer) -> str | None:
         """Best-effort access to napari layer source path (may not exist)."""
         try:
@@ -757,7 +730,10 @@ class KeypointControls(QWidget):
         """
         Ensure all Points layers have core fields required for saving.
 
-        PointsMetadata fields live at the top-level of layer.metadata.
+        Adapter-based flow:
+        - read validated points meta (visible failures)
+        - apply sync logic against authoritative self._image_meta
+        - write back validated dict via gateway
         """
         if self._image_meta is None:
             return
@@ -769,33 +745,35 @@ class KeypointControls(QWidget):
             if ly.metadata is None:
                 ly.metadata = {}
 
-            md = ly.metadata  # mutate in place
-            existing_header = md.get("header", None)
+            # 1) Read + migrate legacy (io from source_h5, header coercion, etc.)
+            res = read_points_meta(ly, migrate_legacy=True, drop_controls=False, drop_header=False)
+            if hasattr(res, "errors"):  # ValidationError duck-typing
+                logger.warning(
+                    "Points metadata validation failed during sync for layer=%r: %s",
+                    getattr(ly, "name", ly),
+                    res,
+                )
+                continue
 
-            # Preserve header across any subsequent metadata operations
+            pts_model: PointsMetadata = res
 
-            # Ensure IO provenance exists (operate on nested meta, not top-level)
-            self._ensure_io_from_source_h5(md)
-
-            # Validate points metadata from nested payload (authoritative for routing)
-            try:
-                pts_model = PointsMetadata(**md)
-            except Exception:
-                pts_model = PointsMetadata()
-
+            # 2) Sync missing fields from image meta (pure model transform)
             synced = sync_points_from_image(self._image_meta, pts_model)
 
-            # Fill missing values in nested meta only; never clobber existing non-empty values
-            synced_dict = synced.model_dump(mode="python", exclude_none=True)
-            for key, value in synced_dict.items():
-                if key == "controls":
-                    continue
-                if md.get(key) in (None, "", []):
-                    md[key] = value
-
-            # Restore header if it was present before
-            if existing_header is not None and md.get("header") is None:
-                md["header"] = existing_header
+            # 3) Write back through gateway (fill missing only; never clobber)
+            out = write_points_meta(
+                ly,
+                synced,
+                merge_policy=MergePolicy.MERGE_MISSING,
+                migrate_legacy=True,
+                validate=True,
+            )
+            if hasattr(out, "errors"):
+                logger.warning(
+                    "Failed to write synced points metadata for layer=%r: %s",
+                    getattr(ly, "name", ly),
+                    out,
+                )
 
     def _show_color_scheme(self):
         show = self._view_scheme_cb.isChecked()
@@ -1276,8 +1254,13 @@ class KeypointControls(QWidget):
 
         Returns True if save_target is set (or already existed), False if user cancels.
         """
+        mig = migrate_points_layer_metadata(layer)
+        if hasattr(mig, "errors"):
+            logger.warning(
+                "Failed to migrate points layer metadata for layer=%r: %s", getattr(layer, "name", layer), mig
+            )
+
         md = layer.metadata or {}
-        self._ensure_io_from_source_h5(md)
         pts = parse_points_metadata(md)
         io = pts.io
         save_target = pts.save_target
@@ -1352,9 +1335,33 @@ class KeypointControls(QWidget):
             scorer=scorer,
         )
 
-        md["save_target"] = st.model_dump(mode="python", exclude_none=True)
+        res = read_points_meta(layer, migrate_legacy=True, drop_controls=False, drop_header=False)
+        if hasattr(res, "errors"):
+            logger.warning(
+                "Cannot set save_target; points metadata invalid for layer=%r: %s",
+                getattr(layer, "name", layer),
+                res,
+            )
+            QMessageBox.warning(self, "Cannot save", "Layer metadata is invalid; see logs for details.")
+            return False
 
-        layer.metadata.update(md)
+        pts: PointsMetadata = res
+        updated = pts.model_copy(update={"save_target": st})
+
+        out = write_points_meta(
+            layer,
+            updated,
+            merge_policy=MergePolicy.MERGE,  # overwrite save_target if present
+            fields={"save_target"},  # only touch save_target
+            migrate_legacy=True,
+            validate=True,
+        )
+
+        if hasattr(out, "errors"):
+            logger.warning("Failed to write save_target for layer=%r: %s", getattr(layer, "name", layer), out)
+            QMessageBox.warning(self, "Cannot save", "Failed to write save target metadata; see logs for details.")
+            return False
+
         return True
 
     # Hack to save a KeyPoints layer without showing the Save dialog

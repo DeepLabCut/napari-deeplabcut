@@ -7,7 +7,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from napari_deeplabcut import misc
+from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.core.schemas import PointsWriteInputModel
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ def merge_multiple_scorers(
     df: pd.DataFrame,
 ) -> pd.DataFrame:
     n_frames = df.shape[0]
-    header = misc.DLCHeader(df.columns)
+    header = DLCHeaderModel(columns=df.columns)
     n_scorers = len(header._get_unique("scorer"))
     if n_scorers == 1:
         return df
