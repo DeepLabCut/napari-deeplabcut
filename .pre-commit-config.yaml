@@ -2,11 +2,14 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
-      - id: check-docstring-first
+      - id: check-added-large-files
+      - id: check-yaml
+      - id: check-toml
       - id: end-of-file-fixer
+      - id: name-tests-test
       - id: trailing-whitespace
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.10
+    rev: v0.15.4
     hooks:
       # Run the formatter.
       - id: ruff-format
@@ -14,7 +17,7 @@ repos:
       - id: ruff-check
         args: [--fix,--unsafe-fixes]
   - repo: https://github.com/tox-dev/pyproject-fmt
-    rev: v2.15.2
+    rev: v2.16.2
     hooks:
       - id: pyproject-fmt
   - repo: https://github.com/abravalheri/validate-pyproject
