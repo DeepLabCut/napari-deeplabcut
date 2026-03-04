@@ -1192,14 +1192,21 @@ class KeypointControls(QWidget):
 
         Returns True if save_target is set (or already existed), False if user cancels.
         """
+        # Only machine layers need promotion; non-machine layers can be saved as-is without a save_target
+        if not is_machine_layer(layer):
+            return True
+
+        # Best-effort migrate provenance (may fill io/save_target for legacy layers)
         mig = migrate_points_layer_metadata(layer)
         if hasattr(mig, "errors"):
             logger.warning(
-                "Failed to migrate points layer metadata for layer=%r: %s", getattr(layer, "name", layer), mig
+                "Failed to migrate points layer metadata for layer=%r: %s",
+                getattr(layer, "name", layer),
+                mig,
             )
 
-        res = read_points_meta(layer, migrate_legacy=True, drop_controls=False, drop_header=False)
-        if isinstance(res, ValidationError) or res.io is None:
+        res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
+        if isinstance(res, ValidationError):
             logger.warning(
                 "Points metadata validation failed for layer=%r during save target check: %s",
                 getattr(layer, "name", layer),
@@ -1207,71 +1214,53 @@ class KeypointControls(QWidget):
             )
             QMessageBox.warning(self, "Cannot save", "Layer metadata is invalid; see logs for details.")
             return False
-        io = res.io
-        save_target = res.save_target
 
-        # If save_target already set, nothing to do
+        pts: PointsMetadata = res
+        io_meta = pts.io
+        save_target = pts.save_target
+
+        # If this machine layer already has a promotion target, we're done
         if save_target is not None:
             return True
 
-        src_kind = getattr(io, "kind", None) if io is not None else None
-
-        is_machine = is_machine_layer(layer)
-
-        # Only machine layers need promotion-to-GT
-        if not is_machine:
+        # If io is missing or doesn't look like a machine source, don't block (fail open)
+        src_kind = getattr(io_meta, "kind", None) if io_meta is not None else None
+        if src_kind is not AnnotationKind.MACHINE:
             return True
 
-        if src_kind is not AnnotationKind.MACHINE:
-            return True  # GT sources can save normally
-
+        # ---- machine source + no save_target: require promotion target ----
         anchor = _safe_folder_anchor_from_points_layer(layer)
         if not anchor:
             QMessageBox.warning(self, "Cannot save", "Could not determine a folder anchor for saving.")
             return False
 
-        # 1) scorer from config.yaml if available
-        scorer = _find_config_scorer_nearby(anchor)
-
-        # 2) scorer from sidecar
-        if not scorer:
-            scorer = get_default_scorer(anchor)
-
-        # 3) prompt user if still missing
+        scorer = _find_config_scorer_nearby(anchor) or get_default_scorer(anchor)
         if not scorer:
             suggested = _suggest_human_placeholder(anchor)
             while True:
                 s = _prompt_for_scorer(self, anchor=anchor, suggested=suggested)
                 if s is None:
                     return False
-
                 if s.startswith("human_"):
                     choice = QMessageBox.question(
                         self,
                         "Generic scorer name",
                         "You entered a generic scorer name starting with 'human_'.\n\n"
                         "We strongly recommend using a real name or stable identifier.\n"
-                        "Using a generic scorer can cause confusion when merging datasets.\n\n"
                         "Do you want to keep this generic scorer anyway?",
                         QMessageBox.Yes | QMessageBox.No,
                     )
                     if choice == QMessageBox.No:
                         suggested = s
                         continue
-
                 scorer = s
                 break
-
-            # Persist to sidecar so we don't prompt again for this folder
             try:
                 set_default_scorer(anchor, scorer)
             except Exception:
                 logger.debug("Failed to persist default scorer to sidecar", exc_info=True)
 
-        # Compute deterministic GT target path (promotion)
         target_name = f"CollectedData_{scorer}.h5"
-
-        # Store save_target as IOProvenance
         st = IOProvenance(
             project_root=anchor,
             source_relpath_posix=target_name,
@@ -1280,24 +1269,12 @@ class KeypointControls(QWidget):
             scorer=scorer,
         )
 
-        res = read_points_meta(layer, migrate_legacy=True, drop_controls=False, drop_header=False)
-        if hasattr(res, "errors"):
-            logger.warning(
-                "Cannot set save_target; points metadata invalid for layer=%r: %s",
-                getattr(layer, "name", layer),
-                res,
-            )
-            QMessageBox.warning(self, "Cannot save", "Layer metadata is invalid; see logs for details.")
-            return False
-
-        pts: PointsMetadata = res
         updated = pts.model_copy(update={"save_target": st})
-
         out = write_points_meta(
             layer,
             updated,
-            merge_policy=MergePolicy.MERGE,  # overwrite save_target if present
-            fields={"save_target"},  # only touch save_target
+            merge_policy=MergePolicy.MERGE,
+            fields={"save_target"},
             migrate_legacy=True,
             validate=True,
         )

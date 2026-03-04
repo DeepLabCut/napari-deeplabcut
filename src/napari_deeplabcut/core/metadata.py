@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # Inference
 # -----------------------------------------------------------------------------
+def _layer_source_path_str(layer: Any) -> str | None:
+    try:
+        src = getattr(layer, "source", None)
+        p = getattr(src, "path", None) if src is not None else None
+        return str(p) if p else None
+    except Exception:
+        return None
 
 
 def infer_image_root(
