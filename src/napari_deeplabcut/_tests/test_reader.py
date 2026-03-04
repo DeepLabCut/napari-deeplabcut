@@ -3,12 +3,24 @@ import dask.array as da
 import numpy as np
 import pandas as pd
 import pytest
-from PIL import Image
 from skimage.io import imsave
 
 from napari_deeplabcut import _reader
+from napari_deeplabcut.core.io import (
+    Video,
+    _lazy_imread,
+    is_video,
+    load_superkeypoints,
+    load_superkeypoints_diagram,
+    read_config,
+    read_hdf,
+    read_images,
+    read_video,
+)
 
 FAKE_EXTENSION = ".notanimage"
+
+# TODO @C-Achard 2026-02-18 Split IO vs reader tests.
 
 
 @pytest.mark.parametrize("ext", _reader.SUPPORTED_IMAGES)
@@ -60,11 +72,11 @@ def test_read_images(tmp_path_factory, fake_image):
     folder = tmp_path_factory.mktemp("folder")
     path = str(folder / "img.png")
     imsave(path, fake_image)
-    _ = _reader.read_images(path)[0]
+    _ = read_images(path)[0]
 
 
 def test_read_config(config_path):
-    dict_ = _reader.read_config(config_path)[0][1]
+    dict_ = read_config(config_path)[0][1]
     assert dict_["name"].startswith("CollectedData_")
     assert config_path.startswith(dict_["metadata"]["project"])
 
@@ -74,7 +86,7 @@ def test_read_hdf_old_index(tmp_path_factory, fake_keypoints):
     old_index = [f"labeled-data/video/img{i}.png" for i in range(fake_keypoints.shape[0])]
     fake_keypoints.index = old_index
     fake_keypoints.to_hdf(path, key="keypoints")
-    layers = _reader.read_hdf(path)
+    layers = read_hdf(path)
     assert len(layers) == 1
     image_paths = layers[0][1]["metadata"]["paths"]
     assert len(image_paths) == len(fake_keypoints)
@@ -93,7 +105,7 @@ def test_read_hdf_new_index(tmp_path_factory, fake_keypoints):
     )
     fake_keypoints.index = new_index
     fake_keypoints.to_hdf(path, key="keypoints")
-    layers = _reader.read_hdf(path)
+    layers = read_hdf(path)
     assert len(layers) == 1
     image_paths = layers[0][1]["metadata"]["paths"]
     assert len(image_paths) == len(fake_keypoints)
@@ -109,7 +121,7 @@ def test_read_images_mixed_extensions_list_input(tmp_path):
     imsave(p_jpg, img)
     imsave(p_png, img)
 
-    layers = _reader.read_images([p_jpg, p_png])
+    layers = read_images([p_jpg, p_png])
     assert len(layers) == 1
     data, params, kind = layers[0]
     assert kind == "image"
@@ -133,7 +145,7 @@ def test_read_images_mixed_extensions_directory_ignores_unsupported(tmp_path):
     imsave(p_png, img)
     imsave(p_unsupp, img)
 
-    layers = _reader.read_images(tmp_path)  # pass directory
+    layers = read_images(tmp_path)  # pass directory
     assert len(layers) == 1
     data, params, kind = layers[0]
     assert kind == "image"
@@ -157,7 +169,7 @@ def test_lazy_imread_mixed_extensions_list(tmp_path):
     imsave(p_jpg, img1)
     imsave(p_png, img2)
 
-    result = _reader._lazy_imread([p_jpg, p_png], use_dask=True, stack=True)
+    result = _lazy_imread([p_jpg, p_png], use_dask=True, stack=True)
     assert isinstance(result, da.Array)
     assert result.shape == (2, 12, 9, 3)
     first = result[0].compute()
@@ -175,7 +187,7 @@ def test_read_images_mixed_extensions_globs(tmp_path):
     imsave(p2, img)
     imsave(p3, img)
 
-    layers = _reader.read_images([str(tmp_path / "*.jpg"), str(tmp_path / "*.png")])
+    layers = read_images([str(tmp_path / "*.jpg"), str(tmp_path / "*.png")])
     assert len(layers) == 1
     data, params, kind = layers[0]
     assert kind == "image"
@@ -197,7 +209,7 @@ def test_read_images_mixed_extensions_tuple_input(tmp_path):
     imsave(p1, img)
     imsave(p2, img)
 
-    layers = _reader.read_images((p1, p2))  # tuple
+    layers = read_images((p1, p2))  # tuple
     assert len(layers) == 1
     data, params, kind = layers[0]
     assert kind == "image"
@@ -215,7 +227,7 @@ def test_lazy_imread_single_image(tmp_path):
     path = tmp_path / "img.png"
     imsave(path, img)
 
-    result = _reader._lazy_imread(path, use_dask=False)
+    result = _lazy_imread(path, use_dask=False)
     assert isinstance(result, np.ndarray)
     assert result.shape == img.shape
 
@@ -228,7 +240,7 @@ def test_lazy_imread_multiple_images_equal_shape(tmp_path):
     imsave(path1, img1)
     imsave(path2, img2)
 
-    result = _reader._lazy_imread([path1, path2], use_dask=True)
+    result = _lazy_imread([path1, path2], use_dask=True)
     assert isinstance(result, da.Array)
     assert result.shape == (2, 10, 10, 3)
 
@@ -243,7 +255,7 @@ def test_lazy_imread_mixed_shapes(tmp_path):
 
     # Should fail when stacking mixed shapes without padding
     with pytest.raises(ValueError):
-        _ = _reader._lazy_imread([path1, path2], use_dask=False, stack=True)
+        _ = _lazy_imread([path1, path2], use_dask=False, stack=True)
 
 
 def test_read_images_list_input(tmp_path):
@@ -253,7 +265,7 @@ def test_read_images_list_input(tmp_path):
     imsave(path1, img)
     imsave(path2, img)
 
-    layers = _reader.read_images([path1, path2])
+    layers = read_images([path1, path2])
     assert len(layers) == 1
     data, params, kind = layers[0]
     assert kind == "image"
@@ -264,7 +276,7 @@ def test_read_images_list_input(tmp_path):
 
 def test_read_images_empty_list():
     with pytest.raises(OSError):
-        _reader.read_images([])
+        read_images([])
 
 
 def test_read_images_single_glob_pattern(tmp_path):
@@ -278,7 +290,7 @@ def test_read_images_single_glob_pattern(tmp_path):
     imsave(p2, img)
     imsave(p3, img)
 
-    layers = _reader.read_images(str(tmp_path / "*.png"))
+    layers = read_images(str(tmp_path / "*.png"))
     assert len(layers) == 1
     data, params, kind = layers[0]
     assert kind == "image"
@@ -294,7 +306,7 @@ def test_read_images_single_glob_pattern(tmp_path):
 
 def test_video_init_and_properties(video_path):
     """Ensure Video object initializes and exposes correct properties."""
-    vid = _reader.Video(video_path)
+    vid = Video(video_path)
 
     assert len(vid) == 5  # number of frames created by fixture
     assert vid.width == 50
@@ -306,7 +318,7 @@ def test_video_init_and_properties(video_path):
 
 def test_video_read_single_frame(video_path):
     """Check that we can read at least one frame correctly."""
-    vid = _reader.Video(video_path)
+    vid = Video(video_path)
     vid.set_to_frame(0)
     frame = vid.read_frame()
 
@@ -320,12 +332,12 @@ def test_video_read_single_frame(video_path):
 def test_video_reader_invalid_path():
     """Invalid path should raise ValueError."""
     with pytest.raises(ValueError):
-        _ = _reader.Video("")
+        _ = Video("")
 
 
 def test_read_video_output(video_path):
     """Test the full read_video() API returns expected tuple structure."""
-    layers = _reader.read_video(video_path)
+    layers = read_video(video_path)
     assert len(layers) == 1
 
     data, params, kind = layers[0]
@@ -344,9 +356,9 @@ def test_read_video_output(video_path):
 
 def test_get_video_reader_dispatch(video_path):
     assert _reader.get_video_reader(video_path) is not None
-    assert _reader.is_video(str(video_path))
+    assert is_video(str(video_path))
     assert _reader.get_video_reader("file.txt") is None
-    assert not _reader.is_video("file.png")
+    assert not is_video("file.png")
 
 
 def test_lazy_imread_list_no_stack(tmp_path):
@@ -354,7 +366,7 @@ def test_lazy_imread_list_no_stack(tmp_path):
     p1, p2 = tmp_path / "a.png", tmp_path / "b.png"
     imsave(p1, img)
     imsave(p2, img)
-    res = _reader._lazy_imread([p1, p2], use_dask=True, stack=False)
+    res = _lazy_imread([p1, p2], use_dask=True, stack=False)
     assert isinstance(res, list) and len(res) == 2
     assert all(isinstance(x, da.Array) for x in res)
 
@@ -364,7 +376,7 @@ def test_read_images_list_metadata_paths(tmp_path):
     p1, p2 = tmp_path / "img1.png", tmp_path / "img2.png"
     imsave(p1, img)
     imsave(p2, img)
-    [(data, params, kind)] = _reader.read_images([p2, p1])  # unordered input
+    [(data, params, kind)] = read_images([p2, p1])  # unordered input
     assert params["metadata"]["paths"]  # exists
     assert len(params["metadata"]["paths"]) == 2
     # natsorted is applied; assert the order is deterministic by name
@@ -378,70 +390,17 @@ def test_lazy_imread_grayscale_and_rgba(tmp_path):
     p1, p2 = tmp_path / "g.png", tmp_path / "r.png"
     cv2.imwrite(str(p1), gray)  # cv2 writes grayscale as-is; color images are written as BGR
     cv2.imwrite(str(p2), cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
-    res = _reader._lazy_imread([p1, p2], use_dask=False, stack=False)
+    res = _lazy_imread([p1, p2], use_dask=False, stack=False)
     assert all(img.shape[-1] == 3 for img in res)
 
 
-@pytest.mark.parametrize(
-    "exists",
-    [
-        True,
-        False,
-    ],
-)
-def test_load_superkeypoints(monkeypatch, tmp_path, exists):
-    """Test loading of superkeypoints JSON with and without the file present."""
-    module_dir = tmp_path / "module"
-    assets_dir = module_dir / "assets"
-    assets_dir.mkdir(parents=True)
-
-    super_animal = "fake"
-    json_path = assets_dir / f"{super_animal}.json"
-
-    if exists:
-        json_path.write_text('{"SK1": [1, 2]}')
-
-    # Patch module __file__
-    fake_file = module_dir / "_reader_fake.py"
-    fake_file.write_text("# fake module")
-    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_file))
-
-    if exists:
-        assert _reader._load_superkeypoints(super_animal) == {"SK1": [1, 2]}
-    else:
-        with pytest.raises(FileNotFoundError):
-            _reader._load_superkeypoints(super_animal)
+def test_load_superkeypoints():
+    """Test loading of superkeypoints JSON to ensure file is present and correctly parsed."""
+    json_file = load_superkeypoints("superanimal_quadruped")
+    assert isinstance(json_file, dict)
 
 
-@pytest.mark.parametrize(
-    "exists",
-    [
-        True,
-        False,
-    ],
-)
-def test_load_superkeypoints_diagram(monkeypatch, tmp_path, exists):
-    """Test loading of superkeypoints diagram with and without the file present."""
-    module_dir = tmp_path / "module"
-    assets_dir = module_dir / "assets"
-    assets_dir.mkdir(parents=True)
-
-    super_animal = "fake"
-    jpg_path = assets_dir / f"{super_animal}.jpg"
-
-    if exists:
-        Image.new("RGB", (10, 10), "white").save(jpg_path)
-
-    # Patch module __file__
-    fake_file = module_dir / "_reader_fake.py"
-    fake_file.write_text("# fake")
-    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_file))
-
-    if exists:
-        array, meta, layer_type = _reader._load_superkeypoints_diagram(super_animal)
-        assert layer_type == "images"
-        assert meta == {"root": ""}
-        assert tuple(array.shape[-3:-1]) == (10, 10)
-    else:
-        with pytest.raises(FileNotFoundError):
-            _reader._load_superkeypoints_diagram(super_animal)
+def test_load_superkeypoints_diagram():
+    """Test loading of superkeypoints diagram to ensure file is present and correctly read."""
+    diagram = load_superkeypoints_diagram("superanimal_quadruped")
+    assert diagram.ndim == 3  # should be an RGB image
