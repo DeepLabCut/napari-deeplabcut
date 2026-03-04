@@ -15,7 +15,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from napari.layers import Image, Points, Shapes, Tracks
-from napari.layers.points._points_key_bindings import register_points_action
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
 from pydantic import ValidationError
@@ -72,6 +71,7 @@ from napari_deeplabcut.napari_compat import (
     install_add_wrapper,
     install_paste_patch,
     patch_color_manager_guess_continuous,
+    register_points_action,
 )
 from napari_deeplabcut.napari_compat.points_layer import make_paste_data
 from napari_deeplabcut.ui.colors_and_dropdown import (
@@ -84,9 +84,6 @@ from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
 logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp
-
-# Monkey-patch napari continuous variable type guess
-patch_color_manager_guess_continuous()
 
 
 def _safe_folder_anchor_from_points_layer(layer: Points) -> str | None:
@@ -160,6 +157,9 @@ def _prompt_for_scorer(parent_widget, *, anchor: str, suggested: str) -> str | N
 class KeypointControls(QWidget):
     def __init__(self, napari_viewer):
         super().__init__()
+        # Monkey-patch napari continuous variable type guess
+        patch_color_manager_guess_continuous()
+
         self._is_saved = False
 
         self.viewer = napari_viewer
@@ -332,7 +332,10 @@ class KeypointControls(QWidget):
 
         keypoints_menu = self._menus[0].menus["label"]
         current_keypoint_set = {keypoints_menu.itemText(i) for i in range(keypoints_menu.count())}
-        new_keypoint_set = set(new_metadata["header"].bodyparts)
+        hdr = self._get_header_model_from_metadata(new_metadata)
+        if hdr is None:
+            return False
+        new_keypoint_set = set(hdr.bodyparts)
         diff = new_keypoint_set.difference(current_keypoint_set)
 
         if diff:
@@ -342,7 +345,10 @@ class KeypointControls(QWidget):
 
             self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
             for _layer, store in self._stores.items():
-                _layer.metadata["header"] = new_metadata["header"]
+                pts = read_points_meta(_layer, migrate_legacy=True, drop_controls=True, drop_header=False)
+                if not hasattr(pts, "errors"):
+                    updated = pts.model_copy(update={"header": hdr})
+                    write_points_meta(_layer, updated, merge_policy=MergePolicy.MERGE, fields={"header"})
                 store.layer = _layer
 
             for menu in self._menus:
@@ -370,6 +376,7 @@ class KeypointControls(QWidget):
             return None
 
         if isinstance(hdr, DLCHeaderModel):
+            logger.debug("Header is already a DLCHeaderModel instance.")
             return hdr
 
         if isinstance(hdr, dict):
@@ -475,7 +482,13 @@ class KeypointControls(QWidget):
         if store is None:
             return
 
-        apply_points_layer_ui_tweaks(self.viewer, layer, dropdown_cls=DropdownMenu, plt_module=plt)
+        selector = apply_points_layer_ui_tweaks(self.viewer, layer, dropdown_cls=DropdownMenu, plt_module=plt)
+        if selector is not None:
+            try:
+                selector.currentTextChanged.connect(self._update_colormap)
+            except Exception:
+                pass
+
         self._update_color_scheme()
 
     def _adopt_existing_layers(self) -> None:
@@ -635,9 +648,13 @@ class KeypointControls(QWidget):
         config_path = str(Path(project_path) / "config.yaml")
         cfg = io.load_config(config_path)
         conversion_tables = cfg.get("SuperAnimalConversionTables", {})
+        hdr = self._get_header_model_from_metadata(points_layer.metadata or {})
+        if hdr is None:
+            return
+        bdprts_map = map(str, hdr.bodyparts)
         conversion_tables[super_animal] = dict(
             zip(
-                map(str, points_layer.metadata["header"].bodyparts),  # Needed to fix an ugly yaml RepresenterError
+                bdprts_map,  # Needed to fix an ugly yaml RepresenterError
                 map(str, list(np.array(list(superkpts_dict))[neighbors[found]])),
                 strict=False,
             )
@@ -972,6 +989,7 @@ class KeypointControls(QWidget):
         if not cycles:
             return
 
+        # Empty layer: never enable cycle mode
         try:
             if layer.data is None or len(layer.data) == 0:
                 layer.face_color_mode = "direct"
@@ -980,12 +998,9 @@ class KeypointControls(QWidget):
             layer.face_color_mode = "direct"
             return
 
-        # Choose prop:
-        # - Multi-animal defaults to id (restores test_toggle_face_color expectation)
-        # - Otherwise use global setting
-        prop = "label"
         header = self._get_header_model_from_metadata(md)
 
+        # Multi-animal heuristic (robust to missing header)
         is_multi = False
         try:
             inds = getattr(header, "individuals", None)
@@ -993,12 +1008,10 @@ class KeypointControls(QWidget):
         except Exception:
             is_multi = False
 
-        # Default:
-        # - multi-animal prefers id if available
-        # - otherwise label
+        # Default choice
         prop = "id" if (is_multi and "id" in cycles) else "label"
 
-        # Respect user-selected mode if possible
+        # Respect user-selected mode where possible
         if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL) and "id" in cycles:
             prop = "id"
         elif self.color_mode == str(keypoints.ColorMode.BODYPART) and "label" in cycles:
@@ -1008,20 +1021,36 @@ class KeypointControls(QWidget):
         if prop not in cycles:
             prop = "id" if "id" in cycles else "label"
 
-        # Ensure properties exist and are valid (no NaNs) for the prop we want to cycle on
+        # Ensure properties exist for chosen prop
         props = getattr(layer, "properties", {}) or {}
         values = props.get(prop, None)
+
         if values is None or len(values) == 0:
             layer.face_color_mode = "direct"
             return
 
-        # If any NaNs exist in the property array, do NOT enable cycle mode.
-        # This is the KeyError: nan crash path in napari categorical colormap.
+        # If id is selected but all are blank/None → fallback to label (common single-animal case)
+        if prop == "id":
+            try:
+                vals = np.asarray(values, dtype=object).ravel()
+                if all(v in ("", None) or misc._is_nan_value(v) for v in vals):
+                    if "label" in cycles and props.get("label", None) is not None:
+                        prop = "label"
+                        values = props.get(prop, None)
+            except Exception:
+                pass
+
+        # Still missing/empty after fallback
+        if values is None or len(values) == 0:
+            layer.face_color_mode = "direct"
+            return
+
+        # NaN guard: avoid napari categorical crash
         if misc._array_has_nan(values):
             layer.face_color_mode = "direct"
             return
 
-        # Ensure current_properties[prop] exists and is a real key (not NaN/None/"")
+        # Ensure current_properties[prop] is set to a valid key (not NaN/None/"")
         try:
             cp = layer.current_properties
             bad_current = (
@@ -1049,20 +1078,16 @@ class KeypointControls(QWidget):
                 cp[prop] = np.array([default_val], dtype=object)
                 layer.current_properties = cp
         except Exception:
-            # If we can't safely set current props, do not enable cycle mode
             layer.face_color_mode = "direct"
             return
 
-        # Apply cycle configuration
+        # Apply cycle configuration (guard napari validation)
         try:
             layer.face_color = prop
             layer.face_color_cycle = cycles[prop]
-
-            # This line triggers napari validation; guard it.
             layer.face_color_mode = "cycle"
             layer.events.face_color()
         except Exception:
-            # Last-resort: never crash insert; fall back to direct mode
             try:
                 layer.face_color_mode = "direct"
             except Exception:
@@ -1173,10 +1198,17 @@ class KeypointControls(QWidget):
                 "Failed to migrate points layer metadata for layer=%r: %s", getattr(layer, "name", layer), mig
             )
 
-        md = layer.metadata or {}
-        pts = parse_points_metadata(md)
-        io = pts.io
-        save_target = pts.save_target
+        res = read_points_meta(layer, migrate_legacy=True, drop_controls=False, drop_header=False)
+        if isinstance(res, ValidationError) or res.io is None:
+            logger.warning(
+                "Points metadata validation failed for layer=%r during save target check: %s",
+                getattr(layer, "name", layer),
+                res,
+            )
+            QMessageBox.warning(self, "Cannot save", "Layer metadata is invalid; see logs for details.")
+            return False
+        io = res.io
+        save_target = res.save_target
 
         # If save_target already set, nothing to do
         if save_target is not None:
@@ -1365,7 +1397,10 @@ class KeypointControls(QWidget):
                 continue
 
             layer.metadata["colormap_name"] = colormap_name
-            layer.metadata["face_color_cycles"] = build_color_cycles(layer.metadata["header"], colormap_name)
+            hdr = self._get_header_model_from_metadata(layer.metadata or {})
+            if hdr is None:
+                return
+            layer.metadata["face_color_cycles"] = build_color_cycles(hdr, colormap_name)
 
             self._apply_points_coloring_from_metadata(layer)
 

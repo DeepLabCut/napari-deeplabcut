@@ -6,8 +6,20 @@ from types import MethodType
 
 logger = logging.getLogger(__name__)
 
+try:
+    from napari.layers.points._points_key_bindings import register_points_action
+except Exception:
 
-def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> None:
+    def register_points_action(*args, **kwargs):
+        def deco(fn):
+            return fn
+
+        return deco
+
+    logger.debug("napari private register_points_action unavailable; skipping action registration.")
+
+
+def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> object | None:
     """
     Private napari UI wiring (best-effort).
     If napari changes internals, degrade gracefully.
@@ -16,7 +28,7 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
         controls = viewer.window.qt_viewer.dockLayerControls
         point_controls = controls.widget().widgets[layer]
     except Exception:
-        return
+        return None
 
     # Hide face/border editors/out-of-slice toggle (guarded)
     for attr_path in [
@@ -40,8 +52,9 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
         colormap_selector.update_to(layer.metadata.get("colormap_name", "viridis"))
         # caller wires signal to its handler; keep this compat layer minimal
         point_controls.layout().addRow("colormap", colormap_selector)
+        return colormap_selector
     except Exception:
-        pass
+        return None
 
 
 def install_add_wrapper(layer, *, add_impl, schedule_recolor) -> None:
