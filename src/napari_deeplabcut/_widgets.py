@@ -366,6 +366,29 @@ class KeypointControls(QWidget):
         self._update_color_scheme()
         return True
 
+    def _get_header_model_from_metadata(self, md: dict) -> DLCHeaderModel | None:
+        """Return DLCHeaderModel regardless of whether md['header'] is a model, dict payload, or MultiIndex."""
+        if not isinstance(md, dict):
+            return None
+        hdr = md.get("header", None)
+        if hdr is None:
+            return None
+
+        if isinstance(hdr, DLCHeaderModel):
+            return hdr
+
+        if isinstance(hdr, dict):
+            try:
+                return DLCHeaderModel.model_validate(hdr)
+            except Exception:
+                return None
+
+        # fallback: allow MultiIndex / list-of-tuples / Index inputs
+        try:
+            return DLCHeaderModel(columns=hdr)
+        except Exception:
+            return None
+
     def _wire_points_layer(self, layer: Points) -> keypoints.KeypointStore | None:
         if not self._validate_header(layer):
             return None
@@ -393,7 +416,8 @@ class KeypointControls(QWidget):
             update_save_history(root)
 
         layer.metadata["controls"] = self
-        layer._napari_deeplabcut_store = self
+        layer._napari_deeplabcut_controls = self
+        layer._napari_deeplabcut_store = store
         hdr = (layer.metadata or {}).get("header", None)
         if hdr is not None:
             layer._napari_deeplabcut_header = hdr
@@ -1011,6 +1035,8 @@ class KeypointControls(QWidget):
         except Exception:
             header = None
 
+        header = self._get_header_model_from_metadata(md)
+
         is_multi = False
         try:
             inds = getattr(header, "individuals", None)
@@ -1018,19 +1044,20 @@ class KeypointControls(QWidget):
         except Exception:
             is_multi = False
 
-        prop = "label"
-        if is_multi and "id" in cycles:
-            prop = "id"
+        # Default:
+        # - multi-animal prefers id if available
+        # - otherwise label
+        prop = "id" if (is_multi and "id" in cycles) else "label"
 
-        # Respect user-selected global color mode if possible
+        # Respect user-selected mode if possible
         if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL) and "id" in cycles:
             prop = "id"
         elif self.color_mode == str(keypoints.ColorMode.BODYPART) and "label" in cycles:
             prop = "label"
-        elif prop not in cycles and "label" in cycles:
-            prop = "label"
-        elif prop not in cycles and "id" in cycles:
-            prop = "id"
+
+        # Fallback if chosen prop missing in cycles
+        if prop not in cycles:
+            prop = "id" if "id" in cycles else "label"
 
         # Ensure properties exist and are valid (no NaNs) for the prop we want to cycle on
         props = getattr(layer, "properties", {}) or {}
@@ -1521,17 +1548,19 @@ class KeypointControls(QWidget):
         self._update_color_scheme()
 
     def _is_multianimal(self, layer) -> bool:
-        is_multi = False
-        if layer is not None and isinstance(layer, Points):
-            try:
-                header = layer.metadata.get("header")
-                if header is not None:
-                    ids = header.individuals
-                    is_multi = len(ids) > 0 and ids[0] != ""
-            except AttributeError:
-                pass
+        if layer is None or not isinstance(layer, Points):
+            return False
 
-        return is_multi
+        md = layer.metadata or {}
+        hdr = self._get_header_model_from_metadata(md)
+        if hdr is None:
+            return False
+
+        try:
+            inds = hdr.individuals
+            return bool(inds and len(inds) > 0 and str(inds[0]) != "")
+        except Exception:
+            return False
 
     def _active_layer_is_multianimal(self) -> bool:
         """Returns: whether the active layer is a multi-animal points layer"""
