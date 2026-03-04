@@ -42,23 +42,6 @@ QtPointsControls.changeCurrentSize = _change_size
 QtPointsControls.changeCurrentSymbol = _change_symbol
 
 
-def _get_controls(layer):
-    """
-    Controls are runtime-only and may be dropped by metadata validation/writes.
-    Prefer attribute storage, fall back to metadata for backward compatibility.
-    """
-    ctrl = getattr(layer, "_napari_deeplabcut_controls", None)
-    if ctrl is not None:
-        return ctrl
-    md = getattr(layer, "metadata", None) or {}
-    if isinstance(md, dict):
-        return md.get("controls", None)
-    try:
-        return dict(md).get("controls", None)
-    except Exception:
-        return None
-
-
 def _validate_points_meta_best_effort(layer) -> bool:
     """
     Phase-2 friendly: validate points metadata without mutating it.
@@ -244,8 +227,8 @@ def _add(store, coord):
     coord = np.atleast_2d(coord)
 
     # Controls are runtime-only; prefer layer attribute, fall back to metadata.
-    controls = _get_controls(store.layer)
-    label_mode = getattr(controls, "_label_mode", None)
+    get_mode = getattr(store, "_get_label_mode", None)
+    label_mode = get_mode() if callable(get_mode) else None
 
     if store.current_keypoint not in store.annotated_keypoints:
         # 1) append data

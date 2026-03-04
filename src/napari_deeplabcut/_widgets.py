@@ -16,8 +16,6 @@ import numpy as np
 import pandas as pd
 from napari.layers import Image, Points, Shapes, Tracks
 from napari.layers.points._points_key_bindings import register_points_action
-from napari.layers.utils import color_manager
-from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
 from pydantic import ValidationError
@@ -69,6 +67,13 @@ from napari_deeplabcut.misc import (
     build_color_cycles,
     encode_categories,
 )
+from napari_deeplabcut.napari_compat import (
+    apply_points_layer_ui_tweaks,
+    install_add_wrapper,
+    install_paste_patch,
+    patch_color_manager_guess_continuous,
+)
+from napari_deeplabcut.napari_compat.points_layer import make_paste_data
 from napari_deeplabcut.ui.colors_and_dropdown import (
     ColorSchemeDisplay,
     DropdownMenu,
@@ -78,20 +83,10 @@ from napari_deeplabcut.ui.dialogs import Shortcuts, Tutorial
 from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
-# logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp
+logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp
 
-
-# Hack to avoid napari's silly variable type guess,
-# where property is understood as continuous if
-# there are more than 16 unique categories...
-def guess_continuous(property):
-    if issubclass(property.dtype.type, np.floating):
-        return True
-    else:
-        return False
-
-
-color_manager.guess_continuous = guess_continuous
+# Monkey-patch napari continuous variable type guess
+patch_color_manager_guess_continuous()
 
 
 def _safe_folder_anchor_from_points_layer(layer: Points) -> str | None:
@@ -415,24 +410,18 @@ class KeypointControls(QWidget):
         if root := layer.metadata.get("root"):
             update_save_history(root)
 
-        layer.metadata["controls"] = self
-        layer._napari_deeplabcut_controls = self
-        layer._napari_deeplabcut_store = store
-        hdr = (layer.metadata or {}).get("header", None)
-        if hdr is not None:
-            layer._napari_deeplabcut_header = hdr
+        store._get_label_mode = lambda: self._label_mode
         layer.text.visible = False
 
         # key bindings
         layer.bind_key("M", self.cycle_through_label_modes)
         layer.bind_key("F", self.cycle_through_color_modes)
 
-        # patch paste + add
-        func = partial(self._paste_data, store=store)
-        layer._paste_data = MethodType(func, layer)
+        paste_func = make_paste_data(self, store=store)
+        install_paste_patch(layer, paste_func=paste_func)
 
-        # IMPORTANT: wrap add to schedule recolor (see Part 2 below)
-        self._install_add_wrapper(layer, store)
+        add_impl = MethodType(keypoints._add, store)  # bind store to add implementation
+        install_add_wrapper(layer, add_impl=add_impl, schedule_recolor=self._schedule_recolor)
 
         # store events / navigation
         layer.events.add(query_next_frame=Event)
@@ -472,38 +461,6 @@ class KeypointControls(QWidget):
 
         return store
 
-    def _apply_points_layer_ui_tweaks(self, layer: Points) -> None:
-        try:
-            controls = self.viewer.window.qt_viewer.dockLayerControls
-            point_controls = controls.widget().widgets[layer]
-        except Exception:
-            return
-
-        # hide face/border editors/out-of-slice toggle (guarded)
-        for attr_path in [
-            ("_face_color_control", "face_color_edit"),
-            ("_face_color_control", "face_color_label"),
-            ("_border_color_control", "border_color_edit"),
-            ("_border_color_control", "border_color_edit_label"),
-            ("_out_slice_checkbox_control", "out_of_slice_checkbox"),
-            ("_out_slice_checkbox_control", "out_of_slice_checkbox_label"),
-        ]:
-            try:
-                obj = getattr(point_controls, attr_path[0])
-                widget = getattr(obj, attr_path[1])
-                widget.hide()
-            except Exception:
-                pass
-
-        # add colormap selector
-        try:
-            colormap_selector = DropdownMenu(plt.colormaps, self)
-            colormap_selector.update_to(layer.metadata.get("colormap_name", "viridis"))
-            colormap_selector.currentTextChanged.connect(self._update_colormap)
-            point_controls.layout().addRow("colormap", colormap_selector)
-        except Exception:
-            pass
-
     def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
         if not self._validate_header(layer):
             return
@@ -518,7 +475,7 @@ class KeypointControls(QWidget):
         if store is None:
             return
 
-        self._apply_points_layer_ui_tweaks(layer)
+        apply_points_layer_ui_tweaks(self.viewer, layer, dropdown_cls=DropdownMenu, plt_module=plt)
         self._update_color_scheme()
 
     def _adopt_existing_layers(self) -> None:
@@ -1027,14 +984,6 @@ class KeypointControls(QWidget):
         # - Multi-animal defaults to id (restores test_toggle_face_color expectation)
         # - Otherwise use global setting
         prop = "label"
-        header = md.get("header", None)
-
-        try:
-            if isinstance(header, dict):
-                header = DLCHeaderModel.model_validate(header)
-        except Exception:
-            header = None
-
         header = self._get_header_model_from_metadata(md)
 
         is_multi = False
@@ -1176,16 +1125,6 @@ class KeypointControls(QWidget):
             logger.exception("Failed to remap frame indices for layer %s", getattr(layer, "name", str(layer)))
             return
 
-    def _install_add_wrapper(self, layer: Points, store) -> None:
-        orig_add = MethodType(keypoints._add, store)
-
-        def add_and_recolor(this, *args, **kwargs):
-            res = orig_add(*args, **kwargs)
-            self._schedule_recolor(this)
-            return res
-
-        layer.add = MethodType(add_and_recolor, layer)
-
     def on_insert(self, event):
         layer = event.source[-1]
         if isinstance(layer, Image):
@@ -1222,72 +1161,6 @@ class KeypointControls(QWidget):
             self._trail_cb.setChecked(False)
             self._show_traj_plot_cb.setChecked(False)
             self._trails = None
-
-    def _paste_data(self, store):
-        """Paste only currently unannotated data."""
-        features = self._clipboard.pop("features", None)
-        if features is None:
-            return
-
-        unannotated = [
-            keypoints.Keypoint(label, id_) not in store.annotated_keypoints
-            for label, id_ in zip(features["label"], features["id"], strict=False)
-        ]
-        if not any(unannotated):
-            return
-
-        new_features = features.iloc[unannotated]
-        indices_ = self._clipboard.pop("indices")
-        text_ = self._clipboard.pop("text")
-        self._clipboard = {k: v[unannotated] for k, v in self._clipboard.items()}
-        self._clipboard["features"] = new_features
-        self._clipboard["indices"] = indices_
-        if text_ is not None:
-            new_text = {
-                "string": text_["string"][unannotated],
-                "color": text_["color"],
-            }
-            self._clipboard["text"] = new_text
-
-        npoints = len(self._view_data)
-        totpoints = len(self.data)
-
-        if len(self._clipboard.keys()) > 0:
-            not_disp = self._slice_input.not_displayed
-            data = deepcopy(self._clipboard["data"])
-            offset = [self._slice_indices[i] - self._clipboard["indices"][i] for i in not_disp]
-            data[:, not_disp] = data[:, not_disp] + np.array(offset)
-            self._data = np.append(self.data, data, axis=0)
-            self._shown = np.append(self.shown, deepcopy(self._clipboard["shown"]), axis=0)
-            self._size = np.append(self.size, deepcopy(self._clipboard["size"]), axis=0)
-            self._symbol = np.append(self.symbol, deepcopy(self._clipboard["symbol"]), axis=0)
-
-            self._feature_table.append(self._clipboard["features"])
-
-            self.text._paste(**self._clipboard["text"])
-
-            self._edge_width = np.append(
-                self.edge_width,
-                deepcopy(self._clipboard["edge_width"]),
-                axis=0,
-            )
-            self._edge._paste(
-                colors=self._clipboard["edge_color"],
-                properties=_features_to_properties(self._clipboard["features"]),
-            )
-            self._face._paste(
-                colors=self._clipboard["face_color"],
-                properties=_features_to_properties(self._clipboard["features"]),
-            )
-
-            self._selected_view = list(range(npoints, npoints + len(self._clipboard["data"])))
-            self._selected_data = set(range(totpoints, totpoints + len(self._clipboard["data"])))
-            self.refresh()
-
-            try:
-                self._schedule_recolor(store.layer)
-            except Exception:
-                pass
 
     def _ensure_promotion_save_target(self, layer: Points) -> bool:
         """Ensure a prediction/machine source layer has a GT save_target set.
