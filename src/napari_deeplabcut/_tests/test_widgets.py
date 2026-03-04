@@ -13,6 +13,8 @@ from vispy import keys
 from napari_deeplabcut import _widgets, keypoints
 from napari_deeplabcut.core import io
 from napari_deeplabcut.core.io import populate_keypoint_layer_metadata
+from napari_deeplabcut.ui.colors_and_dropdown import ColorSchemeDisplay, KeypointsDropdownMenu, LabelPair
+from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
 
 def test_guess_continuous():
@@ -100,7 +102,7 @@ def test_dropdown_menu(qtbot):
 
 @pytest.mark.usefixtures("qtbot")
 def test_keypoints_dropdown_menu_selection_updates_store(store, qtbot):
-    widget = _widgets.KeypointsDropdownMenu(store)
+    widget = KeypointsDropdownMenu(store)
     qtbot.add_widget(widget)
     id_menu = widget.menus.get("id")
     label_menu = widget.menus["label"]
@@ -118,7 +120,7 @@ def test_keypoints_dropdown_menu_selection_updates_store(store, qtbot):
 
 @pytest.mark.usefixtures("qtbot")
 def test_keypoints_dropdown_menu_single_animal_has_no_id_menu(single_animal_store, qtbot):
-    widget = _widgets.KeypointsDropdownMenu(single_animal_store)
+    widget = KeypointsDropdownMenu(single_animal_store)
     qtbot.add_widget(widget)
     assert "id" not in widget.menus
     assert "label" in widget.menus
@@ -127,7 +129,7 @@ def test_keypoints_dropdown_menu_single_animal_has_no_id_menu(single_animal_stor
 
 @pytest.mark.usefixtures("qtbot")
 def test_keypoints_dropdown_menu(store, qtbot):
-    widget = _widgets.KeypointsDropdownMenu(store)
+    widget = KeypointsDropdownMenu(store)
     qtbot.add_widget(widget)
     # Menus for both "id" and "label" should exist; label menu reflects current keypoint
     # This confirms we have multi-animal data
@@ -150,7 +152,7 @@ def test_keypoints_dropdown_menu(store, qtbot):
 @pytest.mark.usefixtures("qtbot")
 def test_keypoints_dropdown_menu_unknown_id_yields_empty_list(store):
     # If an invalid ID is selected, the label menu should be empty
-    widget = _widgets.KeypointsDropdownMenu(store)
+    widget = KeypointsDropdownMenu(store)
     label_menu = widget.menus["label"]
     widget.refresh_label_menu("__NON_EXISTENT_ID__")
     assert label_menu.count() == 0  # defaultdict(list) → no labels
@@ -158,7 +160,7 @@ def test_keypoints_dropdown_menu_unknown_id_yields_empty_list(store):
 
 @pytest.mark.usefixtures("qtbot")
 def test_keypoints_dropdown_menu_updates_from_store_current_properties(store, qtbot):
-    widget = _widgets.KeypointsDropdownMenu(store)
+    widget = KeypointsDropdownMenu(store)
     qtbot.add_widget(widget)
     id_menu = widget.menus.get("id")
     label_menu = widget.menus["label"]
@@ -177,7 +179,7 @@ def test_keypoints_dropdown_menu_updates_from_store_current_properties(store, qt
 
 @pytest.mark.usefixtures("qtbot")
 def test_keypoints_dropdown_menu_smart_reset(store, qtbot):
-    widget = _widgets.KeypointsDropdownMenu(store)
+    widget = KeypointsDropdownMenu(store)
     qtbot.add_widget(widget)
     label_menu = widget.menus["label"]
     label_menu.update_to("kpt_2")
@@ -193,7 +195,7 @@ def test_keypoints_dropdown_menu_smart_reset(store, qtbot):
 
 @pytest.mark.usefixtures("qtbot")
 def test_color_pair(qtbot):
-    pair = _widgets.LabelPair(color="pink", name="kpt", parent=None)
+    pair = LabelPair(color="pink", name="kpt", parent=None)
     qtbot.add_widget(pair)
     # LabelPair couples a color swatch with a clickable label
     # Ensure setters update both UI and tooltip
@@ -206,7 +208,7 @@ def test_color_pair(qtbot):
 
 @pytest.mark.usefixtures("qtbot")
 def test_color_scheme_display(qtbot):
-    widget = _widgets.ColorSchemeDisplay(None)
+    widget = ColorSchemeDisplay(None)
     qtbot.add_widget(widget)
     widget._build()
     # Initially empty: no color scheme entries and no layout widgets
@@ -220,7 +222,7 @@ def test_color_scheme_display(qtbot):
 @pytest.mark.usefixtures("qtbot")
 def test_matplotlib_canvas_initialization_and_slider(viewer, points, qtbot):
     # Create the canvas widget
-    canvas = _widgets.KeypointMatplotlibCanvas(viewer)
+    canvas = KeypointMatplotlibCanvas(viewer)
     qtbot.add_widget(canvas)
 
     # Simulate adding a Points layer (triggers _load_dataframe)

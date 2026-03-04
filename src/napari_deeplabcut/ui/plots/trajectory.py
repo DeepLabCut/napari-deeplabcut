@@ -8,7 +8,8 @@ valid DLC points metadata; it only reads what it needs (face_color_cycles).
 from __future__ import annotations
 
 import logging
-import os
+from functools import lru_cache
+from importlib.resources import files
 from pathlib import Path
 
 import matplotlib.style as mplstyle
@@ -26,6 +27,24 @@ from napari_deeplabcut.core.layers import get_first_points_layer, get_first_vide
 logger = logging.getLogger(__name__)
 
 
+_PACKAGE = "napari_deeplabcut"
+
+
+@lru_cache(maxsize=1)
+def _pkg_root():
+    # Traversable root of the package
+    return files(_PACKAGE)
+
+
+def _styles_traversable():
+    return _pkg_root() / "styles"
+
+
+def _assets_traversable():
+    return _pkg_root() / "assets"
+
+
+# TODO: @C-Achard 2026-03-04 - Check if this is still needed after refactor
 class NapariNavigationToolbar(NavigationToolbar2QT):
     """Custom Toolbar style for Napari."""
 
@@ -40,15 +59,15 @@ class NapariNavigationToolbar(NavigationToolbar2QT):
 
         if "pan" in self._actions:
             if self._actions["pan"].isChecked():
-                self._actions["pan"].setIcon(QIcon(os.path.join(icon_dir, "Pan_checked.png")))
+                self._actions["pan"].setIcon(QIcon(Path(icon_dir) / "Pan_checked.png"))
             else:
-                self._actions["pan"].setIcon(QIcon(os.path.join(icon_dir, "Pan.png")))
+                self._actions["pan"].setIcon(QIcon(Path(icon_dir) / "Pan.png"))
 
         if "zoom" in self._actions:
             if self._actions["zoom"].isChecked():
-                self._actions["zoom"].setIcon(QIcon(os.path.join(icon_dir, "Zoom_checked.png")))
+                self._actions["zoom"].setIcon(QIcon(Path(icon_dir) / "Zoom_checked.png"))
             else:
-                self._actions["zoom"].setIcon(QIcon(os.path.join(icon_dir, "Zoom.png")))
+                self._actions["zoom"].setIcon(QIcon(Path(icon_dir) / "Zoom.png"))
 
 
 class KeypointMatplotlibCanvas(QWidget):
@@ -127,12 +146,12 @@ class KeypointMatplotlibCanvas(QWidget):
     @property
     def mpl_style_sheet_path(self) -> Path:
         if self._napari_theme_has_light_bg():
-            return Path(__file__).resolve().parents[1] / "styles" / "light.mplstyle"
+            return _styles_traversable() / "light.mplstyle"
         else:
-            return Path(__file__).resolve().parents[1] / "styles" / "dark.mplstyle"
+            return _styles_traversable() / "dark.mplstyle"
 
     def _get_path_to_icon(self) -> Path:
-        icon_root = Path(__file__).resolve().parents[1] / "assets"
+        icon_root = _assets_traversable() / "icons"
         if self._napari_theme_has_light_bg():
             return icon_root / "black"
         else:
@@ -149,8 +168,8 @@ class KeypointMatplotlibCanvas(QWidget):
             if text == "Zoom":
                 action.setToolTip("Zoom to rectangle; Click once to activate; Click again to deactivate")
             if len(text) > 0:
-                icon_path = os.path.join(icon_dir, text + ".png")
-                action.setIcon(QIcon(icon_path))
+                icon_path = icon_dir / (text + ".png")
+                action.setIcon(QIcon(str(icon_path)))
 
     def _load_dataframe(self, event=None) -> None:
         points_layer = get_first_points_layer(self.viewer)
