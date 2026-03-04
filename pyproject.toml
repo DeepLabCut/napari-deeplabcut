@@ -40,7 +40,7 @@ dependencies = [
   "tables",
 ]
 [[project.authors]]
-name = "Team DeepLabCut, Lead by Jessy Lauer"
+name = "Team DeepLabCut, led by Jessy Lauer"
 email = "admin@deeplabcut.org"
 [project.entry-points."napari.manifest"]
 napari-deeplabcut = "napari_deeplabcut:napari.yaml"
