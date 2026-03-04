@@ -17,6 +17,14 @@ repos:
       # Run the linter.
       - id: ruff-check
         args: [--fix,--unsafe-fixes]
+  - repo: https://github.com/tox-dev/pyproject-fmt
+    rev: v2.15.2
+    hooks:
+      - id: pyproject-fmt
+  - repo: https://github.com/abravalheri/validate-pyproject
+    rev: v0.25
+    hooks:
+      - id: validate-pyproject
   - repo: https://github.com/tlambert03/napari-plugin-checks
     rev: v0.3.0
     hooks:
