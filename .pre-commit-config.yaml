@@ -2,8 +2,11 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
-      - id: check-docstring-first
+      - id: check-added-large-files
+      - id: check-yaml
+      - id: check-toml
       - id: end-of-file-fixer
+      - id: name-tests-test
       - id: trailing-whitespace
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.4
