@@ -175,13 +175,6 @@ class CycleEnum(Enum, metaclass=CycleEnumMeta):
         return self.value
 
 
-def _is_nan_like(x) -> bool:
-    try:
-        return bool(np.isnan(x))
-    except Exception:
-        return False
-
-
 def _is_nan_value(x) -> bool:
     try:
         return bool(np.isnan(x))

@@ -34,7 +34,7 @@ def test_keypoint_controls(viewer):
 def test_save_layers(viewer, points):
     controls = _widgets.KeypointControls(viewer)
     viewer.layers.selection.add(points)
-    controls._save_layers_dialog(controls)
+    controls._save_layers_dialog()
 
 
 @pytest.mark.usefixtures("qtbot")

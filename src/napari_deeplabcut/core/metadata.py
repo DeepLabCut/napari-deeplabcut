@@ -154,16 +154,16 @@ def _coerce_header_to_model(header: Any, *, strict: bool = False) -> DLCHeaderMo
             if "columns" in hd:
                 hd["columns"] = _normalize_columns(hd["columns"])
             return DLCHeaderModel.model_validate(hd)
-        except Exception:
-            return _fail("Failed to parse header dict into DLCHeaderModel.", exc=Exception)
+        except Exception as e:
+            return _fail("Failed to parse header dict into DLCHeaderModel.", exc=e)
 
     # runtime DLCHeader-like (e.g. napari_deeplabcut.misc.DLCHeader)
     cols = getattr(header, "columns", None)
     if cols is not None:
         try:
             return DLCHeaderModel(columns=_normalize_columns(cols))
-        except Exception:
-            return _fail("Failed to coerce header with columns into DLCHeaderModel.", exc=Exception)
+        except Exception as e:
+            return _fail("Failed to coerce header with columns into DLCHeaderModel.", exc=e)
 
     return None
 
