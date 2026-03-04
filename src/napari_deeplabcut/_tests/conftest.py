@@ -211,3 +211,36 @@ def superkeypoints_assets():
     json_path = Path(__file__).resolve().parents[1] / "assets" / f"{super_animal}.json"
     data = json.loads(json_path.read_text(encoding="utf-8"))
     return {"data": data, "super_animal": super_animal}
+
+
+@pytest.fixture
+def multianimal_config_project(tmp_path: Path):
+    """
+    Minimal DLC-style multi-animal project config used for E2E tests.
+
+    Returns:
+        project_dir, config_path
+    """
+    import yaml
+
+    project = tmp_path / "project_multi"
+    project.mkdir(parents=True, exist_ok=True)
+
+    cfg = {
+        "scorer": "John",
+        "dotsize": 8,
+        "pcutoff": 0.6,
+        "colormap": "viridis",
+        # DLC multi-animal flags/fields expected by napari_deeplabcut.misc.DLCHeader.from_config
+        "multianimalproject": True,
+        "individuals": ["animal1", "animal2"],
+        "multianimalbodyparts": ["bodypart1", "bodypart2"],
+        # Often present in DLC configs; safe to include even if empty
+        "uniquebodyparts": [],
+        # Keep bodyparts too (some parts of the plugin still read it)
+        "bodyparts": ["bodypart1", "bodypart2"],
+    }
+
+    config_path = project / "config.yaml"
+    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    return project, config_path
