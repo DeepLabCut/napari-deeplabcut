@@ -6,7 +6,6 @@ from enum import Enum
 from typing import Any
 
 import numpy as np
-import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -29,190 +28,279 @@ class MetadataKind(str, Enum):
 # -----------------------------------------------------------------------------
 # Header model (authoritative wrapper)
 # -----------------------------------------------------------------------------
+# src/napari_deeplabcut/config/models.py
 class DLCHeaderModel(BaseModel):
+    """
+    Authoritative, pandas-optional DLC header specification.
+
+    Design goals
+    ------------
+    - Pandas is NOT required at runtime for this model.
+    - Internal representation is always portable:
+        columns: list[tuple[str, ...]]
+        names: optional list[str] aligned to tuple length (may be None)
+    - Accepts pandas.MultiIndex as input when pandas is installed (best-effort),
+      but never stores it internally.
+
+    Semantics
+    ---------
+    Canonical meaning (when present):
+      scorer, individuals, bodyparts, coords
+
+    We support both:
+    - 4-level canonical tuples: (scorer, individuals, bodyparts, coords)
+    - 3-level legacy tuples: (scorer, bodyparts, coords)  -> treated as individuals=""
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
-    columns: Any = Field(...)
+
+    columns: list[tuple[str, ...]] = Field(default_factory=list)
+    names: list[str] | None = None
 
     # ----------------------------
     # Input normalization
     # ----------------------------
     @field_validator("columns", mode="before")
     @classmethod
-    def _coerce_columns(cls, v: Any) -> Any:
+    def _coerce_columns(cls, v: Any) -> list[tuple[str, ...]]:
         """
-        Accept common header representations and normalize to a stable in-memory form.
+        Accept common header representations and normalize to list-of-tuples.
 
-        Supported inputs:
-        - pandas.MultiIndex (stored as-is)
-        - list/tuple of tuples (stored as list[tuple[str,...]])
-        - dict payloads with {"columns": ...} are handled by model_validate upstream
+        Supported:
+        - list/tuple of tuples
+        - pandas.MultiIndex (if pandas installed)
+        - pandas.Index (if pandas installed)
         """
         if v is None:
-            return v
+            return []
 
-        # Normalize pandas Index/MultiIndex into list of tuples for portability
-        if isinstance(v, pd.MultiIndex):
-            return v
-        if isinstance(v, pd.Index):
-            return [str(x) for x in v.to_list()]
+        # If payload dict accidentally arrives here, unwrap.
+        if isinstance(v, dict) and "columns" in v:
+            v = v["columns"]
 
-        if isinstance(v, (list, tuple)) and v:
-            # Ensure tuple-of-strings
-            out = []
-            for t in v:
-                if isinstance(t, (list, tuple)):
-                    out.append(tuple(map(str, t)))
+        # pandas objects: import lazily (optional dependency)
+        try:
+            import pandas as pd  # type: ignore
+
+            if isinstance(v, pd.MultiIndex):
+                return [tuple(map(str, t)) for t in v.to_list()]
+            if isinstance(v, pd.Index):
+                return [(str(x),) for x in v.to_list()]
+        except Exception:
+            pass
+
+        # list/tuple input
+        if isinstance(v, (list, tuple)):
+            out: list[tuple[str, ...]] = []
+            for item in v:
+                if isinstance(item, (list, tuple)):
+                    out.append(tuple(map(str, item)))
                 else:
-                    out.append((str(t),))
+                    out.append((str(item),))
             return out
 
+        raise TypeError(f"Unsupported columns type: {type(v)!r}")
+
+    @field_validator("names", mode="before")
+    @classmethod
+    def _coerce_names(cls, v: Any) -> list[str] | None:
+        if v is None:
+            return None
+        if isinstance(v, (list, tuple)):
+            return [str(x) for x in v]
+        return None
+
+    @field_validator("names")
+    @classmethod
+    def _validate_names(cls, v: list[str] | None, info) -> list[str] | None:
+        # If provided, length must match tuple length (when columns non-empty).
+        cols = info.data.get("columns") or []
+        if v is None or not cols:
+            return v
+        n = len(cols[0])
+        if len(v) != n:
+            # Be tolerant: if mismatch, drop names rather than fail hard.
+            return None
         return v
 
     # ----------------------------
-    # Canonical MultiIndex view
+    # Core shape helpers (pandas-free)
     # ----------------------------
-    def as_multiindex(self) -> pd.MultiIndex:
+    @property
+    def nlevels(self) -> int:
+        return len(self.columns[0]) if self.columns else 0
+
+    def _level_index(self, name: str) -> int | None:
+        if not self.names:
+            return None
+        try:
+            return self.names.index(name)
+        except ValueError:
+            return None
+
+    def _get_level_values(self, idx: int) -> list[str]:
+        if not self.columns:
+            return []
+        vals = []
+        for t in self.columns:
+            if idx < len(t):
+                vals.append(str(t[idx]))
+        # stable unique, preserve order
+        return list(dict.fromkeys(vals))
+
+    def _canonical_4(self) -> list[tuple[str, str, str, str]]:
         """
-        Return a canonical 4-level DLC MultiIndex:
-          (scorer, individuals, bodyparts, coords)
+        Return canonical 4-tuples (scorer, individuals, bodyparts, coords).
 
-        Accepts:
-        - already MultiIndex
-        - list/tuple of tuples (3- or 4-level common cases)
+        - If already 4-level: mapped by names if present, else by position.
+        - If 3-level legacy: individuals="" inserted.
+        - Otherwise: best-effort fallback to positional mapping.
         """
-        cols = self.columns
+        out: list[tuple[str, str, str, str]] = []
+        if not self.columns:
+            return out
 
-        if isinstance(cols, pd.MultiIndex):
-            return cols
+        # If names are present, use them preferentially.
+        ix_scorer = self._level_index("scorer")
+        ix_inds = self._level_index("individuals")
+        ix_bp = self._level_index("bodyparts")
+        ix_coords = self._level_index("coords")
 
-        if isinstance(cols, (list, tuple)) and cols:
-            first = cols[0]
-            if not isinstance(first, (list, tuple)):
-                raise TypeError(f"columns must be tuples, got {type(first)!r}")
+        for t in self.columns:
+            tt = tuple(map(str, t))
+            if len(tt) == 4:
+                if None not in (ix_scorer, ix_inds, ix_bp, ix_coords):
+                    out.append((tt[ix_scorer], tt[ix_inds], tt[ix_bp], tt[ix_coords]))  # type: ignore[index]
+                else:
+                    out.append((tt[0], tt[1], tt[2], tt[3]))
+            elif len(tt) == 3:
+                # legacy (scorer, bodyparts, coords)
+                if None not in (ix_scorer, ix_bp, ix_coords):
+                    out.append((tt[ix_scorer], "", tt[ix_bp], tt[ix_coords]))  # type: ignore[index]
+                else:
+                    out.append((tt[0], "", tt[1], tt[2]))
+            else:
+                # unknown shape: do best-effort padding/truncation
+                scorer = tt[0] if len(tt) > 0 else ""
+                bodypart = tt[1] if len(tt) > 1 else ""
+                coords = tt[-1] if len(tt) > 0 else ""
+                out.append((scorer, "", bodypart, coords))
 
-            n = len(first)
-
-            if n == 4:
-                tuples = [tuple(map(str, t)) for t in cols]
-                return pd.MultiIndex.from_tuples(
-                    tuples,
-                    names=["scorer", "individuals", "bodyparts", "coords"],
-                )
-
-            if n == 3:
-                # legacy: (scorer, bodyparts, coords) -> insert empty individuals
-                tuples = [(str(t[0]), "", str(t[1]), str(t[2])) for t in cols]
-                return pd.MultiIndex.from_tuples(
-                    tuples,
-                    names=["scorer", "individuals", "bodyparts", "coords"],
-                )
-
-            tuples = [tuple(map(str, t)) for t in cols]
-            return pd.MultiIndex.from_tuples(tuples, names=[None] * n)
-
-        raise TypeError(f"Unsupported columns type: {type(cols)!r}")
+        return out
 
     # ----------------------------
-    # Self-documenting, stable API
+    #  Pandas interop
+    # ----------------------------
+    def as_multiindex(self):
+        """
+        OPTIONAL: Convert to pandas.MultiIndex if pandas is installed.
+        This keeps pandas-specific modules working without making pandas a core invariant.
+        """
+        try:
+            import pandas as pd  # type: ignore
+        except Exception as e:
+            raise RuntimeError("pandas is required for as_multiindex() but is not installed") from e
+
+        canon = self._canonical_4()
+        names = ["scorer", "individuals", "bodyparts", "coords"]
+        return pd.MultiIndex.from_tuples(canon, names=names)
+
+    # ----------------------------
+    # Self-documenting API (what callers should use)
     # ----------------------------
     @property
     def scorer(self) -> str | None:
-        cols = self.as_multiindex()
-        if "scorer" in (cols.names or []):
-            vals = cols.get_level_values("scorer")
-            return str(vals[0]) if len(vals) else None
-        return str(cols.to_list()[0][0]) if len(cols) else None
+        canon = self._canonical_4()
+        return canon[0][0] if canon else None
+
+    @property
+    def scorers(self) -> list[str]:
+        canon = self._canonical_4()
+        scorers = [s for s, _, _, _ in canon]
+        return list(dict.fromkeys(scorers))
 
     @property
     def individuals(self) -> list[str]:
-        cols = self.as_multiindex()
-        if "individuals" not in (cols.names or []):
-            return [""]
-        return list(dict.fromkeys(map(str, cols.get_level_values("individuals"))))
+        canon = self._canonical_4()
+        inds = [i for _, i, _, _ in canon]
+        uniq = list(dict.fromkeys(inds))
+        return uniq if uniq else [""]
 
     @property
     def bodyparts(self) -> list[str]:
-        cols = self.as_multiindex()
-        if "bodyparts" in (cols.names or []):
-            return list(dict.fromkeys(map(str, cols.get_level_values("bodyparts"))))
-        return list(dict.fromkeys([str(t[2]) for t in cols.to_list()]))
+        canon = self._canonical_4()
+        bps = [b for _, _, b, _ in canon]
+        return list(dict.fromkeys(bps))
 
     @property
     def coords(self) -> list[str]:
-        cols = self.as_multiindex()
-        if "coords" in (cols.names or []):
-            return list(dict.fromkeys(map(str, cols.get_level_values("coords"))))
-        # fallback: assume last level is coords
-        return list(dict.fromkeys([str(t[-1]) for t in cols.to_list()]))
+        canon = self._canonical_4()
+        cs = [c for _, _, _, c in canon]
+        return list(dict.fromkeys(cs))
 
-    def _get_unique(self, name: str) -> list[str] | None:
-        if name in self.columns.names:
-            return list(unsorted_unique(self.columns.get_level_values(name)))
-        return None
+    def with_scorer(self, scorer: str) -> DLCHeaderModel:
+        """
+        Return a new header with scorer replaced (pandas-free).
+
+        Replaces legacy `header.scorer = ...`.
+        """
+        canon = self._canonical_4()
+        new_cols = [(str(scorer), ind, bp, coord) for _, ind, bp, coord in canon]
+        return self.model_copy(update={"columns": new_cols, "names": ["scorer", "individuals", "bodyparts", "coords"]})
 
     def form_individual_bodypart_pairs(self) -> list[tuple[str, str]]:
         """
-        Return ordered list of (individual, bodypart) pairs, DLC-style.
+        Return ordered list of (individual, bodypart) pairs.
+
+        This matches the previous DLCHeader behavior but is pandas-free.
         """
-        cols = self.as_multiindex()
+        canon = self._canonical_4()
+        pairs = [(ind, bp) for _, ind, bp, _ in canon]
+        # stable unique preserving first seen order
+        return list(dict.fromkeys(pairs))
 
-        names = cols.names or []
-        to_drop = [n for n in names if n not in ("individuals", "bodyparts")]
-        cols2 = cols.droplevel(to_drop).unique() if to_drop else cols.unique()
-
-        # Ensure individuals level exists (single-animal legacy)
-        if "individuals" not in (cols2.names or []):
-            inds = self.individuals
-            cols2 = pd.MultiIndex.from_product(
-                [inds, cols2],
-                names=["individuals"] + list(cols2.names or []),
-            )
-
-        return [(str(i), str(b)) for (i, b) in cols2.to_list()]
-
-    # ----------------------------
-    # Construction helpers
-    # ----------------------------
     @classmethod
     def from_config(cls, config: dict) -> DLCHeaderModel:
         """
-        Build header from DLC config.yaml content (single or multi-animal).
+        Build header from DLC config.yaml content (single or multi-animal),
+        without requiring pandas.
         """
-        multi = config.get("multianimalproject", False)
-        scorer = [config["scorer"]]
+        multi = bool(config.get("multianimalproject", False))
+        scorer = str(config["scorer"])
+
+        cols: list[tuple[str, ...]] = []
+        names: list[str]
 
         if multi:
-            columns = pd.MultiIndex.from_product(
-                [scorer, config["individuals"], config["multianimalbodyparts"], ["x", "y"]],
-                names=["scorer", "individuals", "bodyparts", "coords"],
-            )
-            if len(config.get("uniquebodyparts", [])):
-                temp = pd.MultiIndex.from_product(
-                    [scorer, ["single"], config["uniquebodyparts"], ["x", "y"]],
-                    names=["scorer", "individuals", "bodyparts", "coords"],
-                )
-                columns = columns.append(temp)
+            inds = [str(x) for x in config["individuals"]]
+            bps = [str(x) for x in config["multianimalbodyparts"]]
+            coords = ["x", "y"]
+            for i in inds:
+                for bp in bps:
+                    for c in coords:
+                        cols.append((scorer, i, bp, c))
+            # unique bodyparts in "single" individual bucket
+            for bp in [str(x) for x in config.get("uniquebodyparts", [])]:
+                for c in coords:
+                    cols.append((scorer, "single", bp, c))
+            names = ["scorer", "individuals", "bodyparts", "coords"]
         else:
-            columns = pd.MultiIndex.from_product(
-                [scorer, config["bodyparts"], ["x", "y"]],
-                names=["scorer", "bodyparts", "coords"],
-            )
+            bps = [str(x) for x in config["bodyparts"]]
+            coords = ["x", "y"]
+            for bp in bps:
+                for c in coords:
+                    cols.append((scorer, bp, c))
+            names = ["scorer", "bodyparts", "coords"]
 
-        return cls(columns=columns)
+        return cls(columns=cols, names=names)
 
-    # ----------------------------
-    # Serialization intended for layer.metadata
-    # ----------------------------
     def to_metadata_payload(self) -> dict[str, Any]:
         """
-        Return a portable payload safe to store in napari layer.metadata.
+        Portable payload to store in napari layer.metadata.
+
+        Never stores pandas objects.
         """
-        cols = self.columns
-        if isinstance(cols, pd.MultiIndex):
-            cols = [tuple(map(str, t)) for t in cols.to_list()]
-        elif isinstance(cols, pd.Index):
-            cols = [str(x) for x in cols.to_list()]
-        return {"columns": cols}
+        return {"columns": self.columns, "names": self.names}
 
 
 # -----------------------------------------------------------------------------

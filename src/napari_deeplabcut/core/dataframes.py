@@ -7,42 +7,97 @@ import logging
 import numpy as np
 import pandas as pd
 
-from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.core.schemas import PointsWriteInputModel
 
 logger = logging.getLogger(__name__)
 
 
-def merge_multiple_scorers(
-    df: pd.DataFrame,
-) -> pd.DataFrame:
-    n_frames = df.shape[0]
-    header = DLCHeaderModel(columns=df.columns)
-    n_scorers = len(header._get_unique("scorer"))
-    if n_scorers == 1:
+def merge_multiple_scorers(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    If df has multiple scorers in its column MultiIndex, merge them.
+
+    - If likelihood exists, keep the scorer with max likelihood per keypoint/frame.
+    - Else, pick the first scorer deterministically.
+    """
+    if not isinstance(df.columns, pd.MultiIndex):
         return df
 
-    if "likelihood" in header.coords:
-        # Merge annotations from multiple scorers to keep
-        # detections with highest confidence
-        data = df.to_numpy(copy=True).reshape((n_frames, n_scorers, -1, 3))
+    n_frames = df.shape[0]
+    cols = df.columns
+    names = list(cols.names or [])
+
+    # Identify scorer level
+    scorer_level = "scorer" if "scorer" in names else 0
+    scorers = list(dict.fromkeys(cols.get_level_values(scorer_level).astype(str).tolist()))
+    n_scorers = len(scorers)
+    if n_scorers <= 1:
+        return df
+
+    # Identify coords level
+    coords_level = "coords" if "coords" in names else (cols.nlevels - 1)
+    coords_vals = cols.get_level_values(coords_level).astype(str).tolist()
+    has_likelihood = "likelihood" in set(coords_vals)
+
+    # Helper: take columns for a given scorer
+    def _cols_for_scorer(scorer: str) -> pd.MultiIndex:
+        mask = cols.get_level_values(scorer_level).astype(str) == str(scorer)
+        return cols[mask]
+
+    if has_likelihood:
+        # Ensure each scorer block has same column ordering/shape
+        cols0 = _cols_for_scorer(scorers[0])
+        per_scorer = len(cols0)
+        if per_scorer == 0:
+            return df
+
+        # If other scorers don't match shape, fall back to first scorer
+        for s in scorers[1:]:
+            if len(_cols_for_scorer(s)) != per_scorer:
+                logger.debug("Scorer column blocks differ in size; falling back to first scorer.")
+                return df.loc[:, cols0]
+
+        # Stack scorer axis -> (n_frames, n_scorers, per_scorer)
+        data = df.to_numpy(copy=True).reshape((n_frames, n_scorers, per_scorer))
+
+        # We need likelihood position within per_scorer block.
+        # Find likelihood columns within the first scorer block:
+        coords0 = cols0.get_level_values(coords_level).astype(str).to_numpy()
+        like_mask = coords0 == "likelihood"
+        if not np.any(like_mask):
+            # coords said likelihood exists, but not in the first scorer block - fallback
+            return df.loc[:, cols0]
+
+        # Reshape per keypoint: assume (x, y, likelihood) triplets per keypoint.
+        # We infer n_keypoints from number of likelihood entries.
+        n_keypoints = int(np.sum(like_mask))
+        # Triplet width is per_scorer / n_keypoints if structured, but be defensive:
+        triplet = per_scorer // max(1, n_keypoints)
+        if triplet < 3:
+            # Not in expected (x,y,likelihood) shape; fallback
+            return df.loc[:, cols0]
+
+        data3 = data.reshape((n_frames, n_scorers, n_keypoints, triplet))
+
+        # likelihood is assumed at index 2 in each triplet (legacy DLC layout)
         try:
-            idx = np.nanargmax(data[..., 2], axis=1)
+            idx = np.nanargmax(data3[..., 2], axis=1)
         except ValueError:  # All-NaN slice encountered
-            mask = np.isnan(data[..., 2]).all(axis=1, keepdims=True)
-            mask = np.broadcast_to(mask[..., None], data.shape)
-            data[mask] = -1
-            idx = np.nanargmax(data[..., 2], axis=1)
-            data[mask] = np.nan
-        data_best = data[np.arange(n_frames)[:, None], idx, np.arange(data.shape[2])].reshape((n_frames, -1))
-        df = pd.DataFrame(
-            data_best,
-            index=df.index,
-            columns=header.columns[: data_best.shape[1]],
-        )
-    else:  # Arbitrarily pick data from the first scorer
-        df = df.loc(axis=1)[: header.scorer]
-    return df
+            mask = np.isnan(data3[..., 2]).all(axis=1, keepdims=True)
+            mask = np.broadcast_to(mask[..., None], data3.shape)
+            data3[mask] = -1
+            idx = np.nanargmax(data3[..., 2], axis=1)
+            data3[mask] = np.nan
+
+        data_best = data3[np.arange(n_frames)[:, None], idx, np.arange(n_keypoints)]
+        data_best = data_best.reshape((n_frames, -1))
+
+        # Output columns: use first scorer block columns (structure preserved)
+        out_cols = cols0[: data_best.shape[1]]
+        return pd.DataFrame(data_best, index=df.index, columns=out_cols)
+
+    # No likelihood: pick first scorer deterministically
+    cols0 = _cols_for_scorer(scorers[0])
+    return df.loc[:, cols0]
 
 
 def guarantee_multiindex_rows(df):
@@ -93,16 +148,10 @@ def form_df_from_validated(ctx: PointsWriteInputModel) -> pd.DataFrame:
     df = df.unstack(["scorer", "individuals", "bodyparts", "coords"])
     df.index.name = None
 
-    logger.debug("Before reindex: cols nlevels %s, names %s", df.columns.nlevels, df.columns.names)
-    logger.debug(
-        "header cols nlevels %s, names %s",
-        ctx.meta.header.as_multiindex().nlevels,
-        ctx.meta.header.as_multiindex().names,
-    )
+    hdr_cols = ctx.meta.header.as_multiindex()  # pandas-only helper; raises if pandas missing
 
-    # Drop individuals if this is a single-animal layout (empty ids)
-    # Here we check if all ids are '' (or falsy)
-    hdr_cols = ctx.meta.header.as_multiindex()
+    logger.debug("Before reindex: cols nlevels %s, names %s", df.columns.nlevels, df.columns.names)
+    logger.debug("header cols nlevels %s, names %s", hdr_cols.nlevels, hdr_cols.names)
 
     # If df columns dropped individuals, drop it from header too (if present)
     # if df.columns.nlevels == 3 and isinstance(hdr_cols, pd.MultiIndex) and hdr_cols.nlevels == 4:
