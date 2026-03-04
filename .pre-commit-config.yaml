@@ -5,10 +5,6 @@ repos:
       - id: check-docstring-first
       - id: end-of-file-fixer
       - id: trailing-whitespace
-  - repo: https://github.com/asottile/setup-cfg-fmt
-    rev: v3.2.0
-    hooks:
-      - id: setup-cfg-fmt
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.10
     hooks:
@@ -17,6 +13,14 @@ repos:
       # Run the linter.
       - id: ruff-check
         args: [--fix,--unsafe-fixes]
+  - repo: https://github.com/tox-dev/pyproject-fmt
+    rev: v2.15.2
+    hooks:
+      - id: pyproject-fmt
+  - repo: https://github.com/abravalheri/validate-pyproject
+    rev: v0.25
+    hooks:
+      - id: validate-pyproject
   - repo: https://github.com/tlambert03/napari-plugin-checks
     rev: v0.3.0
     hooks:

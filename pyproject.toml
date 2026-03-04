@@ -1,19 +1,97 @@
 [build-system]
-requires = ["setuptools", "wheel", "setuptools_scm"]
 build-backend = "setuptools.build_meta"
+requires = [ "setuptools>=77", "setuptools-scm[toml]>=7", "wheel" ]
 
-[tool.ruff]
-lint.select = ["E", "F", "B", "I", "UP"]
-lint.ignore = ["E741"]
-target-version = "py310"
-fix = true
-line-length = 120
+[project]
+name = "napari-deeplabcut"
+description = "napari + DeepLabCut annotation tool"
+readme = { file = "README.md", content-type = "text/markdown" }
+license = "LGPL-3.0-only"
+license-files = [ "LICENSE" ]
+requires-python = ">=3.10"
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Framework :: napari",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Image Processing",
+  "Topic :: Scientific/Engineering :: Visualization",
+]
+# Using setuptools-scm -> version is derived from git tags
+dynamic = [ "version" ]
+dependencies = [
+  "dask-image",
+  "matplotlib>=3.3",
+  "napari==0.6.6",
+  "natsort",
+  "numpy>=1.18.5,<2",
+  "opencv-python-headless",
+  "pandas",
+  "pyside6>=6.4.2",
+  "pyyaml",
+  "qtpy>=2.4",
+  "scikit-image",
+  "scipy",
+  "tables",
+]
+[[project.authors]]
+name = "Team DeepLabCut, led by Jessy Lauer"
+email = "admin@deeplabcut.org"
+[project.entry-points."napari.manifest"]
+napari-deeplabcut = "napari_deeplabcut:napari.yaml"
+[project.optional-dependencies]
+testing = [
+  "pillow",
+  "pytest",
+  "pytest-cov",
+  "pytest-qt",
+  "tox",
+]
+[project.urls]
+"Bug Tracker" = "https://github.com/DeepLabCut/napari-deeplabcut/issues"
+Documentation = "https://github.com/DeepLabCut/napari-deeplabcut#README.md"
+"Source Code" = "https://github.com/DeepLabCut/napari-deeplabcut"
+"User Support" = "https://github.com/DeepLabCut/napari-deeplabcut/issues"
+
+# ----------------------------
+# setuptools configuration
+# ----------------------------
+[tool.setuptools]
+include-package-data = true
+[tool.setuptools.package-data]
+napari_deeplabcut = [ "napari.yaml" ]
+[tool.setuptools.package-dir]
+"" = "src"
+[tool.setuptools.packages.find]
+where = [ "src" ]
+
+[tool.setuptools_scm]
+write_to = "src/napari_deeplabcut/_version.py"
 
 [tool.uv]
 package = true
 
-[tool.setuptools_scm]
-write_to = "src/napari_deeplabcut/_version.py"
+# ----------------------------
+# existing tool configuration
+# ----------------------------
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+fix = true
+[tool.ruff.lint]
+select = [ "E", "F", "B", "I", "UP" ]
+ignore = [ "E741" ]
+
+[tool.pyproject-fmt]
+max_supported_python = "3.12"
+generate_python_version_classifiers = true
+# Avoid collapsing tables to field.key = value format (less readable)
+table_format = "long"
 
 [tool.pytest.ini_options]
 qt_api = "pyside6"
