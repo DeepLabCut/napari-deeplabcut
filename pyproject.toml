@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-  "setuptools>=64",
+  "setuptools>=77",
   "wheel",
   "setuptools_scm[toml]>=7"
 ]
@@ -11,7 +11,8 @@ name = "napari-deeplabcut"
 description = "napari + DeepLabCut annotation tool"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
-license = { text = "LGPL-3.0" }
+license = "LGPL-3.0-only"
+license-files = ["LICENSE"]
 
 authors = [
   { name = "Team DeepLabCut, Lead by Jessy Lauer", email = "admin@deeplabcut.org" }
