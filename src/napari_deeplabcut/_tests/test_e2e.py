@@ -12,7 +12,7 @@ import pytest
 from napari.layers import Points
 from qtpy.QtWidgets import QInputDialog, QMessageBox
 
-from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 from napari_deeplabcut.core.errors import MissingProvenanceError
 
 logger = logging.getLogger(__name__)
@@ -562,7 +562,7 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
     """
     overwrite_confirm.forbid()
 
-    project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
+    _, _, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
     viewer = make_napari_viewer()
     from napari_deeplabcut._widgets import KeypointControls
@@ -594,17 +594,24 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
     hdr = points.metadata.get("header")
     logger.debug("header type: %s", type(hdr))
     if hdr is not None:
-        cols = hdr.columns
-        logger.debug("header.columns type: %s", type(cols))
-        logger.debug("header.columns names: %s", getattr(cols, "names", None))
-        logger.debug("header.columns nlevels: %s", getattr(cols, "nlevels", None))
+        if isinstance(hdr, DLCHeaderModel):
+            header_model = hdr
+        elif isinstance(hdr, dict):
+            header_model = DLCHeaderModel.model_validate(hdr)
+        else:
+            header_model = DLCHeaderModel(columns=hdr)
+
+    # Prefer portable inspection: tuple columns (pandas optional)
+    logger.debug("header ncols=%s", len(header_model.columns))
+    logger.debug("header scorer=%s", header_model.scorer)
+    logger.debug("header individuals=%s", header_model.individuals)
+    logger.debug("header bodyparts=%s", header_model.bodyparts)
+    logger.debug("header coords=%s", header_model.coords)
 
     logger.info("points.data[:5] = %s", points.data[:5])
     logger.info("any NaNs in points.data = %s", np.isnan(points.data).any())
     logger.info("labels[:10] = %s", points.properties.get("label")[:10])
     logger.info("ids[:10] = %s", points.properties.get("id")[:10] if "id" in points.properties else None)
-    logger.info("header.columns.names = %s", points.metadata["header"].columns.names)
-    logger.info("header.columns.nlevels = %s", points.metadata["header"].columns.nlevels)
     store = controls._stores.get(points)
     assert store is not None
 
@@ -1135,8 +1142,11 @@ def test_config_placeholder_points_layer_colors_after_first_keypoint_added(make_
     # Ensure the second add targets a different (unannotated) bodypart.
 
     # Find a different bodypart from the header ordering
-    hdr = placeholder.metadata["header"]
-    all_bodyparts = list(getattr(hdr, "bodyparts", []))
+    hdr = placeholder.metadata.get("header")
+    assert hdr is not None, "Expected header in placeholder metadata"
+
+    header_model = hdr if isinstance(hdr, DLCHeaderModel) else DLCHeaderModel.model_validate(hdr)
+    all_bodyparts = list(header_model.bodyparts)
     assert all_bodyparts, "Header has no bodyparts; cannot drive second add deterministically."
 
     # Pick a different bodypart than label0

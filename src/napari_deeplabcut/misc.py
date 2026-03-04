@@ -85,6 +85,12 @@ def build_color_cycles(header: HeaderLike, colormap: str | None = "viridis"):
     }
 
 
+def unsorted_unique(array: Sequence) -> np.ndarray:
+    """Return the unsorted unique elements of an array."""
+    _, inds = np.unique(array, return_index=True)
+    return np.asarray(array)[np.sort(inds)]
+
+
 # # FIXME @C-Achard replace with schema in core
 # class DLCHeader:
 #     def __init__(self, columns: pd.MultiIndex):

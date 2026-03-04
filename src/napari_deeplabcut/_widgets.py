@@ -42,7 +42,7 @@ from qtpy.QtWidgets import (
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut._writer import _write_image
-from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata, IOProvenance, PointsMetadata
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.layers import (
     find_last_layer,
@@ -1003,21 +1003,34 @@ class KeypointControls(QWidget):
         # - Multi-animal defaults to id (restores test_toggle_face_color expectation)
         # - Otherwise use global setting
         prop = "label"
+        header = md.get("header", None)
+
         try:
-            header = md.get("header")
-            bool(header and getattr(header, "individuals", None) and header.individuals[0] != "")
+            if isinstance(header, dict):
+                header = DLCHeaderModel.model_validate(header)
         except Exception:
-            pass
+            header = None
+
+        is_multi = False
+        try:
+            inds = getattr(header, "individuals", None)
+            is_multi = bool(inds and len(inds) > 0 and str(inds[0]) != "")
+        except Exception:
+            is_multi = False
 
         prop = "label"
-        if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL) and "id" in cycles:
-            prop = "id"
-        elif "label" not in cycles and "id" in cycles:
+        if is_multi and "id" in cycles:
             prop = "id"
 
-        if prop not in cycles:
-            layer.face_color_mode = "direct"
-            return
+        # Respect user-selected global color mode if possible
+        if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL) and "id" in cycles:
+            prop = "id"
+        elif self.color_mode == str(keypoints.ColorMode.BODYPART) and "label" in cycles:
+            prop = "label"
+        elif prop not in cycles and "label" in cycles:
+            prop = "label"
+        elif prop not in cycles and "id" in cycles:
+            prop = "id"
 
         # Ensure properties exist and are valid (no NaNs) for the prop we want to cycle on
         props = getattr(layer, "properties", {}) or {}

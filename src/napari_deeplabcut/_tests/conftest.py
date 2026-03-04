@@ -63,7 +63,7 @@ def make_real_header(bodyparts=("bodypart1", "bodypart2"), individuals=("",), sc
         [[scorer], list(individuals), list(bodyparts), ["x", "y"]],
         names=["scorer", "individuals", "bodyparts", "coords"],
     )
-    return DLCHeaderModel(cols)
+    return DLCHeaderModel(columns=cols)
 
 
 @pytest.fixture

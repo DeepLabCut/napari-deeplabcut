@@ -172,7 +172,7 @@ def test_write_hdf_basic(tmp_path, fake_keypoints):
     root.mkdir()
 
     fake_keypoints.to_hdf(root / "data.h5", key="data")
-    header = DLCHeaderModel(fake_keypoints.columns)
+    header = DLCHeaderModel(columns=fake_keypoints.columns)
 
     # Build per-row properties (length == n_rows)
     n_rows = len(fake_keypoints)
@@ -234,7 +234,7 @@ def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, m
     # Always allow overwrite confirmation in unit test
     monkeypatch.setattr(napari_dlc_io, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
 
-    header = DLCHeaderModel(fake_keypoints.columns)
+    header = DLCHeaderModel(columns=fake_keypoints.columns)
 
     n_rows = len(fake_keypoints)
     from itertools import cycle, islice, product
@@ -308,7 +308,7 @@ def test_write_hdf_machine_source_without_save_target_aborts(tmp_path, fake_keyp
     root = tmp_path / "proj"
     root.mkdir()
 
-    header = DLCHeaderModel(fake_keypoints.columns)
+    header = DLCHeaderModel(columns=fake_keypoints.columns)
     n_rows = len(fake_keypoints)
 
     from itertools import cycle, islice, product
@@ -352,7 +352,7 @@ def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, m
 
     monkeypatch.setattr(napari_dlc_io, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
 
-    header = DLCHeaderModel(fake_keypoints.columns)
+    header = DLCHeaderModel(columns=fake_keypoints.columns)
     n_rows = len(fake_keypoints)
 
     from itertools import cycle, islice, product

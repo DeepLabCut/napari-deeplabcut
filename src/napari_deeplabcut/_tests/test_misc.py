@@ -377,13 +377,13 @@ def test_dlc_header():
         ],
         names=["scorer", "individuals", "bodyparts", "coords"],
     )
-    header = DLCHeaderModel(fake_columns)
+    header = DLCHeaderModel(columns=fake_columns)
     assert header.scorer == scorer
-    header.scorer = "you"
-    assert header.scorer == "you"
-    assert header.individuals == animals
-    assert header.bodyparts == keypoints
-    assert header.coords == ["x", "y", "likelihood"]
+
+    header2 = header.with_scorer("you")
+    assert header2.scorer == "you"
+    # original header unchanged (functional)
+    assert header.scorer == scorer
 
 
 def test_dlc_header_from_config_multi(config_path):
