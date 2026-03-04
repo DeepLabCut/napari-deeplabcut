@@ -18,9 +18,14 @@ from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
 
 def test_guess_continuous():
-    # Hack: guess_continuous overrides napari's default logic to avoid misclassifying categorical properties
-    assert _widgets.guess_continuous(np.array([0.0]))  # Floats → continuous
-    assert not _widgets.guess_continuous(np.array(list("abc")))  # Strings → categorical
+    import numpy as np
+    from napari.layers.utils import color_manager
+
+    # Patch is applied during KeypointControls init (or import-time depending on your setup)
+    # Expect float -> continuous
+    assert color_manager.guess_continuous(np.array([0.0]))
+    # Expect object/categorical -> NOT continuous
+    assert not color_manager.guess_continuous(np.array(["a", "b"], dtype=object))
 
 
 @pytest.mark.usefixtures("qtbot")
@@ -458,10 +463,17 @@ def test_widget_map_keypoints_writes_to_config(viewer, qtbot, points, config_pat
     points.metadata["project"] = str(project_dir)
     points.metadata["tables"] = {"superanimal_quadruped": {}}
 
-    class DummyHeader:
-        bodyparts = ["bp1", "bp2"]
+    import pandas as pd
 
-    points.metadata["header"] = DummyHeader()
+    from napari_deeplabcut.config.models import DLCHeaderModel
+
+    cols = pd.MultiIndex.from_product(
+        [["S"], [""], ["bp1", "bp2"], ["x", "y"]],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
+    points.metadata["header"] = DLCHeaderModel(
+        columns=cols,
+    )
 
     # Ensure config file exists (some setups create it already; this is safe)
     Path(config_path).write_text("{}", encoding="utf-8")
