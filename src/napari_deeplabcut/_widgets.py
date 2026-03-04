@@ -43,7 +43,12 @@ from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut._writer import _write_image
 from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
-from napari_deeplabcut.core.layers import is_machine_layer
+from napari_deeplabcut.core.layers import (
+    find_last_layer,
+    get_first_points_layer,
+    get_points_layer_with_tables,
+    is_machine_layer,
+)
 from napari_deeplabcut.core.metadata import (
     infer_image_root,
     parse_points_metadata,
@@ -583,12 +588,7 @@ class KeypointControls(QWidget):
         return QSettings()
 
     def load_superkeypoints_diagram(self):
-        points_layer = None
-        for layer in self.viewer.layers:
-            if isinstance(layer, Points):
-                points_layer = layer
-                break
-
+        points_layer = get_first_points_layer(self.viewer)
         if points_layer is None:
             return
 
@@ -623,12 +623,7 @@ class KeypointControls(QWidget):
         # - Assumes _load_superkeypoints and _load_config succeed
         #   and return well-formed data; I/O errors are not handled.
         # - Silently ignores keypoints that have no nearest neighbor in the superkeypoint set (no user feedback).
-        points_layer = None
-        for layer in self.viewer.layers:
-            if isinstance(layer, Points) and layer.metadata.get("tables"):
-                points_layer = layer
-                break
-
+        points_layer = get_points_layer_with_tables(self.viewer)
         if points_layer is None or not np.any(points_layer.data):
             return
 
@@ -883,11 +878,8 @@ class KeypointControls(QWidget):
     def _extract_single_frame(self, *args):
         image_layer = None
         points_layer = None
-        for layer in self.viewer.layers:
-            if isinstance(layer, Image):
-                image_layer = layer
-            elif isinstance(layer, Points):
-                points_layer = layer
+        image_layer = find_last_layer(self.viewer, Image)
+        points_layer = find_last_layer(self.viewer, Points)
         if image_layer is not None:
             ind = self.viewer.dims.current_step[0]
             frame = image_layer.data[ind]
