@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -177,12 +176,15 @@ class IOProvenance(BaseModel):
     @field_validator("project_root")
     @classmethod
     def _validate_project_root(cls, v: str | None) -> str | None:
-        """Optionally validate that project_root is a directory path."""
+        """Store project_root without requiring the path to exist.
+
+        Existence and type (file vs directory) checks are intentionally deferred
+        to path resolution time to keep serialized provenance portable across
+        machines and project locations.
+        """
         if v is None:
             return None
-        if not Path(v).exists() or not Path(v).is_dir():
-            raise ValueError(f"project_root must be a directory path, got: {v!r}")
-        return v
+        return str(v)
 
 
 class ImageMetadata(BaseModel):

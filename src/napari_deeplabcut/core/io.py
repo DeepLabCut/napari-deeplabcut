@@ -192,7 +192,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
         meta = metadata.setdefault("metadata", {})
         # Keep legacy source fields too
         attach_source_and_io(metadata, file)
-        # Override kind in io with explicit value
+        # Override kind in io with explicit kind arg
         if isinstance(meta.get("io"), dict):
             meta["io"]["kind"] = kind  # stored as actual enum, not value
     else:
