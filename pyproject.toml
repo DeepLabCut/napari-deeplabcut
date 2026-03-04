@@ -1,7 +1,89 @@
 [build-system]
-requires = ["setuptools", "wheel", "setuptools_scm"]
+requires = [
+  "setuptools>=64",
+  "wheel",
+  "setuptools_scm[toml]>=7"
+]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "napari-deeplabcut"
+description = "napari + DeepLabCut annotation tool"
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.10"
+license = { text = "LGPL-3.0" }
+
+authors = [
+  { name = "Team DeepLabCut, Lead by Jessy Lauer", email = "admin@deeplabcut.org" }
+]
+
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Framework :: napari",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Image Processing",
+  "Topic :: Scientific/Engineering :: Visualization",
+]
+
+dependencies = [
+  "dask-image",
+  "matplotlib>=3.3",
+  "napari==0.6.6",
+  "natsort",
+  "numpy>=1.18.5,<2.0.0",
+  "opencv-python-headless",
+  "pandas",
+  "pyside6>=6.4.2",
+  "pyyaml",
+  "qtpy>=2.4",
+  "scikit-image",
+  "scipy",
+  "tables",
+]
+
+# You are using setuptools-scm -> version is derived from git tags
+dynamic = ["version"]
+
+[project.urls]
+"Bug Tracker" = "https://github.com/DeepLabCut/napari-deeplabcut/issues"
+Documentation = "https://github.com/DeepLabCut/napari-deeplabcut#README.md"
+"Source Code" = "https://github.com/DeepLabCut/napari-deeplabcut"
+"User Support" = "https://github.com/DeepLabCut/napari-deeplabcut/issues"
+
+[project.entry-points."napari.manifest"]
+napari-deeplabcut = "napari_deeplabcut:napari.yaml"
+
+[project.optional-dependencies]
+testing = [
+  "Pillow",
+  "pytest",
+  "pytest-cov",
+  "pytest-qt",
+  "tox",
+]
+
+# ----------------------------
+# setuptools configuration
+# ----------------------------
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+napari_deeplabcut = ["napari.yaml"]
+
+# ----------------------------
+# existing tool configuration
+# ----------------------------
 [tool.ruff]
 lint.select = ["E", "F", "B", "I", "UP"]
 lint.ignore = ["E741"]
