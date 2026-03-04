@@ -4,8 +4,6 @@
 import hashlib
 import logging
 import os
-from collections import defaultdict, namedtuple
-from collections.abc import Sequence
 from copy import deepcopy
 from datetime import datetime
 from functools import cached_property, partial
@@ -14,25 +12,17 @@ from pathlib import Path
 from types import MethodType
 
 import matplotlib.pyplot as plt
-import matplotlib.style as mplstyle
-import napari
 import numpy as np
 import pandas as pd
-from matplotlib.backends.backend_qtagg import FigureCanvas, NavigationToolbar2QT
 from napari.layers import Image, Points, Shapes, Tracks
-from napari.layers.points._points_key_bindings import register_points_action
-from napari.layers.utils import color_manager
-from napari.layers.utils.layer_utils import _features_to_properties
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from qtpy.QtCore import QPoint, QSettings, QSize, Qt, QTimer, Signal
-from qtpy.QtGui import QAction, QCursor, QIcon
-from qtpy.QtSvgWidgets import QSvgWidget
+from pydantic import ValidationError
+from qtpy.QtCore import QSettings, Qt, QTimer
+from qtpy.QtGui import QAction
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
-    QComboBox,
-    QDialog,
     QFileDialog,
     QGridLayout,
     QGroupBox,
@@ -42,9 +32,6 @@ from qtpy.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
-    QScrollArea,
-    QSizePolicy,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -52,13 +39,22 @@ from qtpy.QtWidgets import (
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut._writer import _write_image
-from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata, IOProvenance, PointsMetadata
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
-from napari_deeplabcut.core.layers import is_machine_layer
+from napari_deeplabcut.core.layers import (
+    find_last_layer,
+    get_first_points_layer,
+    get_points_layer_with_tables,
+    is_machine_layer,
+)
 from napari_deeplabcut.core.metadata import (
+    MergePolicy,
     infer_image_root,
+    migrate_points_layer_metadata,
     parse_points_metadata,
+    read_points_meta,
     sync_points_from_image,
+    write_points_meta,
 )
 from napari_deeplabcut.core.paths import (
     PathMatchPolicy,
@@ -70,142 +66,24 @@ from napari_deeplabcut.misc import (
     build_color_cycles,
     encode_categories,
 )
-
-Tip = namedtuple("Tip", ["msg", "pos"])
+from napari_deeplabcut.napari_compat import (
+    apply_points_layer_ui_tweaks,
+    install_add_wrapper,
+    install_paste_patch,
+    patch_color_manager_guess_continuous,
+    register_points_action,
+)
+from napari_deeplabcut.napari_compat.points_layer import make_paste_data
+from napari_deeplabcut.ui.colors_and_dropdown import (
+    ColorSchemeDisplay,
+    DropdownMenu,
+    KeypointsDropdownMenu,
+)
+from napari_deeplabcut.ui.dialogs import Shortcuts, Tutorial
+from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
-# logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp
-
-
-class Shortcuts(QDialog):
-    """Opens a window displaying available napari-deeplabcut shortcuts"""
-
-    def __init__(self, parent):
-        super().__init__(parent=parent)
-        self.setParent(parent)
-        self.setWindowTitle("Shortcuts")
-
-        image_path = str(Path(__file__).parent / "assets" / "napari_shortcuts.svg")
-
-        vlayout = QVBoxLayout()
-        svg_widget = QSvgWidget(image_path)
-        svg_widget.setStyleSheet("background-color: white;")
-        vlayout.addWidget(svg_widget)
-        self.setLayout(vlayout)
-
-
-class Tutorial(QDialog):
-    def __init__(self, parent):
-        super().__init__(parent=parent)
-        self.setParent(parent)
-        self.setWindowTitle("Tutorial")
-        self.setModal(True)
-        self.setStyleSheet("background:#361AE5")
-        self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setWindowOpacity(0.95)
-        self.setWindowFlags(self.windowFlags() | Qt.WindowCloseButtonHint)
-
-        self._current_tip = -1
-        self._tips = [
-            Tip(
-                "Load a folder of annotated data\n"
-                "(and optionally a config file if labeling from scratch)\n"
-                "from the menu File > Open File or Open Folder.\n"
-                "Alternatively, files and folders of images can be dragged\n"
-                "and dropped onto the main window.",
-                (0.35, 0.15),
-            ),
-            Tip(
-                "Data layers will be listed at the bottom left;\n"
-                "their visibility can be toggled by clicking on the small eye icon.",
-                (0.1, 0.65),
-            ),
-            Tip(
-                "Corresponding layer controls can be found at the top left.\n"
-                "Switch between labeling and selection mode using the numeric keys 2 and 3,\n"
-                "or clicking on the + or -> icons.",
-                (0.1, 0.2),
-            ),
-            Tip(
-                "There are three keypoint labeling modes:\nthe key M can be used to cycle between them.",
-                (0.65, 0.05),
-            ),
-            Tip(
-                "When done labeling, save your data by selecting the Points layer\n"
-                "and hitting Ctrl+S (or File > Save Selected Layer(s)...).",
-                (0.1, 0.65),
-            ),
-            Tip(
-                "Read more at <a href='https://github.com/DeepLabCut/napari-deeplabcut#usage'>napari-deeplabcut</a>",
-                (0.4, 0.4),
-            ),
-        ]
-
-        vlayout = QVBoxLayout()
-        self.message = QLabel("💡\n\nLet's get started with a quick walkthrough!")
-        self.message.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
-        self.message.setOpenExternalLinks(True)
-        vlayout.addWidget(self.message)
-
-        nav_layout = QHBoxLayout()
-        self.prev_button = QPushButton("<")
-        self.prev_button.clicked.connect(self.prev_tip)
-        nav_layout.addWidget(self.prev_button)
-        self.next_button = QPushButton(">")
-        self.next_button.clicked.connect(self.next_tip)
-        nav_layout.addWidget(self.next_button)
-
-        self.update_nav_buttons()
-
-        hlayout = QHBoxLayout()
-        self.count = QLabel("")
-        hlayout.addWidget(self.count)
-        hlayout.addLayout(nav_layout)
-        vlayout.addLayout(hlayout)
-        self.setLayout(vlayout)
-
-    def prev_tip(self):
-        self._current_tip = (self._current_tip - 1) % len(self._tips)
-        self.update_tip()
-        self.update_nav_buttons()
-
-    def next_tip(self):
-        self._current_tip = (self._current_tip + 1) % len(self._tips)
-        self.update_tip()
-        self.update_nav_buttons()
-
-    def update_tip(self):
-        tip = self._tips[self._current_tip]
-        msg = tip.msg
-        if self._current_tip < len(self._tips) - 1:  # No emoji in the last tip otherwise the hyperlink breaks
-            msg = "💡\n\n" + msg
-        self.message.setText(msg)
-        self.count.setText(f"Tip {self._current_tip + 1}|{len(self._tips)}")
-        self.adjustSize()
-        xrel, yrel = tip.pos
-        geom = self.parent().geometry()
-        p = QPoint(
-            int(geom.left() + geom.width() * xrel),
-            int(geom.top() + geom.height() * yrel),
-        )
-        self.move(p)
-
-    def update_nav_buttons(self):
-        self.prev_button.setEnabled(self._current_tip > 0)
-        self.next_button.setEnabled(self._current_tip < len(self._tips) - 1)
-
-
-# Hack to avoid napari's silly variable type guess,
-# where property is understood as continuous if
-# there are more than 16 unique categories...
-def guess_continuous(property):
-    if issubclass(property.dtype.type, np.floating):
-        return True
-    else:
-        return False
-
-
-color_manager.guess_continuous = guess_continuous
+logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp
 
 
 def _safe_folder_anchor_from_points_layer(layer: Points) -> str | None:
@@ -276,278 +154,12 @@ def _prompt_for_scorer(parent_widget, *, anchor: str, suggested: str) -> str | N
     return scorer
 
 
-# Class taken from https://github.com/matplotlib/napari-matplotlib/blob/53aa5ec95c1f3901e21dedce8347d3f95efe1f79/src/napari_matplotlib/base.py#L309
-class NapariNavigationToolbar(NavigationToolbar2QT):
-    """Custom Toolbar style for Napari."""
-
-    def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-        super().__init__(*args, **kwargs)
-        self.setIconSize(QSize(28, 28))
-
-    def _update_buttons_checked(self) -> None:
-        """Update toggle tool icons when selected/unselected."""
-        super()._update_buttons_checked()
-        icon_dir = self.parentWidget()._get_path_to_icon()
-
-        # changes pan/zoom icons depending on state (checked or not)
-        if "pan" in self._actions:
-            if self._actions["pan"].isChecked():
-                self._actions["pan"].setIcon(QIcon(os.path.join(icon_dir, "Pan_checked.png")))
-            else:
-                self._actions["pan"].setIcon(QIcon(os.path.join(icon_dir, "Pan.png")))
-        if "zoom" in self._actions:
-            if self._actions["zoom"].isChecked():
-                self._actions["zoom"].setIcon(QIcon(os.path.join(icon_dir, "Zoom_checked.png")))
-            else:
-                self._actions["zoom"].setIcon(QIcon(os.path.join(icon_dir, "Zoom.png")))
-
-
-class KeypointMatplotlibCanvas(QWidget):
-    """
-    Class containing the trajectory plot using matplotlib.
-    Shown if selected at the bottom of the screen
-    Uses keypoints from a specified range of frames to plot them on a t-y axis.
-    """
-
-    # FIXME : y axis should be reversed due to napari using top-left as origin
-    def __init__(self, napari_viewer, parent=None):
-        super().__init__(parent=parent)
-
-        self.viewer = napari_viewer
-        with mplstyle.context(self.mpl_style_sheet_path):
-            self.canvas = FigureCanvas()
-            self.canvas.figure.set_size_inches(4, 2, forward=True)
-            self.canvas.figure.set_layout_engine("constrained")
-            self.ax = self.canvas.figure.subplots()
-        self.toolbar = NapariNavigationToolbar(self.canvas, parent=self)
-        self._replace_toolbar_icons()
-        self.canvas.mpl_connect("button_press_event", self.on_doubleclick)
-        self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
-        self.ax.set_xlabel("Frame")
-        self.ax.set_ylabel("Y position")
-        # Add a slot to specify the range of frames to plot
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.setMinimum(50)
-        self.slider.setMaximum(10000)
-        self.slider.setValue(50)
-        self.slider.setToolTip("Adjust the range of frames to display around the current frame")
-        self.slider.setTickPosition(QSlider.TicksBelow)
-        self.slider.setTickInterval(50)
-        self.slider_value = QLabel(str(self.slider.value()))
-        self._window = self.slider.value()
-        # Connect slider to window setter
-        self.slider.valueChanged.connect(self.set_window)
-
-        layout = QVBoxLayout()
-        layout.addWidget(self.canvas)
-        layout.addWidget(self.toolbar)
-        layout2 = QHBoxLayout()
-        layout2.addWidget(self.slider)
-        layout2.addWidget(self.slider_value)
-
-        layout.addLayout(layout2)
-        self.setLayout(layout)
-
-        self.frames = []
-        self.keypoints = []
-        self.df = None
-        # Make widget larger
-        self.setMinimumHeight(300)
-        # connect sliders to update plot
-        self.viewer.dims.events.current_step.connect(self.update_plot_range)
-
-        # Run update plot range once to initialize the plot
-        self._n = 0
-        self.update_plot_range(Event(type_name="", value=[self.viewer.dims.current_step[0]]))
-
-        self.viewer.layers.events.inserted.connect(self._load_dataframe)
-        self.viewer.dims.events.range.connect(self._update_slider_max)
-        self._lines = {}
-
-    def on_doubleclick(self, event):
-        if event.dblclick:
-            show = list(self._lines.values())[0][0].get_visible()
-            for lines in self._lines.values():
-                for l in lines:
-                    l.set_visible(not show)
-            self._refresh_canvas(value=self._n)
-
-    def _napari_theme_has_light_bg(self) -> bool:
-        """
-        Does this theme have a light background?
-
-        Returns
-        -------
-        bool
-            True if theme's background colour has hsl lighter than 50%, False if darker.
-        """
-        theme = napari.utils.theme.get_theme(
-            self.viewer.theme,
-            # as_dict=False # deprecated as of napari 0.6.6
-        )
-        _, _, bg_lightness = theme.background.as_hsl_tuple()
-        return bg_lightness > 0.5
-
-    @property
-    def mpl_style_sheet_path(self) -> Path:
-        """
-        Path to the set Matplotlib style sheet.
-        """
-        if self._napari_theme_has_light_bg():
-            return Path(__file__).parent / "styles" / "light.mplstyle"
-        else:
-            return Path(__file__).parent / "styles" / "dark.mplstyle"
-
-    def _get_path_to_icon(self) -> Path:
-        """
-        Get the icons directory (which is theme-dependent).
-
-        Icons modified from
-        https://github.com/matplotlib/matplotlib/tree/main/lib/matplotlib/mpl-data/images
-        """
-        icon_root = Path(__file__).parent / "assets"
-        if self._napari_theme_has_light_bg():
-            return icon_root / "black"
-        else:
-            return icon_root / "white"
-
-    def _replace_toolbar_icons(self) -> None:
-        """
-        Modifies toolbar icons to match the napari theme, and add some tooltips.
-        """
-        icon_dir = self._get_path_to_icon()
-        for action in self.toolbar.actions():
-            text = action.text()
-            if text == "Pan":
-                action.setToolTip(
-                    "Pan/Zoom: Left button pans; Right button zooms; Click once to activate; Click again to deactivate"
-                )
-            if text == "Zoom":
-                action.setToolTip("Zoom to rectangle; Click once to activate; Click again to deactivate")
-            if len(text) > 0:  # i.e. not a separator item
-                icon_path = os.path.join(icon_dir, text + ".png")
-                action.setIcon(QIcon(icon_path))
-
-    def _load_dataframe(self):
-        points_layer = None
-        for layer in self.viewer.layers:
-            if isinstance(layer, Points):
-                points_layer = layer
-                break
-
-        if points_layer is None or ~np.any(points_layer.data):
-            return
-
-        self.show()  # Silly hack so the window does not hang the first time it is shown
-        self.hide()
-
-        try:
-            self.df = io.form_df(
-                points_layer.data,
-                layer_metadata=points_layer.metadata,
-                layer_properties=points_layer.properties,
-            )
-        except Exception as e:
-            logger.error("Failed to form DataFrame from points layer: %r", e, exc_info=True)
-            return
-        for keypoint in self.df.columns.get_level_values("bodyparts").unique():
-            y = self.df.xs((keypoint, "y"), axis=1, level=["bodyparts", "coords"])
-            x = np.arange(len(y))
-            color = points_layer.metadata["face_color_cycles"]["label"][keypoint]
-            lines = self.ax.plot(x, y, color=color, label=keypoint)
-            self._lines[keypoint] = lines
-
-        self._refresh_canvas(value=self._n)
-
-    def _toggle_line_visibility(self, keypoint):
-        for artist in self._lines[keypoint]:
-            artist.set_visible(not artist.get_visible())
-        self._refresh_canvas(value=self._n)
-
-    def _refresh_canvas(self, value):
-        start = max(0, value - self._window // 2)
-        end = min(value + self._window // 2, len(self.df))
-
-        self.ax.set_xlim(start, end)
-        self.vline.set_xdata([value])
-        self.canvas.draw()
-
-    def set_window(self, value):
-        self._window = value
-        self.slider_value.setText(str(value))
-        self.update_plot_range(Event(type_name="", value=[self._n]))
-
-    def update_plot_range(self, event):
-        value = event.value[0]
-        self._n = value
-
-        if self.df is None:
-            return
-
-        self._refresh_canvas(value)
-
-    def _update_slider_max(self, event):
-        """Update the slider's maximum value based on the number of frames in the data."""
-        for layer in self.viewer.layers:
-            if isinstance(layer, Image) and len(layer.data.shape) >= 3:
-                n_frames = layer.data.shape[0]
-                # if less than 50 frames, set max to min to avoid slider issues
-                if n_frames < self.slider.minimum():
-                    self.slider.setMaximum(self.slider.minimum())
-                else:
-                    self.slider.setMaximum(n_frames - 1)
-                break
-
-
-# def _safe_enable_cycle_mode(points_layer: Points) -> bool:
-#     """
-#     Return True if we enabled cycle mode safely, False if we did not.
-#     Avoid napari categorical colormap KeyError when current property is NaN
-#     or layer is empty.
-#     """
-#     # 1) Empty layer => never enable cycle mode
-#     try:
-#         if points_layer.data is None or len(points_layer.data) == 0:
-#             return False
-#     except Exception:
-#         return False
-
-#     # 2) Determine which property we intend to cycle on.
-#     # NOTE: points_layer.face_color is often an RGBA array, not a property name.
-#     md = getattr(points_layer, "metadata", None) or {}
-#     prop_name = md.get("face_color") or "label"
-#     if not isinstance(prop_name, str) or not prop_name:
-#         prop_name = "label"
-
-#     props = getattr(points_layer, "properties", {}) or {}
-#     values = props.get(prop_name)
-
-#     # If missing properties or empty list => unsafe
-#     if values is None or len(values) == 0:
-#         return False
-
-#     # 3) current property value must not be NaN
-#     try:
-#         v0 = values[0]
-#     except Exception:
-#         return False
-
-#     if _is_nan_like(v0):
-#         return False
-
-#     # 4) Ensure colormap cycles exist for this prop
-#     cycles = md.get("face_color_cycles") or {}
-#     if prop_name not in cycles:
-#         return False
-
-#     # OK: safe to enable cycle
-#     points_layer.face_color_mode = "cycle"
-#     return True
-
-
 class KeypointControls(QWidget):
     def __init__(self, napari_viewer):
         super().__init__()
+        # Monkey-patch napari continuous variable type guess
+        patch_color_manager_guess_continuous()
+
         self._is_saved = False
 
         self.viewer = napari_viewer
@@ -720,7 +332,10 @@ class KeypointControls(QWidget):
 
         keypoints_menu = self._menus[0].menus["label"]
         current_keypoint_set = {keypoints_menu.itemText(i) for i in range(keypoints_menu.count())}
-        new_keypoint_set = set(new_metadata["header"].bodyparts)
+        hdr = self._get_header_model_from_metadata(new_metadata)
+        if hdr is None:
+            return False
+        new_keypoint_set = set(hdr.bodyparts)
         diff = new_keypoint_set.difference(current_keypoint_set)
 
         if diff:
@@ -730,7 +345,10 @@ class KeypointControls(QWidget):
 
             self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
             for _layer, store in self._stores.items():
-                _layer.metadata["header"] = new_metadata["header"]
+                pts = read_points_meta(_layer, migrate_legacy=True, drop_controls=True, drop_header=False)
+                if not hasattr(pts, "errors"):
+                    updated = pts.model_copy(update={"header": hdr})
+                    write_points_meta(_layer, updated, merge_policy=MergePolicy.MERGE, fields={"header"})
                 store.layer = _layer
 
             for menu in self._menus:
@@ -749,12 +367,42 @@ class KeypointControls(QWidget):
         self._update_color_scheme()
         return True
 
+    def _get_header_model_from_metadata(self, md: dict) -> DLCHeaderModel | None:
+        """Return DLCHeaderModel regardless of whether md['header'] is a model, dict payload, or MultiIndex."""
+        if not isinstance(md, dict):
+            return None
+        hdr = md.get("header", None)
+        if hdr is None:
+            return None
+
+        if isinstance(hdr, DLCHeaderModel):
+            logger.debug("Header is already a DLCHeaderModel instance.")
+            return hdr
+
+        if isinstance(hdr, dict):
+            try:
+                return DLCHeaderModel.model_validate(hdr)
+            except Exception:
+                return None
+
+        # fallback: allow MultiIndex / list-of-tuples / Index inputs
+        try:
+            return DLCHeaderModel(columns=hdr)
+        except Exception:
+            return None
+
     def _wire_points_layer(self, layer: Points) -> keypoints.KeypointStore | None:
         if not self._validate_header(layer):
             return None
 
         # ensure presence of IO metadata for saving & routing
-        self._ensure_io_from_source_h5(layer.metadata)
+        mig = migrate_points_layer_metadata(layer)
+        if hasattr(mig, "errors"):
+            logger.warning(
+                "Points metadata validation failed during wiring for layer=%r: %s",
+                getattr(layer, "name", layer),
+                mig,
+            )
 
         store = keypoints.KeypointStore(self.viewer, layer)
         self._stores[layer] = store
@@ -769,19 +417,18 @@ class KeypointControls(QWidget):
         if root := layer.metadata.get("root"):
             update_save_history(root)
 
-        layer.metadata["controls"] = self
+        store._get_label_mode = lambda: self._label_mode
         layer.text.visible = False
 
         # key bindings
         layer.bind_key("M", self.cycle_through_label_modes)
         layer.bind_key("F", self.cycle_through_color_modes)
 
-        # patch paste + add
-        func = partial(self._paste_data, store=store)
-        layer._paste_data = MethodType(func, layer)
+        paste_func = make_paste_data(self, store=store)
+        install_paste_patch(layer, paste_func=paste_func)
 
-        # IMPORTANT: wrap add to schedule recolor (see Part 2 below)
-        self._install_add_wrapper(layer, store)
+        add_impl = MethodType(keypoints._add, store)  # bind store to add implementation
+        install_add_wrapper(layer, add_impl=add_impl, schedule_recolor=self._schedule_recolor)
 
         # store events / navigation
         layer.events.add(query_next_frame=Event)
@@ -821,38 +468,6 @@ class KeypointControls(QWidget):
 
         return store
 
-    def _apply_points_layer_ui_tweaks(self, layer: Points) -> None:
-        try:
-            controls = self.viewer.window.qt_viewer.dockLayerControls
-            point_controls = controls.widget().widgets[layer]
-        except Exception:
-            return
-
-        # hide face/border editors/out-of-slice toggle (guarded)
-        for attr_path in [
-            ("_face_color_control", "face_color_edit"),
-            ("_face_color_control", "face_color_label"),
-            ("_border_color_control", "border_color_edit"),
-            ("_border_color_control", "border_color_edit_label"),
-            ("_out_slice_checkbox_control", "out_of_slice_checkbox"),
-            ("_out_slice_checkbox_control", "out_of_slice_checkbox_label"),
-        ]:
-            try:
-                obj = getattr(point_controls, attr_path[0])
-                widget = getattr(obj, attr_path[1])
-                widget.hide()
-            except Exception:
-                pass
-
-        # add colormap selector
-        try:
-            colormap_selector = DropdownMenu(plt.colormaps, self)
-            colormap_selector.update_to(layer.metadata.get("colormap_name", "viridis"))
-            colormap_selector.currentTextChanged.connect(self._update_colormap)
-            point_controls.layout().addRow("colormap", colormap_selector)
-        except Exception:
-            pass
-
     def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
         if not self._validate_header(layer):
             return
@@ -867,7 +482,13 @@ class KeypointControls(QWidget):
         if store is None:
             return
 
-        self._apply_points_layer_ui_tweaks(layer)
+        selector = apply_points_layer_ui_tweaks(self.viewer, layer, dropdown_cls=DropdownMenu, plt_module=plt)
+        if selector is not None:
+            try:
+                selector.currentTextChanged.connect(self._update_colormap)
+            except Exception:
+                pass
+
         self._update_color_scheme()
 
     def _adopt_existing_layers(self) -> None:
@@ -904,8 +525,8 @@ class KeypointControls(QWidget):
             self._remap_frame_indices(layer)
 
     def _validate_header(self, layer) -> bool:
-        hdr = (layer.metadata or {}).get("header")
-        if hdr is None or not hasattr(hdr, "form_individual_bodypart_pairs"):
+        res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
+        if isinstance(res, ValidationError) or res.header is None:
             self.viewer.status = (
                 "This Points layer does not look like a DLC keypoints layer. Missing a valid DLC header."
             )
@@ -976,12 +597,7 @@ class KeypointControls(QWidget):
         return QSettings()
 
     def load_superkeypoints_diagram(self):
-        points_layer = None
-        for layer in self.viewer.layers:
-            if isinstance(layer, Points):
-                points_layer = layer
-                break
-
+        points_layer = get_first_points_layer(self.viewer)
         if points_layer is None:
             return
 
@@ -1016,12 +632,7 @@ class KeypointControls(QWidget):
         # - Assumes _load_superkeypoints and _load_config succeed
         #   and return well-formed data; I/O errors are not handled.
         # - Silently ignores keypoints that have no nearest neighbor in the superkeypoint set (no user feedback).
-        points_layer = None
-        for layer in self.viewer.layers:
-            if isinstance(layer, Points) and layer.metadata.get("tables"):
-                points_layer = layer
-                break
-
+        points_layer = get_points_layer_with_tables(self.viewer)
         if points_layer is None or not np.any(points_layer.data):
             return
 
@@ -1037,9 +648,13 @@ class KeypointControls(QWidget):
         config_path = str(Path(project_path) / "config.yaml")
         cfg = io.load_config(config_path)
         conversion_tables = cfg.get("SuperAnimalConversionTables", {})
+        hdr = self._get_header_model_from_metadata(points_layer.metadata or {})
+        if hdr is None:
+            return
+        bdprts_map = map(str, hdr.bodyparts)
         conversion_tables[super_animal] = dict(
             zip(
-                map(str, points_layer.metadata["header"].bodyparts),  # Needed to fix an ugly yaml RepresenterError
+                bdprts_map,  # Needed to fix an ugly yaml RepresenterError
                 map(str, list(np.array(list(superkpts_dict))[neighbors[found]])),
                 strict=False,
             )
@@ -1062,48 +677,6 @@ class KeypointControls(QWidget):
     # ------------------------------------------------------------------
     # Metadata helpers (authoritative models + napari-friendly dict sync)
     # ------------------------------------------------------------------
-    @staticmethod
-    def _ensure_io_from_source_h5(md: dict) -> None:
-        """
-        Migration helper: if io is missing but source_h5 exists, build io.
-        This keeps provenance stable even for legacy sessions/layers.
-        """
-        if not isinstance(md, dict):
-            return
-
-        # If io already present, never overwrite it
-        if md.get("io"):
-            return
-
-        src = md.get("source_h5")
-        if not isinstance(src, str) or not src:
-            return
-
-        try:
-            p = Path(src).expanduser().resolve()
-        except Exception:
-            p = Path(src)
-
-        # Anchor defaults to file parent (works for shared labeled-data folders)
-        anchor = str(p.parent)
-
-        # Infer kind from filename (NOT from layer name)
-        low = p.name.lower()
-        kind = None
-        if low.startswith("collecteddata"):
-            kind = AnnotationKind.GT
-        elif low.startswith("machinelabels"):
-            kind = AnnotationKind.MACHINE
-
-        relposix = canonicalize_path(p, n=1)
-        io = IOProvenance(
-            project_root=anchor,
-            source_relpath_posix=relposix,
-            kind=kind,
-            dataset_key="keypoints",
-        )
-        md["io"] = io.model_dump(exclude_none=True)
-
     @staticmethod
     def _layer_source_path(layer) -> str | None:
         """Best-effort access to napari layer source path (may not exist)."""
@@ -1155,7 +728,10 @@ class KeypointControls(QWidget):
         """
         Ensure all Points layers have core fields required for saving.
 
-        PointsMetadata fields live at the top-level of layer.metadata.
+        Adapter-based flow:
+        - read validated points meta (visible failures)
+        - apply sync logic against authoritative self._image_meta
+        - write back validated dict via gateway
         """
         if self._image_meta is None:
             return
@@ -1167,33 +743,35 @@ class KeypointControls(QWidget):
             if ly.metadata is None:
                 ly.metadata = {}
 
-            md = ly.metadata  # mutate in place
-            existing_header = md.get("header", None)
+            # 1) Read + migrate legacy (io from source_h5, header coercion, etc.)
+            res = read_points_meta(ly, migrate_legacy=True, drop_controls=False, drop_header=False)
+            if hasattr(res, "errors"):  # ValidationError duck-typing
+                logger.warning(
+                    "Points metadata validation failed during sync for layer=%r: %s",
+                    getattr(ly, "name", ly),
+                    res,
+                )
+                continue
 
-            # Preserve header across any subsequent metadata operations
+            pts_model: PointsMetadata = res
 
-            # Ensure IO provenance exists (operate on nested meta, not top-level)
-            self._ensure_io_from_source_h5(md)
-
-            # Validate points metadata from nested payload (authoritative for routing)
-            try:
-                pts_model = PointsMetadata(**md)
-            except Exception:
-                pts_model = PointsMetadata()
-
+            # 2) Sync missing fields from image meta (pure model transform)
             synced = sync_points_from_image(self._image_meta, pts_model)
 
-            # Fill missing values in nested meta only; never clobber existing non-empty values
-            synced_dict = synced.model_dump(mode="python", exclude_none=True)
-            for key, value in synced_dict.items():
-                if key == "controls":
-                    continue
-                if md.get(key) in (None, "", []):
-                    md[key] = value
-
-            # Restore header if it was present before
-            if existing_header is not None and md.get("header") is None:
-                md["header"] = existing_header
+            # 3) Write back through gateway (fill missing only; never clobber)
+            out = write_points_meta(
+                ly,
+                synced,
+                merge_policy=MergePolicy.MERGE_MISSING,
+                migrate_legacy=True,
+                validate=True,
+            )
+            if hasattr(out, "errors"):
+                logger.warning(
+                    "Failed to write synced points metadata for layer=%r: %s",
+                    getattr(ly, "name", ly),
+                    out,
+                )
 
     def _show_color_scheme(self):
         show = self._view_scheme_cb.isChecked()
@@ -1276,11 +854,8 @@ class KeypointControls(QWidget):
     def _extract_single_frame(self, *args):
         image_layer = None
         points_layer = None
-        for layer in self.viewer.layers:
-            if isinstance(layer, Image):
-                image_layer = layer
-            elif isinstance(layer, Points):
-                points_layer = layer
+        image_layer = find_last_layer(self.viewer, Image)
+        points_layer = find_last_layer(self.viewer, Points)
         if image_layer is not None:
             ind = self.viewer.dims.current_step[0]
             frame = image_layer.data[ind]
@@ -1414,6 +989,7 @@ class KeypointControls(QWidget):
         if not cycles:
             return
 
+        # Empty layer: never enable cycle mode
         try:
             if layer.data is None or len(layer.data) == 0:
                 layer.face_color_mode = "direct"
@@ -1422,40 +998,59 @@ class KeypointControls(QWidget):
             layer.face_color_mode = "direct"
             return
 
-        # Choose prop:
-        # - Multi-animal defaults to id (restores test_toggle_face_color expectation)
-        # - Otherwise use global setting
-        prop = "label"
-        try:
-            header = md.get("header")
-            bool(header and getattr(header, "individuals", None) and header.individuals[0] != "")
-        except Exception:
-            pass
+        header = self._get_header_model_from_metadata(md)
 
-        prop = "label"
+        # Multi-animal heuristic (robust to missing header)
+        is_multi = False
+        try:
+            inds = getattr(header, "individuals", None)
+            is_multi = bool(inds and len(inds) > 0 and str(inds[0]) != "")
+        except Exception:
+            is_multi = False
+
+        # Default choice
+        prop = "id" if (is_multi and "id" in cycles) else "label"
+
+        # Respect user-selected mode where possible
         if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL) and "id" in cycles:
             prop = "id"
-        elif "label" not in cycles and "id" in cycles:
-            prop = "id"
+        elif self.color_mode == str(keypoints.ColorMode.BODYPART) and "label" in cycles:
+            prop = "label"
 
+        # Fallback if chosen prop missing in cycles
         if prop not in cycles:
-            layer.face_color_mode = "direct"
-            return
+            prop = "id" if "id" in cycles else "label"
 
-        # Ensure properties exist and are valid (no NaNs) for the prop we want to cycle on
+        # Ensure properties exist for chosen prop
         props = getattr(layer, "properties", {}) or {}
         values = props.get(prop, None)
+
         if values is None or len(values) == 0:
             layer.face_color_mode = "direct"
             return
 
-        # If any NaNs exist in the property array, do NOT enable cycle mode.
-        # This is the KeyError: nan crash path in napari categorical colormap.
+        # If id is selected but all are blank/None → fallback to label (common single-animal case)
+        if prop == "id":
+            try:
+                vals = np.asarray(values, dtype=object).ravel()
+                if all(v in ("", None) or misc._is_nan_value(v) for v in vals):
+                    if "label" in cycles and props.get("label", None) is not None:
+                        prop = "label"
+                        values = props.get(prop, None)
+            except Exception:
+                pass
+
+        # Still missing/empty after fallback
+        if values is None or len(values) == 0:
+            layer.face_color_mode = "direct"
+            return
+
+        # NaN guard: avoid napari categorical crash
         if misc._array_has_nan(values):
             layer.face_color_mode = "direct"
             return
 
-        # Ensure current_properties[prop] exists and is a real key (not NaN/None/"")
+        # Ensure current_properties[prop] is set to a valid key (not NaN/None/"")
         try:
             cp = layer.current_properties
             bad_current = (
@@ -1483,20 +1078,16 @@ class KeypointControls(QWidget):
                 cp[prop] = np.array([default_val], dtype=object)
                 layer.current_properties = cp
         except Exception:
-            # If we can't safely set current props, do not enable cycle mode
             layer.face_color_mode = "direct"
             return
 
-        # Apply cycle configuration
+        # Apply cycle configuration (guard napari validation)
         try:
             layer.face_color = prop
             layer.face_color_cycle = cycles[prop]
-
-            # This line triggers napari validation; guard it.
             layer.face_color_mode = "cycle"
             layer.events.face_color()
         except Exception:
-            # Last-resort: never crash insert; fall back to direct mode
             try:
                 layer.face_color_mode = "direct"
             except Exception:
@@ -1559,16 +1150,6 @@ class KeypointControls(QWidget):
             logger.exception("Failed to remap frame indices for layer %s", getattr(layer, "name", str(layer)))
             return
 
-    def _install_add_wrapper(self, layer: Points, store) -> None:
-        orig_add = MethodType(keypoints._add, store)
-
-        def add_and_recolor(this, *args, **kwargs):
-            res = orig_add(*args, **kwargs)
-            self._schedule_recolor(this)
-            return res
-
-        layer.add = MethodType(add_and_recolor, layer)
-
     def on_insert(self, event):
         layer = event.source[-1]
         if isinstance(layer, Image):
@@ -1606,145 +1187,80 @@ class KeypointControls(QWidget):
             self._show_traj_plot_cb.setChecked(False)
             self._trails = None
 
-    def _paste_data(self, store):
-        """Paste only currently unannotated data."""
-        features = self._clipboard.pop("features", None)
-        if features is None:
-            return
-
-        unannotated = [
-            keypoints.Keypoint(label, id_) not in store.annotated_keypoints
-            for label, id_ in zip(features["label"], features["id"], strict=False)
-        ]
-        if not any(unannotated):
-            return
-
-        new_features = features.iloc[unannotated]
-        indices_ = self._clipboard.pop("indices")
-        text_ = self._clipboard.pop("text")
-        self._clipboard = {k: v[unannotated] for k, v in self._clipboard.items()}
-        self._clipboard["features"] = new_features
-        self._clipboard["indices"] = indices_
-        if text_ is not None:
-            new_text = {
-                "string": text_["string"][unannotated],
-                "color": text_["color"],
-            }
-            self._clipboard["text"] = new_text
-
-        npoints = len(self._view_data)
-        totpoints = len(self.data)
-
-        if len(self._clipboard.keys()) > 0:
-            not_disp = self._slice_input.not_displayed
-            data = deepcopy(self._clipboard["data"])
-            offset = [self._slice_indices[i] - self._clipboard["indices"][i] for i in not_disp]
-            data[:, not_disp] = data[:, not_disp] + np.array(offset)
-            self._data = np.append(self.data, data, axis=0)
-            self._shown = np.append(self.shown, deepcopy(self._clipboard["shown"]), axis=0)
-            self._size = np.append(self.size, deepcopy(self._clipboard["size"]), axis=0)
-            self._symbol = np.append(self.symbol, deepcopy(self._clipboard["symbol"]), axis=0)
-
-            self._feature_table.append(self._clipboard["features"])
-
-            self.text._paste(**self._clipboard["text"])
-
-            self._edge_width = np.append(
-                self.edge_width,
-                deepcopy(self._clipboard["edge_width"]),
-                axis=0,
-            )
-            self._edge._paste(
-                colors=self._clipboard["edge_color"],
-                properties=_features_to_properties(self._clipboard["features"]),
-            )
-            self._face._paste(
-                colors=self._clipboard["face_color"],
-                properties=_features_to_properties(self._clipboard["features"]),
-            )
-
-            self._selected_view = list(range(npoints, npoints + len(self._clipboard["data"])))
-            self._selected_data = set(range(totpoints, totpoints + len(self._clipboard["data"])))
-            self.refresh()
-
-            try:
-                self._schedule_recolor(store.layer)
-            except Exception:
-                pass
-
     def _ensure_promotion_save_target(self, layer: Points) -> bool:
         """Ensure a prediction/machine source layer has a GT save_target set.
 
         Returns True if save_target is set (or already existed), False if user cancels.
         """
-        md = layer.metadata or {}
-        self._ensure_io_from_source_h5(md)
-        pts = parse_points_metadata(md)
-        io = pts.io
+        # Only machine layers need promotion; non-machine layers can be saved as-is without a save_target
+        if not is_machine_layer(layer):
+            return True
+
+        # Best-effort migrate provenance (may fill io/save_target for legacy layers)
+        mig = migrate_points_layer_metadata(layer)
+        if hasattr(mig, "errors"):
+            logger.warning(
+                "Failed to migrate points layer metadata for layer=%r: %s",
+                getattr(layer, "name", layer),
+                mig,
+            )
+
+        res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
+        if isinstance(res, ValidationError):
+            logger.warning(
+                "Points metadata validation failed for layer=%r during save target check: %s",
+                getattr(layer, "name", layer),
+                res,
+            )
+            QMessageBox.warning(self, "Cannot save", "Layer metadata is invalid; see logs for details.")
+            return False
+
+        pts: PointsMetadata = res
+        io_meta = pts.io
         save_target = pts.save_target
 
-        # If save_target already set, nothing to do
+        # If this machine layer already has a promotion target, we're done
         if save_target is not None:
             return True
 
-        src_kind = getattr(io, "kind", None) if io is not None else None
-
-        is_machine = is_machine_layer(layer)
-
-        # Only machine layers need promotion-to-GT
-        if not is_machine:
+        # If io is missing or doesn't look like a machine source, don't block (fail open)
+        src_kind = getattr(io_meta, "kind", None) if io_meta is not None else None
+        if src_kind is not AnnotationKind.MACHINE:
             return True
 
-        if src_kind is not AnnotationKind.MACHINE:
-            return True  # GT sources can save normally
-
+        # ---- machine source + no save_target: require promotion target ----
         anchor = _safe_folder_anchor_from_points_layer(layer)
         if not anchor:
             QMessageBox.warning(self, "Cannot save", "Could not determine a folder anchor for saving.")
             return False
 
-        # 1) scorer from config.yaml if available
-        scorer = _find_config_scorer_nearby(anchor)
-
-        # 2) scorer from sidecar
-        if not scorer:
-            scorer = get_default_scorer(anchor)
-
-        # 3) prompt user if still missing
+        scorer = _find_config_scorer_nearby(anchor) or get_default_scorer(anchor)
         if not scorer:
             suggested = _suggest_human_placeholder(anchor)
             while True:
                 s = _prompt_for_scorer(self, anchor=anchor, suggested=suggested)
                 if s is None:
                     return False
-
                 if s.startswith("human_"):
                     choice = QMessageBox.question(
                         self,
                         "Generic scorer name",
                         "You entered a generic scorer name starting with 'human_'.\n\n"
                         "We strongly recommend using a real name or stable identifier.\n"
-                        "Using a generic scorer can cause confusion when merging datasets.\n\n"
                         "Do you want to keep this generic scorer anyway?",
                         QMessageBox.Yes | QMessageBox.No,
                     )
                     if choice == QMessageBox.No:
                         suggested = s
                         continue
-
                 scorer = s
                 break
-
-            # Persist to sidecar so we don't prompt again for this folder
             try:
                 set_default_scorer(anchor, scorer)
             except Exception:
                 logger.debug("Failed to persist default scorer to sidecar", exc_info=True)
 
-        # Compute deterministic GT target path (promotion)
         target_name = f"CollectedData_{scorer}.h5"
-
-        # Store save_target as IOProvenance
         st = IOProvenance(
             project_root=anchor,
             source_relpath_posix=target_name,
@@ -1753,9 +1269,21 @@ class KeypointControls(QWidget):
             scorer=scorer,
         )
 
-        md["save_target"] = st.model_dump(mode="python", exclude_none=True)
+        updated = pts.model_copy(update={"save_target": st})
+        out = write_points_meta(
+            layer,
+            updated,
+            merge_policy=MergePolicy.MERGE,
+            fields={"save_target"},
+            migrate_legacy=True,
+            validate=True,
+        )
 
-        layer.metadata.update(md)
+        if hasattr(out, "errors"):
+            logger.warning("Failed to write save_target for layer=%r: %s", getattr(layer, "name", layer), out)
+            QMessageBox.warning(self, "Cannot save", "Failed to write save target metadata; see logs for details.")
+            return False
+
         return True
 
     # Hack to save a KeyPoints layer without showing the Save dialog
@@ -1846,7 +1374,10 @@ class KeypointControls(QWidget):
                 continue
 
             layer.metadata["colormap_name"] = colormap_name
-            layer.metadata["face_color_cycles"] = build_color_cycles(layer.metadata["header"], colormap_name)
+            hdr = self._get_header_model_from_metadata(layer.metadata or {})
+            if hdr is None:
+                return
+            layer.metadata["face_color_cycles"] = build_color_cycles(hdr, colormap_name)
 
             self._apply_points_coloring_from_metadata(layer)
 
@@ -1902,17 +1433,19 @@ class KeypointControls(QWidget):
         self._update_color_scheme()
 
     def _is_multianimal(self, layer) -> bool:
-        is_multi = False
-        if layer is not None and isinstance(layer, Points):
-            try:
-                header = layer.metadata.get("header")
-                if header is not None:
-                    ids = header.individuals
-                    is_multi = len(ids) > 0 and ids[0] != ""
-            except AttributeError:
-                pass
+        if layer is None or not isinstance(layer, Points):
+            return False
 
-        return is_multi
+        md = layer.metadata or {}
+        hdr = self._get_header_model_from_metadata(md)
+        if hdr is None:
+            return False
+
+        try:
+            inds = hdr.individuals
+            return bool(inds and len(inds) > 0 and str(inds[0]) != "")
+        except Exception:
+            return False
 
     def _active_layer_is_multianimal(self) -> bool:
         """Returns: whether the active layer is a multi-animal points layer"""
@@ -1927,268 +1460,3 @@ class KeypointControls(QWidget):
 def toggle_edge_color(layer):
     # Trick to toggle between 0 and 2
     layer.border_width = np.bitwise_xor(layer.border_width, 2)
-
-
-class DropdownMenu(QComboBox):
-    def __init__(self, labels: Sequence[str], parent: QWidget | None = None):
-        super().__init__(parent)
-        self.update_items(labels)
-
-    def update_to(self, text: str):
-        index = self.findText(text)
-        if index >= 0:
-            self.setCurrentIndex(index)
-
-    def reset(self):
-        self.setCurrentIndex(0)
-
-    def update_items(self, items):
-        self.clear()
-        self.addItems(items)
-
-
-class KeypointsDropdownMenu(QWidget):
-    def __init__(
-        self,
-        store: keypoints.KeypointStore,
-        parent: QWidget | None = None,
-    ):
-        super().__init__(parent)
-        self.store = store
-        self.store.layer.events.current_properties.connect(self.update_menus)
-        self._locked = False
-
-        self.id2label = defaultdict(list)
-        self.menus = dict()
-        self._map_individuals_to_bodyparts()
-        self._populate_menus()
-
-        layout1 = QVBoxLayout()
-        layout1.addStretch(1)
-        group_box = QGroupBox("Keypoint selection")
-        layout2 = QVBoxLayout()
-        for menu in self.menus.values():
-            layout2.addWidget(menu)
-        group_box.setLayout(layout2)
-        layout1.addWidget(group_box)
-        self.setLayout(layout1)
-
-    def _map_individuals_to_bodyparts(self):
-        self.id2label.clear()  # Empty dict so entries are ordered as in the config
-        for keypoint in self.store._keypoints:
-            label = keypoint.label
-            id_ = keypoint.id
-            if label not in self.id2label[id_]:
-                self.id2label[id_].append(label)
-
-    def _populate_menus(self):
-        id_ = self.store.ids[0]
-        if id_:
-            menu = create_dropdown_menu(self.store, list(self.id2label), "id")
-            menu.currentTextChanged.connect(self.refresh_label_menu)
-            self.menus["id"] = menu
-        self.menus["label"] = create_dropdown_menu(
-            self.store,
-            self.id2label[id_],
-            "label",
-        )
-
-    def _update_items(self):
-        id_ = self.store.ids[0]
-        if id_:
-            self.menus["id"].update_items(list(self.id2label))
-        self.menus["label"].update_items(self.id2label[id_])
-
-    def update_menus(self, event):
-        keypoint = self.store.current_keypoint
-        for attr, menu in self.menus.items():
-            val = getattr(keypoint, attr)
-            if menu.currentText() != val:
-                menu.update_to(val)
-
-    def refresh_label_menu(self, text: str):
-        menu = self.menus["label"]
-        menu.blockSignals(True)
-        menu.clear()
-        menu.blockSignals(False)
-        menu.addItems(self.id2label[text])
-
-    def smart_reset(self, event):
-        """Set current keypoint to the first unlabeled one."""
-        if self._locked:  # The currently selected point is not updated
-            return
-        unannotated = ""
-        already_annotated = self.store.annotated_keypoints
-        for keypoint in self.store._keypoints:
-            if keypoint not in already_annotated:
-                unannotated = keypoint
-                break
-        self.store.current_keypoint = unannotated if unannotated else self.store._keypoints[0]
-
-
-def create_dropdown_menu(store, items, attr):
-    menu = DropdownMenu(items)
-
-    def item_changed(ind):
-        current_item = menu.itemText(ind)
-        if current_item is not None:
-            setattr(store, f"current_{attr}", current_item)
-
-    menu.currentIndexChanged.connect(item_changed)
-    return menu
-
-
-class ClickableLabel(QLabel):
-    clicked = Signal(str)
-
-    def __init__(self, text="", color="turquoise", parent=None):
-        super().__init__(text, parent)
-        self._default_style = self.styleSheet()
-        self.color = color
-
-    def mousePressEvent(self, event):
-        self.clicked.emit(self.text())
-
-    def enterEvent(self, event):
-        self.setCursor(QCursor(Qt.PointingHandCursor))
-        self.setStyleSheet(f"color: {self.color}")
-
-    def leaveEvent(self, event):
-        self.unsetCursor()
-        self.setStyleSheet(self._default_style)
-
-
-class LabelPair(QWidget):
-    def __init__(self, color: str, name: str, parent: QWidget):
-        super().__init__(parent)
-
-        self._color = color
-        self._part_name = name
-
-        self.color_label = QLabel("", parent=self)
-        self.part_label = ClickableLabel(name, color=color, parent=self)
-
-        self.color_label.setToolTip(name)
-        self.part_label.setToolTip(name)
-
-        self._format_label(self.color_label, 10, 10)
-        self._format_label(self.part_label)
-
-        self.color_label.setStyleSheet(f"background-color: {color};")
-
-        self._build()
-
-    @staticmethod
-    def _format_label(label: QLabel, height: int = None, width: int = None):
-        label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        if height is not None:
-            label.setMaximumHeight(height)
-        if width is not None:
-            label.setMaximumWidth(width)
-
-    def _build(self):
-        layout = QHBoxLayout()
-        layout.addWidget(self.color_label, alignment=Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(self.part_label, alignment=Qt.AlignmentFlag.AlignLeft)
-        self.setLayout(layout)
-
-    @property
-    def color(self):
-        return self._color
-
-    @color.setter
-    def color(self, color: str):
-        self._color = color
-        self.color_label.setStyleSheet(f"background-color: {color};")
-
-    @property
-    def part_name(self):
-        return self._part_name
-
-    @part_name.setter
-    def part_name(self, part_name: str):
-        self._part_name = part_name
-        self.part_label.setText(part_name)
-        self.part_label.setToolTip(part_name)
-        self.color_label.setToolTip(part_name)
-
-
-class ColorSchemeDisplay(QScrollArea):
-    added = Signal(object)
-
-    def __init__(self, parent):
-        super().__init__(parent)
-
-        self.scheme_dict = {}  # {name: color} mapping
-        self._layout = QVBoxLayout()
-        self._layout.setSpacing(0)
-        self._container = QWidget(parent=self)  # workaround to use setWidget, let me know if there's a better option
-
-        self._build()
-
-    @property
-    def labels(self):
-        labels = []
-        for i in range(self._layout.count()):
-            item = self._layout.itemAt(i)
-            if w := item.widget():
-                labels.append(w)
-        return labels
-
-    def _build(self):
-        self._container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Maximum)  # feel free to change those
-        self._container.setLayout(self._layout)
-        self._container.adjustSize()
-
-        self.setWidget(self._container)
-
-        self.setWidgetResizable(True)
-        self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)  # feel free to change those
-        # self.setMaximumHeight(150)
-        self.setBaseSize(100, 200)
-
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-    def add_entry(self, name, color):
-        self.scheme_dict.update({name: color})
-
-        widget = LabelPair(color, name, self)
-        self._layout.addWidget(widget, alignment=Qt.AlignmentFlag.AlignLeft)
-        self.added.emit(widget)
-
-    def update_color_scheme(self, new_color_scheme) -> None:
-        logging.debug(f"Updating color scheme: {self._layout.count()} widgets")
-        self.scheme_dict = {name: color for name, color in new_color_scheme.items()}
-        names = list(new_color_scheme.keys())
-        existing_widgets = self._layout.count()
-        required_widgets = len(self.scheme_dict)
-
-        # update existing widgets
-        for idx in range(min(existing_widgets, required_widgets)):
-            logging.debug(f"  updating {idx}")
-            w = self._layout.itemAt(idx).widget()
-            w.setVisible(True)
-            w.part_name = names[idx]
-            w.color = self.scheme_dict[names[idx]]
-
-        # remove extra widgets
-        for i in range(max(existing_widgets - required_widgets, 0)):
-            logging.debug(f"  hiding {required_widgets + i}")
-            if w := self._layout.itemAt(required_widgets + i).widget():
-                logging.debug("  done!")
-                w.setVisible(False)
-
-        # add missing widgets
-        for i in range(max(required_widgets - existing_widgets, 0)):
-            logging.debug(f"  adding {existing_widgets + i}")
-            name = names[existing_widgets + i]
-            self.add_entry(name, self.scheme_dict[name])
-        logging.debug("  done!")
-
-    def reset(self):
-        self.scheme_dict = {}
-        for i in range(self._layout.count()):
-            w = self._layout.itemAt(i).widget()
-            logging.debug(f"making {w} invisible")
-            w.setVisible(False)

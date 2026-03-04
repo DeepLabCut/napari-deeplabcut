@@ -1,10 +1,21 @@
+from __future__ import annotations
+
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any, TypeVar
 
 import numpy as np
 
+try:
+    # napari is an optional dependency at import time in some test setups
+    from napari.layers import Image, Layer, Points, Shapes, Tracks
+except Exception:  # pragma: no cover
+    Image = Points = Shapes = Tracks = Layer = object  # type: ignore
+
 from napari_deeplabcut import misc
-from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
+
+T = TypeVar("T")
 
 # TODO move to a layers/ folder?
 logger = logging.getLogger(__name__)
@@ -12,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Helper to populate keypoint layer metadata
 def populate_keypoint_layer_metadata(
-    header: misc.DLCHeader,
+    header: DLCHeaderModel,
     *,
     labels: Sequence[str] | None = None,
     ids: Sequence[str] | None = None,
@@ -101,3 +112,98 @@ def is_machine_layer(layer) -> bool:
             "A literal 'machine' str was used for io.kind; please use AnnotationKind.MACHINE for better validation."
         )
     return is_machine
+
+
+# -----------------------------------------------
+#  Layer-finding utilities
+# -----------------------------------------------
+def iter_layers(viewer_or_layers: Any) -> Iterable[Any]:
+    """Yield layers from a napari Viewer or an iterable of layers."""
+    layers = getattr(viewer_or_layers, "layers", viewer_or_layers)
+    return layers
+
+
+def find_first_layer(
+    viewer_or_layers: Any,
+    layer_type: type[T],
+    predicate: Callable[[T], bool] | None = None,
+) -> T | None:
+    """Return the first layer of type ``layer_type`` that matches ``predicate``.
+
+    Parameters
+    ----------
+    viewer_or_layers:
+        A napari Viewer, LayerList, or any iterable of layers.
+    layer_type:
+        The desired layer type (e.g., napari.layers.Points).
+    predicate:
+        Optional function to further filter matching layers.
+
+    Notes
+    -----
+    This intentionally mirrors the common pattern used throughout the plugin:
+    "iterate viewer.layers in order and pick the first match".
+    """
+    pred = predicate or (lambda _ly: True)
+    for ly in iter_layers(viewer_or_layers):
+        if isinstance(ly, layer_type) and pred(ly):
+            return ly
+    return None
+
+
+def find_last_layer(
+    viewer_or_layers: Any,
+    layer_type: type[T],
+    predicate: Callable[[T], bool] | None = None,
+) -> T | None:
+    """Return the last layer of type ``layer_type`` that matches ``predicate``."""
+    pred = predicate or (lambda _ly: True)
+    last: T | None = None
+    for ly in iter_layers(viewer_or_layers):
+        if isinstance(ly, layer_type) and pred(ly):
+            last = ly
+    return last
+
+
+# ---- Convenience wrappers used by deeplabcut widgets ----
+
+
+def get_first_points_layer(viewer_or_layers: Any) -> Any | None:
+    return find_first_layer(viewer_or_layers, Points)
+
+
+def get_first_image_layer(viewer_or_layers: Any) -> Any | None:
+    return find_first_layer(viewer_or_layers, Image)
+
+
+def get_first_video_image_layer(viewer_or_layers: Any) -> Any | None:
+    """First Image layer that looks like a video (>=3D data)."""
+
+    def _is_video(img: Any) -> bool:
+        try:
+            return hasattr(img, "data") and getattr(img.data, "ndim", 0) >= 3
+        except Exception:
+            return False
+
+    return find_first_layer(viewer_or_layers, Image, _is_video)
+
+
+def get_points_layer_with_tables(viewer_or_layers: Any) -> Any | None:
+    """First Points layer whose metadata has a non-empty 'tables' entry."""
+
+    def _has_tables(pts: Any) -> bool:
+        try:
+            md = getattr(pts, "metadata", None) or {}
+            return bool(md.get("tables"))
+        except Exception:
+            return False
+
+    return find_first_layer(viewer_or_layers, Points, _has_tables)
+
+
+def get_first_shapes_layer(viewer_or_layers: Any) -> Any | None:
+    return find_first_layer(viewer_or_layers, Shapes)
+
+
+def get_first_tracks_layer(viewer_or_layers: Any) -> Any | None:
+    return find_first_layer(viewer_or_layers, Tracks)

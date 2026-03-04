@@ -8,7 +8,7 @@ from napari_deeplabcut.core.layers import is_machine_layer, populate_keypoint_la
 
 
 class HeaderStub:
-    """Minimal stand-in for misc.DLCHeader.
+    """Minimal stand-in for DLCHeaderModel.
 
     In DLC single-animal projects, there is no individuals level; your code
     treats that as individuals == [''] so ids[0] is falsy. In multi-animal,

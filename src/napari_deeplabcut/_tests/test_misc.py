@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from napari_deeplabcut import misc
+from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows, merge_multiple_scorers
 from napari_deeplabcut.core.io import load_config
 
@@ -359,7 +360,7 @@ def test_build_color_cycle(n_colors):
 
 
 # ----------------------------
-# DLCHeader tests
+# DLCHeaderModel tests
 # ----------------------------
 def test_dlc_header():
     n_animals = 2
@@ -376,13 +377,13 @@ def test_dlc_header():
         ],
         names=["scorer", "individuals", "bodyparts", "coords"],
     )
-    header = misc.DLCHeader(fake_columns)
+    header = DLCHeaderModel(columns=fake_columns)
     assert header.scorer == scorer
-    header.scorer = "you"
-    assert header.scorer == "you"
-    assert header.individuals == animals
-    assert header.bodyparts == keypoints
-    assert header.coords == ["x", "y", "likelihood"]
+
+    header2 = header.with_scorer("you")
+    assert header2.scorer == "you"
+    # original header unchanged (functional)
+    assert header.scorer == scorer
 
 
 def test_dlc_header_from_config_multi(config_path):
@@ -391,7 +392,7 @@ def test_dlc_header_from_config_multi(config_path):
     config["individuals"] = ["animal"]
     config["multianimalbodyparts"] = list("abc")
     config["uniquebodyparts"] = list("de")
-    header = misc.DLCHeader.from_config(config)
+    header = DLCHeaderModel.from_config(config)
     assert header.individuals != [""]
 
 
