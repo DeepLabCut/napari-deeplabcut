@@ -1246,3 +1246,78 @@ def test_config_placeholder_multianimal_colors_by_id_after_first_keypoint_added(
 
     # Sanity check: different ids should have different colors in the cycle map
     assert not np.allclose(got0, got1, atol=1e-6), "Expected distinct colors for animal1 vs animal2"
+
+
+def _make_project_config_and_frames_no_gt(tmp_path: Path):
+    """
+    Project with:
+      project/config.yaml
+      project/labeled-data/test/img000.png
+    No CollectedData*.h5 initially.
+    """
+    import yaml
+
+    project = tmp_path / "project"
+    labeled = project / "labeled-data" / "test"
+    labeled.mkdir(parents=True, exist_ok=True)
+
+    img_rel = ("labeled-data", "test", "img000.png")
+    _write_minimal_png(project / Path(*img_rel))
+
+    cfg = {
+        "scorer": "John",
+        "bodyparts": ["bodypart1", "bodypart2"],
+        "dotsize": 8,
+        "pcutoff": 0.6,
+        "colormap": "magma",
+    }
+    config_path = project / "config.yaml"
+    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+    return project, config_path, labeled
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_config_first_save_writes_gt_into_dataset_folder(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+    """
+    Regression: config-first workflow must save CollectedData_<scorer>.h5 inside
+    project/labeled-data/<dataset>/, not next to config.yaml.
+    """
+    overwrite_confirm.forbid()
+
+    project, config_path, labeled_folder = _make_project_config_and_frames_no_gt(tmp_path)
+
+    viewer = make_napari_viewer()
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    # Open config first -> placeholder points layer
+    viewer.open(str(config_path), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
+
+    # Open dataset folder -> provides dataset context
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
+    qtbot.wait(200)
+
+    pts_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
+    assert pts_layers, "Expected a Points layer from config.yaml"
+
+    points = pts_layers[0]
+    store = controls._stores.get(points)
+    assert store is not None
+
+    # Add a point and save
+    _set_or_add_bodypart_xy(points, store, "bodypart1", x=11.0, y=22.0)
+
+    viewer.layers.selection.active = points
+    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+    qtbot.wait(300)
+
+    expected = labeled_folder / "CollectedData_John.h5"
+    assert expected.exists(), f"Expected GT to be created in dataset folder: {expected}"
+
+    wrong = project / "CollectedData_John.h5"
+    assert not wrong.exists(), f"Must not save next to config.yaml: {wrong}"

@@ -21,13 +21,51 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # Inference
 # -----------------------------------------------------------------------------
-def _layer_source_path_str(layer: Any) -> str | None:
-    try:
-        src = getattr(layer, "source", None)
-        p = getattr(src, "path", None) if src is not None else None
-        return str(p) if p else None
-    except Exception:
+def _coerce_path(p: str | None) -> Path | None:
+    if not p:
         return None
+    try:
+        return Path(p).expanduser().resolve()
+    except Exception:
+        return Path(p)
+
+
+def _is_dlc_dataset_root(p: Path) -> bool:
+    """
+    Heuristic: DLC dataset folder usually looks like:
+      <project>/labeled-data/<dataset_name>
+
+    True if path contains a 'labeled-data' segment AND is deeper than that folder.
+    """
+    parts = [s.lower() for s in p.parts]
+    if "labeled-data" not in parts:
+        return False
+    return parts[-1] != "labeled-data"
+
+
+def _paths_look_like_labeled_data(paths: list[str] | None) -> bool:
+    """
+    Check if any path strings contain 'labeled-data/<dataset>/'.
+    Works with canonicalized paths like 'labeled-data/test/img000.png'.
+    """
+    if not paths:
+        return False
+    for s in paths:
+        if isinstance(s, str) and "labeled-data" in s.replace("\\", "/").lower():
+            return True
+    return False
+
+
+def _looks_like_project_root(points_root: str | None, project: str | None) -> bool:
+    """
+    Root equals project root (config parent) => this is WRONG for saving GT.
+    """
+    if not points_root or not project:
+        return False
+    try:
+        return Path(points_root).expanduser().resolve() == Path(project).expanduser().resolve()
+    except Exception:
+        return points_root == project
 
 
 def infer_image_root(
@@ -90,16 +128,54 @@ def merge_points_metadata(base: PointsMetadata, incoming: PointsMetadata) -> Poi
 # -----------------------------------------------------------------------------
 # Synchronization helpers
 # -----------------------------------------------------------------------------
-
-
 def sync_points_from_image(image_meta: ImageMetadata, points_meta: PointsMetadata) -> PointsMetadata:
-    """Ensure PointsMetadata contains required image-derived fields."""
+    """
+    Ensure PointsMetadata contains required image-derived fields.
+
+    Robust DLC policy:
+    - If image root looks like a DLC dataset folder (…/labeled-data/<dataset>),
+      prefer it for points_meta.root even if points_meta.root is already set
+      but equals project root (config parent) or is not a dataset root.
+    """
     updated = points_meta.model_dump(mode="python")
+
+    # --- First: fill missing fields (existing behavior) ---
     for key in ("root", "paths", "shape", "name"):
         if updated.get(key) in (None, "", []):
             value = getattr(image_meta, key, None)
             if value not in (None, "", []):
                 updated[key] = value
+
+    # --- Second: if we have dataset context, correct stale root ---
+    img_root_p = _coerce_path(getattr(image_meta, "root", None))
+    pts_root_p = _coerce_path(updated.get("root"))
+    project_p = _coerce_path(updated.get("project"))
+
+    # Determine if the image root is a DLC dataset directory
+    image_is_dataset = bool(img_root_p is not None and _is_dlc_dataset_root(img_root_p))
+
+    # Additional hint: sometimes image_meta.root might be missing, but paths show labeled-data
+    # (depends on readers / napari versions). Use that as secondary signal.
+    if not image_is_dataset:
+        if _paths_look_like_labeled_data(getattr(image_meta, "paths", None)):
+            # If image paths look like labeled-data/... and we have a root-like string,
+            # try to interpret image_meta.root anyway.
+            image_is_dataset = bool(img_root_p is not None and _is_dlc_dataset_root(img_root_p))
+
+    if image_is_dataset and img_root_p is not None:
+        # Override root if:
+        # - points root equals project root (typical config-first bug), OR
+        # - points root exists but isn't a dataset root.
+        should_override_root = False
+
+        if _looks_like_project_root(str(pts_root_p) if pts_root_p else None, str(project_p) if project_p else None):
+            should_override_root = True
+        elif pts_root_p is not None and not _is_dlc_dataset_root(pts_root_p):
+            should_override_root = True
+
+        if should_override_root:
+            updated["root"] = str(img_root_p)
+
     return PointsMetadata(**updated)
 
 
