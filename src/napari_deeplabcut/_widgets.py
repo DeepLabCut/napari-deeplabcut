@@ -728,6 +728,9 @@ class KeypointControls(QWidget):
                 )
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata.get("header"):
+                # Ensure root is set (missing on first-time labeling from config)
+                if "root" not in layer.metadata and self._images_meta.get("root"):
+                    layer.metadata["root"] = self._images_meta["root"]
                 store = keypoints.KeypointStore(self.viewer, layer)
                 self._stores[layer] = store
                 if root := layer.metadata.get("root"):
