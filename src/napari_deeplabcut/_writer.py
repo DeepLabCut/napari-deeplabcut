@@ -1,4 +1,9 @@
+"""Writers for DeepLabCut data formats."""
+
+# src/napari_deeplabcut/_writer.py
+import logging
 import os
+from datetime import datetime
 from itertools import groupby
 from pathlib import Path
 
@@ -11,6 +16,9 @@ from skimage.util import img_as_ubyte
 
 from napari_deeplabcut import misc
 from napari_deeplabcut._reader import _load_config
+from napari_deeplabcut.ui.dialogs import _maybe_confirm_overwrite
+
+logger = logging.getLogger(__name__)
 
 
 def _write_config(config_path: str, params: dict):
@@ -44,41 +52,137 @@ def _form_df(points_data, metadata):
 
 
 def write_hdf(filename, data, metadata):
-    file, _ = os.path.splitext(filename)  # FIXME Unused currently
-    df = _form_df(data, metadata)
-    meta = metadata["metadata"]
-    name = metadata["name"]
-    root = meta["root"]
-    if "machine" in name:  # We are attempting to save refined model predictions
-        df.drop("likelihood", axis=1, level="coords", inplace=True, errors="ignore")
-        header = misc.DLCHeader(df.columns)
+    """
+    Write DLC keypoints to disk.
+
+    SAFETY POLICY:
+    - For ground-truth files (CollectedData_*), never delete existing labels silently.
+      If a file already exists, merge-on-save:
+        * new non-NaN values overwrite old
+        * old values are preserved when new are NaN/missing
+    - For machine/refinement files, keep existing behavior (special merging logic).
+    """
+    file, _ = os.path.splitext(filename)  # currently unused
+    df_new = _form_df(data, metadata)
+
+    layer_meta = metadata.get("metadata")
+    if not isinstance(layer_meta, dict):
+        layer_meta = {}
+
+    layer_name = metadata.get("name", "")
+
+    # root may be nested or top-level depending on napari/version/reader path
+    root = layer_meta.get("root") or metadata.get("root")
+
+    # paths may be nested or top-level too
+    paths = layer_meta.get("paths") or metadata.get("paths")
+
+    # Fallback: infer root from paths if still missing
+    if not root and paths:
+        try:
+            root = str(Path(paths[0]).expanduser().resolve().parent)
+        except Exception:
+            root = None
+
+    if not root:
+        raise KeyError(
+            "root (missing from writer metadata; cannot determine where to write CollectedData*.h5). "
+            "Expected either metadata['metadata']['root'] or metadata['root'] or inferable from paths."
+        )
+
+    # Determine output path early (may be updated below in "machine" branch)
+    out_name = layer_name
+    out_path = os.path.join(root, out_name + ".h5")
+
+    if "machine" in layer_name:
+        # ---- existing behavior for refined predictions ----
+        df_new.drop("likelihood", axis=1, level="coords", inplace=True, errors="ignore")
+        header = misc.DLCHeader(df_new.columns)
+
         gt_file = ""
         for file in os.listdir(root):
             if file.startswith("CollectedData") and file.endswith("h5"):
                 gt_file = file
                 break
-        if gt_file:  # Refined predictions must be merged into the existing data
-            df_gt = pd.read_hdf(os.path.join(root, gt_file))
+
+        if gt_file:
+            # Refined predictions must be merged into existing GT file
+            gt_path = os.path.join(root, gt_file)
+            try:
+                df_gt = pd.read_hdf(gt_path, key="keypoints")
+            except (KeyError, ValueError):
+                logger.warning(
+                    f"Existing GT file {gt_file} does not contain 'keypoints' key. Attempting to read entire file."
+                )
+                df_gt = pd.read_hdf(gt_path)
             new_scorer = df_gt.columns.get_level_values("scorer")[0]
             header.scorer = new_scorer
-            df.columns = header.columns
-            df = pd.concat((df, df_gt))
-            df = df[~df.index.duplicated(keep="first")]
-            name = os.path.splitext(gt_file)[0]
+            df_new.columns = header.columns
+
+            # Keep existing concat + de-dupe approach
+            df_out = pd.concat((df_new, df_gt))
+            df_out = df_out[~df_out.index.duplicated(keep="first")]
+            out_name = os.path.splitext(gt_file)[0]
+            out_path = os.path.join(root, out_name + ".h5")
         else:
             # Let us fetch the config.yaml file to get the scorer name...
             project_folder = Path(root).parents[1]
             config = _load_config(str(project_folder / "config.yaml"))
             new_scorer = config["scorer"]
             header.scorer = new_scorer
-            df.columns = header.columns
-            name = f"CollectedData_{new_scorer}"
-    df.sort_index(inplace=True)
-    filename = name + ".h5"
-    path = os.path.join(root, filename)
-    df.to_hdf(path, key="keypoints", mode="w")
-    df.to_csv(path.replace(".h5", ".csv"))
-    return filename
+            df_new.columns = header.columns
+            out_name = f"CollectedData_{new_scorer}"
+            out_path = os.path.join(root, out_name + ".h5")
+
+            df_out = df_new
+
+    else:
+        # ---- NEW: safe merge-on-save for ground truth ----
+        if os.path.exists(out_path):
+            try:
+                df_old = pd.read_hdf(out_path, key="keypoints")
+            except (KeyError, ValueError):
+                # Fall back in case older files used a different key or structure
+                df_old = pd.read_hdf(out_path)
+
+            key_conflict = misc.keypoint_conflicts(df_old, df_new)
+            if not _maybe_confirm_overwrite(metadata, key_conflict):
+                return None  # user cancelled save
+
+            # Merge in a non-destructive way:
+            # df_new wins where it has values; df_old fills where df_new is NaN.
+            df_out = df_new.combine_first(df_old)
+
+            # Optional: ensure DLC header order is preserved (helps stability)
+            try:
+                header = misc.DLCHeader(df_out.columns)
+                df_out = df_out.reindex(header.columns, axis=1)
+            except Exception:
+                # If header inference fails, still save merged data.
+                pass
+        else:
+            df_out = df_new
+
+    # Sort before writing
+    df_out.sort_index(inplace=True)
+
+    # Always write atomically-ish by overwriting the final outputs
+    df_out.to_hdf(out_path, key="keypoints", mode="w")
+    df_out.to_csv(out_path.replace(".h5", ".csv"))
+
+    # Mark the session as saved if KeypointControls was attached to the layer metadata
+    layer_meta = metadata.get("metadata", {})
+    controls = layer_meta.get("controls")
+    if controls is not None:
+        controls._is_saved = True
+        # Guard UI updates (tests/headless may not have Qt widgets)
+        try:
+            controls.last_saved_label.setText(f"Last saved at {str(datetime.now().time()).split('.')[0]}")
+            controls.last_saved_label.show()
+        except Exception:
+            pass
+
+    return os.path.basename(out_path)
 
 
 def _write_image(data, output_path, plugin=None):

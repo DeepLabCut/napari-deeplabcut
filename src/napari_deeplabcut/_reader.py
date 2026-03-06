@@ -1,4 +1,8 @@
+"""Readers for DeepLabCut data formats."""
+
+# src/napari_deeplabcut/_reader.py
 import json
+import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -16,6 +20,8 @@ from napari_deeplabcut import misc
 
 SUPPORTED_IMAGES = ".jpg", ".jpeg", ".png"
 SUPPORTED_VIDEOS = ".mp4", ".mov", ".avi"
+
+logger = logging.getLogger(__name__)
 
 
 def is_video(filename: str):
@@ -71,12 +77,32 @@ def _filter_extensions(
 def get_folder_parser(path):
     if not path or not Path(path).is_dir():
         return None
+
+    if not _looks_like_dlc_folder(path):
+        return None
     layers = []
 
     images = _filter_extensions(Path(path).iterdir(), valid_extensions=SUPPORTED_IMAGES)
 
     if not images:
-        raise OSError(f"No supported images were found in {path} with extensions {SUPPORTED_IMAGES}.")
+        has_video = any(Path(path).glob(f"*{ext}") for ext in SUPPORTED_VIDEOS)
+        if has_video:
+            logger.info(
+                "No supported images found in '%s' (extensions: %s). "
+                "Annotations will not be loaded from images. A supported video appears to be present; "
+                "try opening the video directly to view frames and overlay annotations.",
+                path,
+                SUPPORTED_IMAGES,
+            )
+        else:
+            logger.warning(
+                "No supported images found in '%s' (extensions: %s), and no supported videos found (extensions: %s). "
+                "Annotations cannot be loaded. Add images or open a supported video.",
+                path,
+                SUPPORTED_IMAGES,
+                SUPPORTED_VIDEOS,
+            )
+        return None
 
     image_layer = read_images(images)
     layers.extend(image_layer)
@@ -214,6 +240,19 @@ def _lazy_imread(
             "Cannot stack images with different shapes using NumPy. "
             "Ensure all images have the same shape or set stack=False."
         ) from e
+
+
+def _looks_like_dlc_folder(path: str) -> bool:
+    p = Path(path)
+    if not p.exists() or not p.is_dir():
+        return False
+    # Must either be inside labeled-data OR contain a CollectedData/machinelabels file
+    if any(part.lower() == "labeled-data" for part in p.parts):
+        return True
+    for pat in ("CollectedData*.h5", "CollectedData*.csv", "machinelabels*.h5", "machinelabels*.csv"):
+        if any(p.glob(pat)):
+            return True
+    return False
 
 
 # Read images from a list of files or a glob/string path
