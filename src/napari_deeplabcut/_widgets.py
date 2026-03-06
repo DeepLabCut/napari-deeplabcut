@@ -697,6 +697,64 @@ class KeypointControls(QWidget):
         # (Of course this will be a problem if we start using it everywhere so do not reuse lightly)
         QTimer.singleShot(10, self.silently_dock_matplotlib_canvas)
 
+        # Retroactively initialize KeypointStores for Points layers that were
+        # added before this widget was fully initialized (timing issue where
+        # on_insert never fires for pre-existing layers).
+        self._init_retry_count = 0
+        QTimer.singleShot(1000, self._retroactive_store_init)
+
+    def _retroactive_store_init(self):
+        self._init_retry_count += 1
+        if self._stores:
+            return
+        has_points = any(
+            isinstance(l, Points) and l.metadata.get("header")
+            for l in self.viewer.layers
+        )
+        if not has_points:
+            if self._init_retry_count < 10:
+                QTimer.singleShot(1000, self._retroactive_store_init)
+            return
+        # Populate _images_meta from Image layers (normally done by on_insert)
+        for layer in self.viewer.layers:
+            if isinstance(layer, Image) and layer.metadata.get("root"):
+                self._images_meta.update(
+                    {
+                        "paths": layer.metadata.get("paths"),
+                        "shape": layer.level_shapes[0],
+                        "root": layer.metadata["root"],
+                        "name": layer.name,
+                    }
+                )
+        for layer in self.viewer.layers:
+            if isinstance(layer, Points) and layer.metadata.get("header"):
+                # Ensure root is set (missing on first-time labeling from config)
+                if "root" not in layer.metadata and self._images_meta.get("root"):
+                    layer.metadata["root"] = self._images_meta["root"]
+                store = keypoints.KeypointStore(self.viewer, layer)
+                self._stores[layer] = store
+                if root := layer.metadata.get("root"):
+                    update_save_history(root)
+                layer.metadata["controls"] = self
+                layer.text.visible = False
+                layer.bind_key("M", self.cycle_through_label_modes)
+                layer.bind_key("F", self.cycle_through_color_modes)
+                func = partial(_paste_data, store=store)
+                layer._paste_data = MethodType(func, layer)
+                layer.add = MethodType(keypoints._add, store)
+                layer.events.add(query_next_frame=Event)
+                layer.events.query_next_frame.connect(store._advance_step)
+                layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
+                layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
+                layer.bind_key("Down", store.next_keypoint, overwrite=True)
+                layer.bind_key("Up", store.prev_keypoint, overwrite=True)
+                layer.face_color_mode = "cycle"
+                self._form_dropdown_menus(store)
+                self._radio_box.setEnabled(True)
+                self._color_grp.setEnabled(True)
+                self._trail_cb.setEnabled(True)
+                self._show_traj_plot_cb.setEnabled(True)
+
     def _ensure_mpl_canvas_docked(self) -> None:
         """
         Dock the Matplotlib canvas as a napari dock widget, exactly once,
@@ -1223,6 +1281,9 @@ class KeypointControls(QWidget):
                     store.layer = _layer
                 self._update_color_scheme()
 
+                return
+
+            if not layer.metadata.get("header"):
                 return
 
             if layer.metadata.get("tables", ""):
