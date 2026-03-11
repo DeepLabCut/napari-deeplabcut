@@ -17,3 +17,6 @@ write_to = "src/napari_deeplabcut/_version.py"
 
 [tool.pytest.ini_options]
 qt_api = "pyside6"
+markers = [
+    "e2e: end-to-end tests. Invoke napari viewer fixtures, slow.",
+]
