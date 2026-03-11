@@ -74,12 +74,12 @@ from napari_deeplabcut.napari_compat import (
     register_points_action,
 )
 from napari_deeplabcut.napari_compat.points_layer import make_paste_data
-from napari_deeplabcut.ui.colors_and_dropdown import (
-    ColorSchemeDisplay,
+from napari_deeplabcut.ui.color_scheme_display import ColorSchemePanel
+from napari_deeplabcut.ui.dialogs import Shortcuts, Tutorial
+from napari_deeplabcut.ui.labels_and_dropdown import (
     DropdownMenu,
     KeypointsDropdownMenu,
 )
-from napari_deeplabcut.ui.dialogs import Shortcuts, Tutorial
 from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
@@ -251,11 +251,22 @@ class KeypointControls(QWidget):
         # form color scheme display + color mode selector
         self._color_grp, self._color_mode_selector = self._form_color_mode_selector()
         self._color_grp.setEnabled(False)
-        self._display = ColorSchemeDisplay(parent=self)
-        self._color_scheme_display = self._form_color_scheme_display(self.viewer)
+
+        # Color scheme display panel
+        self._color_scheme_panel = ColorSchemePanel(
+            viewer=self.viewer,
+            get_color_mode=lambda: self.color_mode,
+            get_header_model=self._get_header_model_from_metadata,
+            parent=self,
+        )
+        self._color_scheme_display = self.viewer.window.add_dock_widget(
+            self._color_scheme_panel,
+            name="Color scheme reference",
+            area="left",
+        )
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
         self._view_scheme_cb.toggle()
-        self._display.added.connect(
+        self._color_scheme_panel.display.added.connect(
             lambda w: w.part_label.clicked.connect(self._matplotlib_canvas._toggle_line_visibility),
         )
 
@@ -361,7 +372,7 @@ class KeypointControls(QWidget):
         for _layer, store in self._stores.items():
             _layer.metadata["face_color_cycles"] = new_metadata["face_color_cycles"]
             _layer.metadata["colormap_name"] = new_metadata.get("colormap_name", _layer.metadata.get("colormap_name"))
-            self._apply_points_coloring_from_metadata(_layer)  # << use your unified coloring
+            self._apply_points_coloring_from_metadata(_layer)
             store.layer = _layer
 
         self._update_color_scheme()
@@ -957,30 +968,9 @@ class KeypointControls(QWidget):
         group.buttonClicked.connect(_func)
         return group_box, group
 
-    def _form_color_scheme_display(self, viewer):
-        self.viewer.layers.events.inserted.connect(self._update_color_scheme)
-        return viewer.window.add_dock_widget(self._display, name="Color scheme reference", area="left")
-
     def _update_color_scheme(self):
-        def to_hex(nparray):
-            a = np.array(nparray * 255, dtype=int)
-
-            def rgb2hex(r, g, b, _):
-                return f"#{r:02x}{g:02x}{b:02x}"
-
-            res = rgb2hex(*a)
-            return res
-
-        self._display.reset()
-        mode = "label"
-        if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL):
-            mode = "id"
-
-        for layer in self.viewer.layers:
-            if isinstance(layer, Points) and layer.metadata:
-                self._display.update_color_scheme(
-                    {name: to_hex(color) for name, color in layer.metadata["face_color_cycles"][mode].items()}
-                )
+        if hasattr(self, "_color_scheme_panel"):
+            self._color_scheme_panel.schedule_update()
 
     def _apply_points_coloring_from_metadata(self, layer: Points) -> None:
         """Apply categorical (cycle) coloring if safe, otherwise fall back without crashing."""
@@ -1423,7 +1413,6 @@ class KeypointControls(QWidget):
         for layer in self.viewer.layers:
             if isinstance(layer, Points) and layer.metadata:
                 self._apply_points_coloring_from_metadata(layer)
-        self._update_color_scheme()
 
         for btn in self._color_mode_selector.buttons():
             if btn.text().lower() == str(mode).lower():

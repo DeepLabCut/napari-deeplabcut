@@ -19,7 +19,6 @@ from qtpy.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -218,79 +217,3 @@ class LabelPair(QWidget):
         self.part_label.setText(part_name)
         self.part_label.setToolTip(part_name)
         self.color_label.setToolTip(part_name)
-
-
-class ColorSchemeDisplay(QScrollArea):
-    """Scrollable list of keypoint labels and their associated colors."""
-
-    added = Signal(object)
-
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.scheme_dict: dict[str, str] = {}
-        self._layout = QVBoxLayout()
-        self._layout.setSpacing(0)
-        # container required by QScrollArea.setWidget
-        self._container = QWidget(parent=self)
-        self._build()
-
-    @property
-    def labels(self):
-        labels = []
-        for i in range(self._layout.count()):
-            item = self._layout.itemAt(i)
-            if w := item.widget():
-                labels.append(w)
-        return labels
-
-    def _build(self) -> None:
-        self._container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Maximum)
-        self._container.setLayout(self._layout)
-        self._container.adjustSize()
-
-        self.setWidget(self._container)
-        self.setWidgetResizable(True)
-        self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)
-        self.setBaseSize(100, 200)
-
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-    def add_entry(self, name: str, color: str) -> None:
-        self.scheme_dict.update({name: color})
-        widget = LabelPair(color, name, self)
-        self._layout.addWidget(widget, alignment=Qt.AlignmentFlag.AlignLeft)
-        self.added.emit(widget)
-
-    def update_color_scheme(self, new_color_scheme: dict[str, str]) -> None:
-        logger.debug("Updating color scheme: %s widgets", self._layout.count())
-        self.scheme_dict = {name: color for name, color in new_color_scheme.items()}
-        names = list(new_color_scheme.keys())
-        existing_widgets = self._layout.count()
-        required_widgets = len(self.scheme_dict)
-
-        # update existing widgets
-        for idx in range(min(existing_widgets, required_widgets)):
-            w = self._layout.itemAt(idx).widget()
-            if w is None:
-                continue
-            w.setVisible(True)
-            w.part_name = names[idx]
-            w.color = self.scheme_dict[names[idx]]
-
-        # hide extra widgets
-        for i in range(max(existing_widgets - required_widgets, 0)):
-            if w := self._layout.itemAt(required_widgets + i).widget():
-                w.setVisible(False)
-
-        # add missing widgets
-        for i in range(max(required_widgets - existing_widgets, 0)):
-            name = names[existing_widgets + i]
-            self.add_entry(name, self.scheme_dict[name])
-
-    def reset(self) -> None:
-        self.scheme_dict = {}
-        for i in range(self._layout.count()):
-            w = self._layout.itemAt(i).widget()
-            if w is not None:
-                w.setVisible(False)
