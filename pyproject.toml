@@ -86,6 +86,8 @@ fix = true
 [tool.ruff.lint]
 select = [ "E", "F", "B", "I", "UP" ]
 ignore = [ "E741" ]
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.pyproject-fmt]
 max_supported_python = "3.12"
