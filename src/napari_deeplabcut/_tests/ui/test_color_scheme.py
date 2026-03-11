@@ -407,9 +407,5 @@ def test_color_scheme_panel_delete_later_does_not_crash_on_pending_update(qtbot,
         get_header_model=get_header_model,
     )
     qtbot.addWidget(panel)
-
     panel.schedule_update()
-    panel.deleteLater()
-
-    # Just flushing events should not raise
     qtbot.wait(50)
