@@ -264,8 +264,9 @@ class KeypointControls(QWidget):
             name="Color scheme reference",
             area="left",
         )
+        self._view_scheme_cb.setChecked(True)
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
-        self._view_scheme_cb.toggle()
+        self._show_color_scheme()
         self._color_scheme_panel.display.added.connect(
             lambda w: w.part_label.clicked.connect(self._matplotlib_canvas._toggle_line_visibility),
         )
@@ -446,6 +447,7 @@ class KeypointControls(QWidget):
         layer.events.query_next_frame.connect(store._advance_step)
 
         # navigation keys
+        # FIXME: @C-Achard 2026-03-11 Move this to dedicated config file
         layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
         layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
         layer.bind_key("Down", store.next_keypoint, overwrite=True)
@@ -1154,24 +1156,31 @@ class KeypointControls(QWidget):
     def on_remove(self, event):
         layer = event.value
         n_points_layer = sum(isinstance(l, Points) for l in self.viewer.layers)
-        if isinstance(layer, Points) and n_points_layer == 0:
-            if self._color_scheme_display is not None:
-                self._display.reset()
+
+        if isinstance(layer, Points):
             self._stores.pop(layer, None)
-            while self._menus:
-                menu = self._menus.pop()
-                self._layout.removeWidget(menu)
-                menu.deleteLater()
-                menu.destroy()
-            self._layer_to_menu = {}
-            self._trail_cb.setEnabled(False)
-            self._show_traj_plot_cb.setEnabled(False)
-            self.last_saved_label.hide()
+
+            # Refresh color scheme panel regardless; it will clear itself if no valid target remains.
+            self._update_color_scheme()
+
+            if n_points_layer == 0:
+                while self._menus:
+                    menu = self._menus.pop()
+                    self._layout.removeWidget(menu)
+                    menu.deleteLater()
+                    menu.destroy()
+
+                self._layer_to_menu = {}
+                self._trail_cb.setEnabled(False)
+                self._show_traj_plot_cb.setEnabled(False)
+                self.last_saved_label.hide()
+
         elif isinstance(layer, Image):
             self._image_meta = ImageMetadata()
             paths = layer.metadata.get("paths")
             if paths is None:
                 self.video_widget.setVisible(False)
+
         elif isinstance(layer, Tracks):
             self._trail_cb.setChecked(False)
             self._show_traj_plot_cb.setChecked(False)
@@ -1348,6 +1357,7 @@ class KeypointControls(QWidget):
             is a multi-animal one, or False otherwise
         """
         self._color_grp.setVisible(self._is_multianimal(event.value))
+        # self._update_color_scheme() # if needed
         menu_idx = -1
         if event.value is not None and isinstance(event.value, Points):
             menu_idx = self._layer_to_menu.get(event.value, -1)
