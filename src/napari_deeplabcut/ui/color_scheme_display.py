@@ -460,8 +460,9 @@ class ColorSchemePanel(QWidget):
     ):
         super().__init__(parent)
         self.viewer = viewer
-        self._update_pending = False
+        self._disposed = False
         self._wired_layers: set[int] = set()
+        self._connections: list[tuple[object, object]] = []
 
         self._resolver = ColorSchemeResolver(
             viewer=viewer,
@@ -477,7 +478,6 @@ class ColorSchemePanel(QWidget):
             "In bodypart mode: show configured bodyparts.\n"
             "In individual mode: show configured individuals, falling back safely when unavailable."
         )
-        self._toggle.toggled.connect(self.schedule_update)
 
         self.display = ColorSchemeDisplay(parent=self)
 
@@ -485,23 +485,77 @@ class ColorSchemePanel(QWidget):
         layout.addWidget(self._toggle)
         layout.addWidget(self.display)
 
+        # Parent-owned debounce timer: dies with the panel
+        self._update_timer = QTimer(self)
+        self._update_timer.setSingleShot(True)
+        self._update_timer.timeout.connect(self._on_update_timeout)
+
+        self._toggle.toggled.connect(self.schedule_update)
+        self.destroyed.connect(self._on_destroyed)
+
         self._connect_viewer_events()
         self.schedule_update()
 
     @property
     def show_config_keypoints(self) -> bool:
-        return self._toggle.isChecked()
+        if self._disposed:
+            return False
+        try:
+            return bool(self._toggle.isChecked())
+        except RuntimeError:
+            # Underlying C++ widget already deleted
+            return False
+
+    def _connect(self, emitter, callback) -> None:
+        """Connect and remember emitter/callback so we can disconnect later."""
+        try:
+            emitter.connect(callback)
+            self._connections.append((emitter, callback))
+        except Exception:
+            logger.debug("Failed to connect emitter=%r callback=%r", emitter, callback, exc_info=True)
+
+    def _disconnect_all(self) -> None:
+        """Best-effort disconnect of all remembered external emitters."""
+        while self._connections:
+            emitter, callback = self._connections.pop()
+            try:
+                emitter.disconnect(callback)
+            except Exception:
+                # Already disconnected / emitter gone / teardown race
+                pass
+
+    def _on_destroyed(self, *args) -> None:
+        """Mark disposed and disconnect from external emitters."""
+        self._disposed = True
+        try:
+            self._update_timer.stop()
+        except Exception:
+            pass
+        self._disconnect_all()
+        self._wired_layers.clear()
+
+    def closeEvent(self, event):  # type: ignore[override]
+        self._disposed = True
+        try:
+            self._update_timer.stop()
+        except Exception:
+            pass
+        self._disconnect_all()
+        super().closeEvent(event)
 
     def _connect_viewer_events(self) -> None:
-        self.viewer.layers.selection.events.active.connect(self.schedule_update)
-        self.viewer.layers.events.inserted.connect(self._on_layers_changed)
-        self.viewer.layers.events.removed.connect(self._on_layers_removed)
-        self.viewer.dims.events.current_step.connect(self.schedule_update)
+        self._connect(self.viewer.layers.selection.events.active, self.schedule_update)
+        self._connect(self.viewer.layers.events.inserted, self._on_layers_changed)
+        self._connect(self.viewer.layers.events.removed, self._on_layers_removed)
+        self._connect(self.viewer.dims.events.current_step, self.schedule_update)
 
         for layer in list(self.viewer.layers):
             self._maybe_wire_layer(layer)
 
     def _on_layers_changed(self, event=None) -> None:
+        if self._disposed:
+            return
+
         layer = None
 
         try:
@@ -519,11 +573,13 @@ class ColorSchemePanel(QWidget):
         self.schedule_update()
 
     def _on_layers_removed(self, event=None) -> None:
-        # We don't try to disconnect defensively here; just refresh.
+        if self._disposed:
+            return
+        # We don't try to disconnect per-layer emitters defensively here; just refresh.
         self.schedule_update()
 
     def _maybe_wire_layer(self, layer) -> None:
-        if not isinstance(layer, Points):
+        if self._disposed or not isinstance(layer, Points):
             return
 
         lid = id(layer)
@@ -534,32 +590,61 @@ class ColorSchemePanel(QWidget):
 
         for event_name in ("visible", "data", "properties", "shown", "current_properties"):
             try:
-                getattr(layer.events, event_name).connect(self.schedule_update)
+                emitter = getattr(layer.events, event_name)
+            except AttributeError:
+                # Optional event depending on napari version; not a problem.
+                logger.debug(
+                    "Skipping unavailable Points event '%s' for layer=%r",
+                    event_name,
+                    getattr(layer, "name", layer),
+                )
+                continue
             except Exception:
                 logger.debug(
-                    "Could not connect Points event '%s' for layer=%r",
+                    "Could not access Points event '%s' for layer=%r",
                     event_name,
                     getattr(layer, "name", layer),
                     exc_info=True,
                 )
+                continue
+
+            self._connect(emitter, self.schedule_update)
 
     def schedule_update(self, event=None) -> None:
         """Debounced update to avoid refresh storms."""
-        if self._update_pending:
+        if self._disposed:
             return
 
-        self._update_pending = True
+        try:
+            if self._update_timer.isActive():
+                return
+            self._update_timer.start(0)
+        except RuntimeError:
+            # Timer/widget already gone
+            return
 
-        def _do():
-            try:
-                self.update_scheme()
-            finally:
-                self._update_pending = False
-
-        QTimer.singleShot(0, _do)
+    def _on_update_timeout(self) -> None:
+        if self._disposed:
+            return
+        self.update_scheme()
 
     def update_scheme(self) -> None:
-        scheme = self._resolver.resolve(show_config_keypoints=self.show_config_keypoints)
-        self.display.reset()
-        if scheme:
-            self.display.update_color_scheme(scheme)
+        if self._disposed:
+            return
+
+        try:
+            scheme = self._resolver.resolve(show_config_keypoints=self.show_config_keypoints)
+        except RuntimeError:
+            # Underlying Qt objects may already be gone during teardown races
+            return
+        except Exception:
+            logger.debug("Failed to resolve color scheme", exc_info=True)
+            return
+
+        try:
+            self.display.reset()
+            if scheme:
+                self.display.update_color_scheme(scheme)
+        except RuntimeError:
+            # display already deleted
+            return

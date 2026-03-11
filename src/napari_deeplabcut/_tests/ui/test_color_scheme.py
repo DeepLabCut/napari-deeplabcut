@@ -398,3 +398,18 @@ def test_panel_toggle_switches_from_active_to_config_preview(
             "cfg2": "#00ff00",
         }
     )
+
+
+def test_color_scheme_panel_delete_later_does_not_crash_on_pending_update(qtbot, fake_viewer, get_header_model):
+    panel = ColorSchemePanel(
+        viewer=fake_viewer,
+        get_color_mode=lambda: str(keypoints.ColorMode.BODYPART),
+        get_header_model=get_header_model,
+    )
+    qtbot.addWidget(panel)
+
+    panel.schedule_update()
+    panel.deleteLater()
+
+    # Just flushing events should not raise
+    qtbot.wait(50)
