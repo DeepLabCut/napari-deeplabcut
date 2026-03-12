@@ -7,9 +7,28 @@ import logging
 import numpy as np
 import pandas as pd
 
+from napari_deeplabcut.config.models import ConflictEntry, OverwriteConflictReport
 from napari_deeplabcut.core.schemas import PointsWriteInputModel
 
 logger = logging.getLogger(__name__)
+
+
+def set_df_scorer(df: pd.DataFrame, scorer: str) -> pd.DataFrame:
+    """Return df with scorer level set to the given scorer (if present)."""
+    scorer = (scorer or "").strip()
+    if not scorer:
+        return df
+    if not hasattr(df.columns, "names") or "scorer" not in df.columns.names:
+        return df
+
+    try:
+        cols = df.columns.to_frame(index=False)
+        cols["scorer"] = scorer
+        df = df.copy()
+        df.columns = pd.MultiIndex.from_frame(cols)
+    except Exception:
+        pass
+    return df
 
 
 def merge_multiple_scorers(df: pd.DataFrame) -> pd.DataFrame:
@@ -100,7 +119,7 @@ def merge_multiple_scorers(df: pd.DataFrame) -> pd.DataFrame:
     return df.loc[:, cols0]
 
 
-def guarantee_multiindex_rows(df):
+def guarantee_multiindex_rows(df: pd.DataFrame) -> None:
     """Ensure that DataFrame rows are a MultiIndex of path components.
     Legacy DLC data may use an index with pathto/video/file.png strings as Index.
     The new format uses a MultiIndex with each path component as a level.
@@ -362,48 +381,80 @@ def keypoint_conflicts(df_old: pd.DataFrame, df_new: pd.DataFrame) -> pd.DataFra
 
 
 def _format_image_id(img_id) -> str:
-    """Format DLC index row into a user-friendly image identifier."""
+    """Format a row index value into a user-friendly frame/image identifier."""
     if isinstance(img_id, tuple):
         # e.g. ('labeled-data', 'test', 'img000.png')
         return "/".join(map(str, img_id))
     return str(img_id)
 
 
-def summarize_keypoint_conflicts(key_conflict: pd.DataFrame, max_items: int = 15) -> str:
+def _format_keypoint_id(kp) -> str:
+    """Format a keypoint column label into a user-friendly identifier."""
+    # kp can be:
+    # - scalar bodypart: "nose"
+    # - tuple(individual, bodypart): ("animal1", "nose")
+    # - larger tuple if upstream grouping shape changes
+    if isinstance(kp, tuple):
+        if len(kp) == 2:
+            ind, bp = kp
+            return f"{bp} (id: {ind})" if ind else str(bp)
+        return " / ".join(str(x) for x in kp if x not in (None, ""))
+    return str(kp)
+
+
+def build_overwrite_conflict_report(
+    key_conflict: pd.DataFrame,
+    *,
+    max_entries: int = 50,
+    layer_name: str | None = None,
+    destination_path: str | None = None,
+) -> OverwriteConflictReport:
     """
-    Convert key_conflict (index=image, columns=keypoint) into readable text.
+    Convert a pandas key-conflict table into a UI-facing overwrite report.
+
+    Parameters
+    ----------
+    key_conflict:
+        Boolean-like DataFrame indexed by frame/image identifier, with columns
+        representing keypoints. Truthy cells indicate a keypoint overwrite conflict.
+
+    Returns
+    -------
+    OverwriteConflictReport
+        Plain-Python UI contract describing overwrite counts and detailed entries.
+
+    Notes
+    -----
+    This function is the pandas boundary for overwrite reporting. The UI should
+    depend only on OverwriteConflictReport, not on DataFrame structure.
     """
-    # Collect (image, keypoint) pairs where True
-    pairs = []
-    for img in key_conflict.index:
-        row = key_conflict.loc[img]
-        if hasattr(row, "items"):
-            for kp, flag in row.items():
-                if bool(flag):
-                    pairs.append((img, kp))
+    n_overwrites = int(key_conflict.to_numpy().sum())
+    n_frames = int(key_conflict.any(axis=1).to_numpy().sum())
 
-    total = len(pairs)
-    if total == 0:
-        return "No existing keypoints will be overwritten."
+    entries: list[ConflictEntry] = []
 
-    lines = []
-    for img, kp in pairs[:max_items]:
-        img_s = _format_image_id(img)
+    for img, row in key_conflict.iterrows():
+        conflicted: list[str] = []
+        for kp, flag in row.items():
+            if bool(flag):
+                conflicted.append(_format_keypoint_id(kp))
 
-        # kp can be a scalar (bodypart) or a tuple (individual, bodypart)
-        if isinstance(kp, tuple):
-            if len(kp) == 2:
-                ind, bp = kp
-                kp_s = f"{bp} (id: {ind})" if ind else str(bp)
-            else:
-                kp_s = " / ".join(map(str, kp))
-        else:
-            kp_s = str(kp)
+        if conflicted:
+            entries.append(
+                ConflictEntry(
+                    frame_label=_format_image_id(img),
+                    keypoints=tuple(conflicted),
+                )
+            )
 
-        lines.append(f"- {img_s} → {kp_s}")
+    shown = tuple(entries[:max_entries])
+    truncated = max(0, len(entries) - len(shown))
 
-    more = ""
-    if total > max_items:
-        more = f"\n… and {total - max_items} more."
-
-    return f"{total} existing keypoint(s) will be overwritten.\n\nExamples:\n" + "\n".join(lines) + more
+    return OverwriteConflictReport(
+        n_overwrites=n_overwrites,
+        n_frames=n_frames,
+        entries=shown,
+        truncated_entries=truncated,
+        layer_name=layer_name,
+        destination_path=destination_path,
+    )

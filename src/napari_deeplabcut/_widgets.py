@@ -1,6 +1,8 @@
 """Main widget and controls for napari-deeplabcut, including the tutorial and shortcuts windows."""
 
 # src/napari_deeplabcut/_widgets.py
+from __future__ import annotations
+
 import hashlib
 import logging
 import os
@@ -403,6 +405,14 @@ class KeypointControls(QWidget):
         except Exception:
             return None
 
+    @staticmethod
+    def get_layer_controls(layer: Points) -> KeypointControls | None:
+        return getattr(layer, "_dlc_controls", None)
+
+    @staticmethod
+    def get_layer_store(layer: Points) -> keypoints.KeypointStore | None:
+        return getattr(layer, "_dlc_store", None)
+
     def _wire_points_layer(self, layer: Points) -> keypoints.KeypointStore | None:
         if not self._validate_header(layer):
             return None
@@ -418,6 +428,8 @@ class KeypointControls(QWidget):
 
         store = keypoints.KeypointStore(self.viewer, layer)
         self._stores[layer] = store
+        layer._dlc_store = store
+        layer._dlc_controls = self
 
         # default root/paths from current image meta if missing
         if not layer.metadata.get("root") and self._image_meta.root:
@@ -1168,25 +1180,6 @@ class KeypointControls(QWidget):
             if res.accept_paths_update:
                 layer.metadata["paths"] = list(new_paths)
 
-            # Sync paths only if remap was safe enough to accept.
-            # This includes:
-            # - an applied remap
-            # - or an explicit aligned/no-op remap with a valid depth
-            if res.depth_used is not None:
-                try:
-                    layer.metadata["paths"] = list(new_paths)
-                    logger.debug(
-                        "Accepted remap metadata sync for layer=%r new metadata paths_len=%s",
-                        getattr(layer, "name", str(layer)),
-                        len(layer.metadata.get("paths") or []),
-                    )
-                except Exception:
-                    logger.debug(
-                        "Failed to update metadata paths after accepted remap for layer=%r",
-                        getattr(layer, "name", str(layer)),
-                        exc_info=True,
-                    )
-
             # Final debug logging
             if res.depth_used is None:
                 logger.debug("Remap skipped for %s: %s", getattr(layer, "name", str(layer)), res.message)
@@ -1356,6 +1349,11 @@ class KeypointControls(QWidget):
             If True, only layers that are selected in the viewer will be saved.
             By default, all layers are saved.
         """
+        from napari.utils.notifications import show_warning
+
+        from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
+        from napari_deeplabcut.ui.dialogs import maybe_confirm_overwrite
+
         selected_layers = list(self.viewer.layers.selection)
         msg = ""
         if not len(self.viewer.layers):
@@ -1378,6 +1376,30 @@ class KeypointControls(QWidget):
                 layer.metadata.get("io", {}).get("kind"),
                 layer.metadata.get("save_target"),
             )
+            try:
+                attributes = {
+                    "name": layer.name,
+                    "metadata": dict(layer.metadata or {}),
+                    "properties": dict(layer.properties or {}),
+                }
+                report = compute_overwrite_report_for_points_save(layer.data, attributes)
+            except Exception as e:
+                logger.exception("Failed to compute overwrite preflight for layer %r", getattr(layer, "name", layer))
+                QMessageBox.warning(
+                    self,
+                    "Cannot save",
+                    f"Failed to prepare save preflight:\n{e}",
+                    QMessageBox.Ok,
+                )
+                return
+
+            if report is not None:
+                if not maybe_confirm_overwrite(
+                    parent=self,
+                    report=report,
+                ):
+                    show_warning("Save cancelled: existing keypoints would have been overwritten.")
+                    return
 
             self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
             self.viewer.status = "Data successfully saved"
