@@ -21,6 +21,10 @@ from qtpy.QtWidgets import (
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut.config.models import DLCHeaderModel
+from napari_deeplabcut.config.settings import (
+    DEFAULT_SINGLE_ANIMAL_CMAP,
+)
+from napari_deeplabcut.misc import build_color_cycles
 from napari_deeplabcut.ui.labels_and_dropdown import LabelPair
 
 logger = logging.getLogger(__name__)
@@ -163,6 +167,48 @@ class ColorSchemeResolver:
         self._get_header_model = get_header_model
         self._config_header_cache: dict[str, DLCHeaderModel | None] = {}
 
+    def is_multianimal(self, layer: Points) -> bool:
+        md = layer.metadata or {}
+        header = self._get_header_model(md)
+        if header is None:
+            return False
+        try:
+            inds = getattr(header, "individuals", None)
+            return bool(inds and len(inds) > 0 and str(inds[0]) != "")
+        except Exception:
+            return False
+
+    def get_config_colormap(self, layer: Points) -> str:
+        md = layer.metadata or {}
+        cmap = md.get("config_colormap")
+        if isinstance(cmap, str) and cmap:
+            return cmap
+        return DEFAULT_SINGLE_ANIMAL_CMAP
+
+    def get_active_color_property(self, layer: Points) -> str:
+        if self.is_multianimal(layer) and self._get_color_mode() == str(keypoints.ColorMode.INDIVIDUAL):
+            return "id"
+        return "label"
+
+    def get_face_color_cycles(self, layer: Points) -> dict[str, dict]:
+        md = layer.metadata or {}
+        header = self._get_header_model(md)
+        if header is None:
+            return {}
+
+        config_cmap = self.get_config_colormap(layer)
+
+        bodypart_cycles = build_color_cycles(header, config_cmap) or {}
+        if self.is_multianimal(layer):
+            individual_cycles = build_color_cycles(header, DEFAULT_SINGLE_ANIMAL_CMAP) or {}
+        else:
+            individual_cycles = bodypart_cycles
+
+        return {
+            "label": bodypart_cycles.get("label", {}),
+            "id": individual_cycles.get("id", {}),
+        }
+
     # ------------------------------------------------------------------
     # Target layer / color property
     # ------------------------------------------------------------------
@@ -179,44 +225,15 @@ class ColorSchemeResolver:
         return None
 
     def get_color_property(self, layer: Points) -> str | None:
-        """
-        Determine which categorical property currently drives coloring.
-
-        Rules:
-        - use 'id' in individual mode when available/valid
-        - otherwise use 'label'
-        - fallback safely to any available cycle key
-        """
-        md = layer.metadata or {}
-        cycles = md.get("face_color_cycles") or {}
-        if not cycles:
-            return None
-
-        header = self._get_header_model(md)
-
-        is_multi = False
-        try:
-            inds = getattr(header, "individuals", None)
-            is_multi = bool(inds and len(inds) > 0 and str(inds[0]) != "")
-        except Exception:
-            is_multi = False
-
-        prop = "id" if (is_multi and "id" in cycles) else "label"
-
-        color_mode = self._get_color_mode()
-        if color_mode == str(keypoints.ColorMode.INDIVIDUAL) and "id" in cycles:
-            prop = "id"
-        elif color_mode == str(keypoints.ColorMode.BODYPART) and "label" in cycles:
-            prop = "label"
-
-        if prop not in cycles:
-            if "label" in cycles:
-                return "label"
-            if "id" in cycles:
-                return "id"
-            return None
-
-        return prop
+        prop = self.get_active_color_property(layer)
+        cycles = self.get_face_color_cycles(layer)
+        if prop in cycles and cycles.get(prop):
+            return prop
+        if "label" in cycles and cycles.get("label"):
+            return "label"
+        if "id" in cycles and cycles.get("id"):
+            return "id"
+        return None
 
     # ------------------------------------------------------------------
     # Active/on-screen category extraction
@@ -410,12 +427,11 @@ class ColorSchemeResolver:
         if layer is None:
             return {}
 
-        md = layer.metadata or {}
-        cycles = md.get("face_color_cycles") or {}
+        cycles = self.get_face_color_cycles(layer)
         if not cycles:
             return {}
 
-        prop = self.get_color_property(layer)
+        prop = self.get_active_color_property(layer)
         if prop is None:
             return {}
 

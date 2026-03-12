@@ -66,7 +66,6 @@ from napari_deeplabcut.core.paths import (
 from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.core.sidecar import get_default_scorer, set_default_scorer
 from napari_deeplabcut.misc import (
-    build_color_cycles,
     encode_categories,
 )
 from napari_deeplabcut.napari_compat import (
@@ -383,6 +382,9 @@ class KeypointControls(QWidget):
 
         # apply the new color cycles + recolor safely
         for _layer, store in self._stores.items():
+            _layer.metadata["config_colormap"] = new_metadata.get(
+                "config_colormap", _layer.metadata.get("config_colormap")
+            )
             _layer.metadata["face_color_cycles"] = new_metadata["face_color_cycles"]
             _layer.metadata["colormap_name"] = new_metadata.get("colormap_name", _layer.metadata.get("colormap_name"))
             self._apply_points_coloring_from_metadata(_layer)
@@ -1002,105 +1004,41 @@ class KeypointControls(QWidget):
             self._color_scheme_panel.schedule_update()
 
     def _apply_points_coloring_from_metadata(self, layer: Points) -> None:
-        """Apply categorical (cycle) coloring if safe, otherwise fall back without crashing."""
-        md = layer.metadata or {}
-        cycles = md.get("face_color_cycles") or {}
+        """Apply categorical coloring using centralized resolver policy."""
+        resolver = self._color_scheme_panel._resolver
+        cycles = resolver.get_face_color_cycles(layer)
         if not cycles:
-            return
-
-        # Empty layer: never enable cycle mode
-        try:
-            if layer.data is None or len(layer.data) == 0:
+            try:
                 layer.face_color_mode = "direct"
-                return
-        except Exception:
-            layer.face_color_mode = "direct"
+            except Exception:
+                pass
             return
 
-        header = self._get_header_model_from_metadata(md)
+        prop = resolver.get_active_color_property(layer)
+        if prop not in cycles or not cycles[prop]:
+            return
 
-        # Multi-animal heuristic (robust to missing header)
-        is_multi = False
-        try:
-            inds = getattr(header, "individuals", None)
-            is_multi = bool(inds and len(inds) > 0 and str(inds[0]) != "")
-        except Exception:
-            is_multi = False
-
-        # Default choice
-        prop = "id" if (is_multi and "id" in cycles) else "label"
-
-        # Respect user-selected mode where possible
-        if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL) and "id" in cycles:
-            prop = "id"
-        elif self.color_mode == str(keypoints.ColorMode.BODYPART) and "label" in cycles:
-            prop = "label"
-
-        # Fallback if chosen prop missing in cycles
-        if prop not in cycles:
-            prop = "id" if "id" in cycles else "label"
-
-        # Ensure properties exist for chosen prop
         props = getattr(layer, "properties", {}) or {}
         values = props.get(prop, None)
 
-        if values is None or len(values) == 0:
-            layer.face_color_mode = "direct"
-            return
-
-        # If id is selected but all are blank/None → fallback to label (common single-animal case)
+        # id mode on single-animal / blank ids -> fallback to label
         if prop == "id":
             try:
-                vals = np.asarray(values, dtype=object).ravel()
-                if all(v in ("", None) or misc._is_nan_value(v) for v in vals):
-                    if "label" in cycles and props.get("label", None) is not None:
-                        prop = "label"
-                        values = props.get(prop, None)
+                vals = np.asarray(values, dtype=object).ravel() if values is not None else np.array([], dtype=object)
+                if len(vals) == 0 or all(v in ("", None) or misc._is_nan_value(v) for v in vals):
+                    prop = "label"
+                    values = props.get("label", None)
+            except Exception:
+                prop = "label"
+                values = props.get("label", None)
+
+        if values is None or len(values) == 0 or misc._array_has_nan(values):
+            try:
+                layer.face_color_mode = "direct"
             except Exception:
                 pass
-
-        # Still missing/empty after fallback
-        if values is None or len(values) == 0:
-            layer.face_color_mode = "direct"
             return
 
-        # NaN guard: avoid napari categorical crash
-        if misc._array_has_nan(values):
-            layer.face_color_mode = "direct"
-            return
-
-        # Ensure current_properties[prop] is set to a valid key (not NaN/None/"")
-        try:
-            cp = layer.current_properties
-            bad_current = (
-                prop not in cp
-                or cp[prop] is None
-                or len(cp[prop]) == 0
-                or cp[prop][0] in ("", None)
-                or misc._is_nan_value(cp[prop][0])
-            )
-            if bad_current:
-                default_val = None
-
-                # Prefer header-derived default
-                if header is not None:
-                    if prop == "label" and getattr(header, "bodyparts", None):
-                        default_val = str(header.bodyparts[0])
-                    elif prop == "id" and getattr(header, "individuals", None):
-                        default_val = str(header.individuals[0]) if header.individuals else ""
-
-                # Fallback to first cycle key
-                if default_val is None:
-                    keys = list(cycles[prop].keys())
-                    default_val = str(keys[0]) if keys else ""
-
-                cp[prop] = np.array([default_val], dtype=object)
-                layer.current_properties = cp
-        except Exception:
-            layer.face_color_mode = "direct"
-            return
-
-        # Apply cycle configuration (guard napari validation)
         try:
             layer.face_color = prop
             layer.face_color_cycle = cycles[prop]
@@ -1477,12 +1415,7 @@ class KeypointControls(QWidget):
             if not isinstance(layer, Points) or not layer.metadata:
                 continue
 
-            layer.metadata["colormap_name"] = colormap_name
-            hdr = self._get_header_model_from_metadata(layer.metadata or {})
-            if hdr is None:
-                return
-            layer.metadata["face_color_cycles"] = build_color_cycles(hdr, colormap_name)
-
+            layer.metadata["config_colormap"] = colormap_name
             self._apply_points_coloring_from_metadata(layer)
 
         self._update_color_scheme()

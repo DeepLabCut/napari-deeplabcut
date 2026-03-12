@@ -1,5 +1,8 @@
 from qtpy.QtCore import QSettings
 
+DEFAULT_SINGLE_ANIMAL_CMAP = "rainbow"
+DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP = "set3"
+
 _OVERWRITE_CONFIRM_ENABLED_KEY = "napari_deeplabcut/overwrite/confirm_enabled"
 AUTO_OPEN_KEYPOINT_CONTROLS_KEY = "napari_deeplabcut/ui/auto_open_keypoint_controls"
 
