@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from napari_deeplabcut.config._autostart import maybe_install_keypoint_controls_autostart
 from napari_deeplabcut.core.discovery import discover_annotations
 from napari_deeplabcut.core.io import (
     SUPPORTED_IMAGES,
@@ -26,6 +27,7 @@ def get_hdf_reader(path):
         path = path[0]
     if not str(path).endswith(".h5"):
         return None
+    maybe_install_keypoint_controls_autostart()
     return read_hdf
 
 
@@ -48,6 +50,7 @@ def get_config_reader(path):
         path = path[0]
     if not str(path).endswith(".yaml"):
         return None
+    maybe_install_keypoint_controls_autostart()
     return read_config
 
 
@@ -103,5 +106,8 @@ def get_folder_parser(path):
     if n_points_layers == 0 and errors:
         exc_type, msg, cause = errors[0]
         raise exc_type(msg) from cause
+
+    if n_points_layers > 0:
+        maybe_install_keypoint_controls_autostart()
 
     return lambda _: layers
