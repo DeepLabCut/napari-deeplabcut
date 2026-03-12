@@ -28,6 +28,7 @@ import yaml
 from dask import delayed
 from dask_image.imread import imread
 from napari.types import LayerData
+from napari.utils.notifications import show_warning
 from natsort import natsorted
 from pydantic import ValidationError
 
@@ -521,8 +522,10 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             df_old = pd.read_hdf(out)
 
         key_conflict = keypoint_conflicts(df_old, df_new)
-        if not maybe_confirm_overwrite(attributes, key_conflict):
-            raise RuntimeError("User aborted save due to keypoint conflicts.")
+        md = attributes.get("metadata", {})
+        if not maybe_confirm_overwrite(metadata=md, key_conflict=key_conflict, allow_missing_controls=False):
+            show_warning("Aborted save due to keypoint conflicts.")
+            return []
 
         # Harmonize indices and merge
         try:

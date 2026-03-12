@@ -162,7 +162,7 @@ def _build_overwrite_warning_text(key_conflict: pd.DataFrame, max_items: int = 1
     return summary, details
 
 
-def maybe_confirm_overwrite(metadata: dict, key_conflict: pd.DataFrame) -> bool:
+def maybe_confirm_overwrite(metadata: dict, key_conflict: pd.DataFrame, allow_missing_controls=False) -> bool:
     """
     Returns True if save should proceed, False if user cancels.
     If no GUI controls are present, returns True (non-interactive).
@@ -172,7 +172,10 @@ def maybe_confirm_overwrite(metadata: dict, key_conflict: pd.DataFrame) -> bool:
 
     controls = metadata.get("controls")
     if controls is None:
-        return True  # headless/scripted save: no dialog
+        if allow_missing_controls:
+            return True  # headless/scripted save: no dialog
+        else:
+            raise RuntimeError("Keypoint conflicts detected but no GUI controls found.")
 
     summary, details = _build_overwrite_warning_text(key_conflict)
     return OverwriteConflictsDialog.confirm(controls, summary=summary, details=details)
