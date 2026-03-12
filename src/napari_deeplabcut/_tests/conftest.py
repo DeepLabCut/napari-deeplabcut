@@ -14,7 +14,7 @@ from skimage.io import imsave
 from napari_deeplabcut import keypoints
 from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.config.settings import set_auto_open_keypoint_controls
-from napari_deeplabcut.core import io as napari_dlc_io
+from napari_deeplabcut.core import io as io
 
 # os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
 
@@ -191,7 +191,7 @@ def config_path(tmp_path_factory):
         },
     }
     path = str(tmp_path_factory.mktemp("configs") / "config.yaml")
-    napari_dlc_io.write_config(
+    io.write_config(
         path,
         params=cfg,
     )

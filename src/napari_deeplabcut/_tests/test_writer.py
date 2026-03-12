@@ -8,7 +8,7 @@ from skimage.io import imread
 
 from napari_deeplabcut import _writer
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
-from napari_deeplabcut.core import io as napari_dlc_io
+from napari_deeplabcut.core import io
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.errors import MissingProvenanceError
 
@@ -20,7 +20,7 @@ def test_write_config(tmp_path):
     cfg = {"a": 1, "b": 2}
     path = tmp_path / "config.yaml"
 
-    napari_dlc_io.write_config(str(path), cfg)
+    io.write_config(str(path), cfg)
 
     assert path.exists()
     text = path.read_text()
@@ -117,7 +117,7 @@ def test_form_df_multi_animal(fake_keypoints):
     # inds + (x,y)
     data = np.column_stack([np.arange(n), rng.random(n), rng.random(n)])
 
-    df = napari_dlc_io.form_df(data, layer_metadata=metadata["metadata"], layer_properties=metadata["properties"])
+    df = io.form_df(data, layer_metadata=metadata["metadata"], layer_properties=metadata["properties"])
 
     assert isinstance(df, pd.DataFrame)
     assert len(df) == n
@@ -151,7 +151,7 @@ def test_form_df_single_animal(fake_keypoints):
 
     # inds + (x,y)
     points = np.column_stack([np.arange(n), rng.random(n), rng.random(n)])
-    out = napari_dlc_io.form_df(points, layer_metadata=metadata["metadata"], layer_properties=metadata["properties"])
+    out = io.form_df(points, layer_metadata=metadata["metadata"], layer_properties=metadata["properties"])
 
     assert isinstance(out, pd.DataFrame)
     assert len(out) == n
@@ -232,7 +232,7 @@ def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, m
     root.mkdir()
 
     # Always allow overwrite confirmation in unit test
-    monkeypatch.setattr(napari_dlc_io, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
+    # monkeypatch.setattr(dialogs, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
 
     header = DLCHeaderModel(columns=fake_keypoints.columns)
 
@@ -350,7 +350,7 @@ def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, m
     root = tmp_path / "proj"
     root.mkdir()
 
-    monkeypatch.setattr(napari_dlc_io, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
+    # monkeypatch.setattr(dialogs, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
 
     header = DLCHeaderModel(columns=fake_keypoints.columns)
     n_rows = len(fake_keypoints)

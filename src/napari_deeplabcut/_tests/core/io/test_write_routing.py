@@ -7,7 +7,7 @@ import pytest
 
 from napari_deeplabcut.config.models import AnnotationKind
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
-from napari_deeplabcut.core.io import _resolve_output_path_from_metadata, write_hdf
+from napari_deeplabcut.core.io import resolve_output_path_from_metadata, write_hdf
 
 
 def test_resolve_output_path_returns_none_for_machine_without_save_target():
@@ -22,7 +22,7 @@ def test_resolve_output_path_returns_none_for_machine_without_save_target():
             }
         }
     }
-    out_path, scorer, kind = _resolve_output_path_from_metadata(md)
+    out_path, scorer, kind = resolve_output_path_from_metadata(md)
     assert out_path is None
     assert scorer is None
     assert kind == AnnotationKind.MACHINE
