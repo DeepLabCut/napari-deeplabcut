@@ -32,6 +32,7 @@ from pydantic import ValidationError
 
 from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, PointsMetadata
+from napari_deeplabcut.config.settings import DEFAULT_SINGLE_ANIMAL_CMAP
 from napari_deeplabcut.core import schemas as dlc_schemas
 from napari_deeplabcut.core.dataframes import (
     form_df_from_validated,
@@ -42,7 +43,7 @@ from napari_deeplabcut.core.dataframes import (
     set_df_scorer,
 )
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
-from napari_deeplabcut.core.layers import populate_keypoint_layer_metadata
+from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
 from napari_deeplabcut.core.metadata import attach_source_and_io, parse_points_metadata
 from napari_deeplabcut.core.paths import canonicalize_path
 from napari_deeplabcut.core.provenance import infer_dataset_folder_from_points_meta, resolve_output_path_from_metadata
@@ -72,22 +73,24 @@ def load_config(config_path: str):
 def read_config(configname: str) -> list[LayerData]:
     config = load_config(configname)
     header = DLCHeaderModel.from_config(config)
-    metadata = populate_keypoint_layer_metadata(
+    layer_props = populate_keypoint_layer_properties(
         header,
         size=config["dotsize"],
         pcutoff=config["pcutoff"],
         colormap=config["colormap"],
         likelihood=np.array([1]),
     )
-    metadata["name"] = f"CollectedData_{config['scorer']}"
-    metadata["ndim"] = 3
-    metadata["property_choices"] = metadata.pop("properties")
-    metadata["metadata"]["project"] = str(Path(configname).parent)
+    layer_props["name"] = f"CollectedData_{config['scorer']}"
+    layer_props["ndim"] = 3
+    layer_props["property_choices"] = layer_props.pop("properties")
+    layer_props["metadata"]["project"] = str(Path(configname).parent)
+    layer_props["metadata"]["config_colormap"] = str(config.get("colormap", DEFAULT_SINGLE_ANIMAL_CMAP))
+
     conversion_tables = config.get("SuperAnimalConversionTables")
     if conversion_tables is not None:
         super_animal, table = conversion_tables.popitem()
-        metadata["metadata"]["tables"] = {super_animal: table}
-    return [(None, metadata, "points")]
+        layer_props["metadata"]["tables"] = {super_animal: table}
+    return [(None, layer_props, "points")]
 
 
 def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
@@ -178,9 +181,10 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     # Colormap selection also falls back to config when possible.
     try:
         cfg = load_config(misc.find_project_config_path(str(file)))
-        colormap = cfg["colormap"]
-    except FileNotFoundError:
-        colormap = "rainbow"
+        config_colormap = str(cfg.get("colormap", DEFAULT_SINGLE_ANIMAL_CMAP))
+    except Exception as e:
+        logger.warning("Could not load config for %s; falling back to default colormap. Error: %s", file, e)
+        config_colormap = DEFAULT_SINGLE_ANIMAL_CMAP
     if "individuals" not in temp.columns.names:
         old_idx = temp.columns.to_frame()
         old_idx.insert(0, "individuals", "")
@@ -221,30 +225,31 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     data = data[finite]
     df = df.loc[finite].reset_index(drop=True)
 
-    metadata = populate_keypoint_layer_metadata(
+    layer_props = populate_keypoint_layer_properties(
         header,
         labels=df["bodyparts"],
         ids=df["individuals"],
         likelihood=df.get("likelihood"),
         paths=list(paths2inds),
-        colormap=colormap,
+        colormap=config_colormap,
     )
-    metadata["name"] = file.stem
-    metadata["metadata"]["root"] = str(file.parent)
-    metadata["metadata"]["name"] = metadata["name"]
+    layer_props["name"] = file.stem
+    layer_props["metadata"]["root"] = str(file.parent)
+    layer_props["metadata"]["name"] = layer_props["name"]
+    layer_props["metadata"]["config_colormap"] = config_colormap
 
     # Attach provenance. If explicit kind provided, we store it directly.
     if kind is not None:
-        meta = metadata.setdefault("metadata", {})
+        meta = layer_props.setdefault("metadata", {})
         # Keep legacy source fields too
-        attach_source_and_io(metadata, file)
+        attach_source_and_io(layer_props, file)
         # Override kind in io with explicit kind arg
         if isinstance(meta.get("io"), dict):
             meta["io"]["kind"] = kind  # stored as actual enum, not value
     else:
-        attach_source_and_io(metadata, file)
+        attach_source_and_io(layer_props, file)
 
-    return [(data, metadata, "points")]
+    return [(data, layer_props, "points")]
 
 
 # def _set_df_scorer(df: pd.DataFrame, scorer: str) -> pd.DataFrame:
