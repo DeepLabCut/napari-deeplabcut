@@ -21,9 +21,7 @@ from qtpy.QtWidgets import (
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut.config.models import DLCHeaderModel
-from napari_deeplabcut.config.settings import (
-    DEFAULT_SINGLE_ANIMAL_CMAP,
-)
+from napari_deeplabcut.config.settings import DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP, DEFAULT_SINGLE_ANIMAL_CMAP
 from napari_deeplabcut.misc import build_color_cycles
 from napari_deeplabcut.ui.labels_and_dropdown import LabelPair
 
@@ -200,7 +198,7 @@ class ColorSchemeResolver:
 
         bodypart_cycles = build_color_cycles(header, config_cmap) or {}
         if self.is_multianimal(layer):
-            individual_cycles = build_color_cycles(header, DEFAULT_SINGLE_ANIMAL_CMAP) or {}
+            individual_cycles = build_color_cycles(header, DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP) or {}
         else:
             individual_cycles = bodypart_cycles
 

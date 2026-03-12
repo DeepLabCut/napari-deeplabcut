@@ -443,7 +443,8 @@ class PointsMetadata(BaseModel):
     ----------
     - header defines keypoint structure
     - root + paths must align with ImageMetadata when present
-    - face_color_cycles must be consistent with header
+    - config_colormap stores the configured bodypart colormap when known
+    - face_color_cycles, when present, is derived display state and not authoritative
     """
 
     kind: MetadataKind = Field(default=MetadataKind.POINTS)
@@ -458,6 +459,7 @@ class PointsMetadata(BaseModel):
     io: IOProvenance | None = None
     save_target: IOProvenance | None = None
 
+    config_colormap: str | None = None
     face_color_cycles: dict[str, dict[str, Any]] | None = None
     colormap_name: str | None = None
 
