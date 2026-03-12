@@ -480,6 +480,7 @@ class ColorSchemePanel(QWidget):
         )
 
         self.display = ColorSchemeDisplay(parent=self)
+        self.display.added.connect(self._wire_display_entry)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._toggle)
@@ -648,3 +649,158 @@ class ColorSchemePanel(QWidget):
         except RuntimeError:
             # display already deleted
             return
+
+    def _wire_display_entry(self, widget) -> None:
+        """Connect a legend entry click to selecting matching points in the layer."""
+        try:
+            widget.part_label.clicked.connect(lambda _checked=False, w=widget: self._on_display_entry_clicked(w))
+        except Exception:
+            logger.debug("Failed to wire ColorSchemeDisplay entry click", exc_info=True)
+
+    def _on_display_entry_clicked(self, widget) -> None:
+        """Select points in the target layer that match the clicked legend category."""
+        if self._disposed:
+            return
+
+        category = getattr(widget, "part_name", None)
+        if not category:
+            return
+        category = str(category)
+
+        layer = self._resolver.get_target_layer()
+        if layer is None:
+            return
+
+        prop = self._resolver.get_color_property(layer)
+        if prop is None:
+            return
+
+        # Prefer matches in the current frame/slice first.
+        indices = self._matching_point_indices(
+            layer=layer,
+            prop=prop,
+            category=category,
+            current_frame_only=True,
+        )
+
+        # If config view is showing categories not present in the current frame,
+        # fall back to the first frame containing that category and jump there.
+        # We could disable this if it's not intuitive, but this preserves interactivity.
+        if not indices:
+            indices = self._matching_point_indices(
+                layer=layer,
+                prop=prop,
+                category=category,
+                current_frame_only=False,
+            )
+
+            # Optional safe fallback: if "id" legend was derived from label-like data,
+            # allow matching on label as a last resort.
+            if not indices and prop == "id":
+                indices = self._matching_point_indices(
+                    layer=layer,
+                    prop="label",
+                    category=category,
+                    current_frame_only=False,
+                )
+
+            if not indices:
+                return
+
+            # Jump to the frame of the first found point when possible.
+            try:
+                data = np.asarray(layer.data)
+                if data.ndim == 2 and data.shape[1] > 0:
+                    frame = int(data[indices[0], 0])
+                    try:
+                        self.viewer.dims.set_current_step(0, frame)
+                    except AttributeError:
+                        # Older napari fallback
+                        self.viewer.dims.set_point(0, frame)
+            except Exception:
+                logger.debug("Failed to move to frame for clicked legend entry", exc_info=True)
+
+            # Re-resolve in the new frame so selection reflects what is now visible.
+            refreshed = self._matching_point_indices(
+                layer=layer,
+                prop=prop,
+                category=category,
+                current_frame_only=True,
+            )
+            if refreshed:
+                indices = refreshed
+
+        try:
+            self.viewer.layers.selection.active = layer
+        except Exception:
+            logger.debug("Failed to activate target layer from legend click", exc_info=True)
+
+        try:
+            layer.mode = "select"
+        except Exception:
+            logger.debug("Failed to switch Points layer to select mode", exc_info=True)
+
+        try:
+            layer.selected_data = set(map(int, indices))
+        except Exception:
+            logger.debug("Failed to update selected_data from legend click", exc_info=True)
+
+    def _matching_point_indices(
+        self,
+        *,
+        layer: Points,
+        prop: str,
+        category: str,
+        current_frame_only: bool,
+    ) -> list[int]:
+        """
+        Return indices of points whose categorical property matches ``category``.
+
+        If ``current_frame_only`` is True, restrict matches to the current frame/slice
+        on axis 0 when possible, and prefer points that are currently shown.
+        """
+        props = getattr(layer, "properties", {}) or {}
+        values = props.get(prop, None)
+        if values is None or len(values) == 0:
+            return []
+
+        values = np.asarray(values, dtype=object).ravel()
+        if len(values) == 0:
+            return []
+
+        matches = np.zeros(len(values), dtype=bool)
+        for i, v in enumerate(values):
+            if v in ("", None) or misc._is_nan_value(v):
+                continue
+            matches[i] = str(v) == category
+
+        if not np.any(matches):
+            return []
+
+        # Restrict to current frame/slice when requested and when data supports it.
+        if current_frame_only:
+            try:
+                data = np.asarray(layer.data)
+                if len(data) == len(values) and data.ndim == 2 and data.shape[1] > 0:
+                    current_step = self.viewer.dims.current_step
+                    if len(current_step) > 0:
+                        frame = current_step[0]
+                        matches &= np.asarray(data[:, 0] == frame)
+            except Exception:
+                logger.debug("Failed to filter legend click selection by current frame", exc_info=True)
+
+            if not np.any(matches):
+                return []
+
+        # Prefer currently shown points, but only if that leaves at least one result.
+        try:
+            shown = getattr(layer, "shown", None)
+            if shown is not None and len(shown) == len(values):
+                shown = np.asarray(shown, dtype=bool)
+                shown_matches = matches & shown
+                if np.any(shown_matches):
+                    matches = shown_matches
+        except Exception:
+            logger.debug("Failed to apply layer.shown mask for legend click selection", exc_info=True)
+
+        return np.flatnonzero(matches).astype(int).tolist()
