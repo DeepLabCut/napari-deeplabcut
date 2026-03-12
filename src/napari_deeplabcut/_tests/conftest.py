@@ -238,7 +238,7 @@ def single_animal_project(tmp_path: Path):
     }
 
     config_path = project / "config.yaml"
-    napari_dlc_io.write_config(config_path, cfg)
+    io.write_config(config_path, cfg)
     return project, config_path
 
 

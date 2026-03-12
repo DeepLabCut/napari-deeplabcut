@@ -168,7 +168,7 @@ def test_overwrite_warning_triggers_on_conflict(make_napari_viewer, qtbot, tmp_p
     _set_or_add_bodypart_xy(points, store, "bodypart1", x=99.0, y=88.0)
 
     viewer.layers.selection.active = points
-    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+    controls._save_layers_dialog(selected=True)
     qtbot.wait(200)
 
     assert len(overwrite_confirm.calls) == 1, "Expected overwrite confirmation to be requested once."
@@ -210,7 +210,7 @@ def test_overwrite_warning_cancel_aborts_write(make_napari_viewer, qtbot, tmp_pa
 
     viewer.layers.selection.active = points
     try:
-        viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+        controls._save_layers_dialog(selected=True)
     except Exception:
         # Some napari/npe2 versions may raise when writer aborts; file integrity is what matters.
         pass
