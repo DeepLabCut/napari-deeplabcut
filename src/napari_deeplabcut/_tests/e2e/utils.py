@@ -10,6 +10,14 @@ import numpy as np
 import pandas as pd
 from napari.layers import Points
 
+from napari_deeplabcut import misc
+from napari_deeplabcut.config.models import DLCHeaderModel
+from napari_deeplabcut.config.settings import (
+    DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP,
+    DEFAULT_SINGLE_ANIMAL_CMAP,
+)
+from napari_deeplabcut.ui.color_scheme_display import _to_hex
+
 
 def file_sig(p: Path):
     b = p.read_bytes()
@@ -286,18 +294,52 @@ def _set_or_add_bodypart_xy(points_layer: Points, store, bodypart: str, *, x: fl
     points_layer.add(np.array([float(frame), float(y), float(x)], dtype=float))
 
 
-def _to_hex(rgba) -> str:
-    arr = np.asarray(rgba, dtype=float).ravel()
-    if arr.size < 3:
-        return "#000000"
-    if arr.size == 3:
-        arr = np.r_[arr, 1.0]
-    arr = np.clip(arr[:4], 0, 1)
-    r, g, b, _a = (arr * 255).astype(int)
-    return f"#{r:02x}{g:02x}{b:02x}"
+def _header_model_from_layer(layer) -> DLCHeaderModel:
+    hdr = layer.metadata.get("header")
+    if hdr is None:
+        raise AssertionError("Expected header in layer metadata")
+    return hdr if isinstance(hdr, DLCHeaderModel) else DLCHeaderModel.model_validate(hdr)
 
 
-def _scheme_from_cycle(points_layer: Points, prop: str, names: list[str]) -> dict[str, str]:
-    cycles = (points_layer.metadata or {}).get("face_color_cycles", {})
-    mapping = cycles.get(prop) or {}
+def _is_multianimal_header(header: DLCHeaderModel) -> bool:
+    inds = list(getattr(header, "individuals", []) or [])
+    return bool(inds and str(inds[0]) != "")
+
+
+def _config_colormap_from_layer(layer) -> str:
+    md = layer.metadata or {}
+    cmap = md.get("config_colormap")
+    if isinstance(cmap, str) and cmap:
+        return cmap
+    return DEFAULT_SINGLE_ANIMAL_CMAP
+
+
+def _cycles_from_policy(layer) -> dict[str, dict[str, np.ndarray]]:
+    """
+    Compute expected cycles from the new centralized color policy.
+
+    Source of truth:
+    - layer header
+    - metadata['config_colormap']
+    - multi-animal id coloring uses DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP
+    """
+    header = _header_model_from_layer(layer)
+    config_cmap = _config_colormap_from_layer(layer)
+
+    config_cycles = misc.build_color_cycles(header, config_cmap) or {}
+
+    if _is_multianimal_header(header):
+        individual_cycles = misc.build_color_cycles(header, DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP) or {}
+    else:
+        individual_cycles = config_cycles
+
+    return {
+        "label": config_cycles.get("label", {}),
+        "id": individual_cycles.get("id", {}),
+    }
+
+
+def _scheme_from_policy(layer, prop: str, names: list[str]) -> dict[str, str]:
+    cycles = _cycles_from_policy(layer)
+    mapping = cycles.get(prop, {})
     return {name: _to_hex(mapping[name]) for name in names if name in mapping}

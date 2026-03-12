@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from napari_deeplabcut.config.models import AnnotationKind
-from napari_deeplabcut.core.layers import is_machine_layer, populate_keypoint_layer_metadata
+from napari_deeplabcut.core.layers import is_machine_layer, populate_keypoint_layer_properties
 
 
 class HeaderStub:
@@ -43,7 +43,7 @@ def patch_color_cycles(monkeypatch):
 def test_single_animal_uses_label_for_face_color_and_text(patch_color_cycles):
     """Single-animal: no individuals dimension => ids[0] is falsy, use label. [3](https://forum.image.sc/t/how-to-generate-h5-files-from-pre-collected-data/61936)"""
     header = HeaderStub(bodyparts=("bp1", "bp2"), individuals=("",))  # single-animal sentinel
-    md = populate_keypoint_layer_metadata(header)
+    md = populate_keypoint_layer_properties(header)
 
     assert md["face_color"] == "label"
     assert md["text"] == "label"
@@ -53,7 +53,7 @@ def test_single_animal_uses_label_for_face_color_and_text(patch_color_cycles):
 def test_multi_animal_uses_id_for_face_color_and_text(patch_color_cycles):
     """Multi-animal: individuals dimension present => ids[0] truthy, use id. [3](https://forum.image.sc/t/how-to-generate-h5-files-from-pre-collected-data/61936)"""
     header = HeaderStub(bodyparts=("bp1", "bp2"), individuals=("animal1", "animal2"))
-    md = populate_keypoint_layer_metadata(header)
+    md = populate_keypoint_layer_properties(header)
 
     assert md["face_color"] == "id"
     assert md["text"] == "{id}–{label}"
@@ -68,7 +68,7 @@ def test_multi_animal_uses_id_for_face_color_and_text(patch_color_cycles):
 def test_empty_ids_must_not_crash_defaults_to_label(patch_color_cycles):
     """Regression guard for the E2E failure: ids[0] must not be assumed."""
     header = HeaderStub(bodyparts=("bp1", "bp2"), individuals=("",))
-    md = populate_keypoint_layer_metadata(header, labels=["bp1"], ids=[])
+    md = populate_keypoint_layer_properties(header, labels=["bp1"], ids=[])
 
     # When ids is empty, treat like single-animal (label-based) rather than crashing.
     assert md["face_color"] == "label"
@@ -78,7 +78,7 @@ def test_empty_ids_must_not_crash_defaults_to_label(patch_color_cycles):
 
 def test_empty_labels_and_ids_produce_empty_properties(patch_color_cycles):
     header = HeaderStub(bodyparts=(), individuals=())
-    md = populate_keypoint_layer_metadata(header, labels=[], ids=[], likelihood=None)
+    md = populate_keypoint_layer_properties(header, labels=[], ids=[], likelihood=None)
 
     assert md["properties"]["label"] == []
     assert md["properties"]["id"] == []
@@ -98,7 +98,7 @@ def test_valid_is_thresholded_by_pcutoff(patch_color_cycles):
     header = HeaderStub(bodyparts=("bp1", "bp2"), individuals=("",))
     likelihood = np.array([0.2, 0.9], dtype=float)
 
-    md = populate_keypoint_layer_metadata(
+    md = populate_keypoint_layer_properties(
         header,
         labels=["bp1", "bp2"],
         ids=[""],  # single-animal sentinel
@@ -111,7 +111,7 @@ def test_valid_is_thresholded_by_pcutoff(patch_color_cycles):
 def test_default_likelihood_is_ones_of_len_labels(patch_color_cycles):
     """Default fallback behavior should be stable even when likelihood not provided."""
     header = HeaderStub(bodyparts=("bp1", "bp2"), individuals=("",))
-    md = populate_keypoint_layer_metadata(header, labels=["bp1", "bp2"], ids=[""])
+    md = populate_keypoint_layer_properties(header, labels=["bp1", "bp2"], ids=[""])
 
     assert np.all(md["properties"]["likelihood"] == np.ones(2))
     assert np.all(md["properties"]["valid"] == (np.ones(2) > 0.6))
@@ -150,7 +150,7 @@ def test_ids_as_pandas_series_single_animal_does_not_crash(patch_color_cycles):
     import pandas as pd
 
     header = HeaderStub(bodyparts=("bp1",), individuals=("",))
-    md = populate_keypoint_layer_metadata(header, labels=["bp1"], ids=pd.Series([""], name="individuals"))
+    md = populate_keypoint_layer_properties(header, labels=["bp1"], ids=pd.Series([""], name="individuals"))
     assert md["face_color"] == "label"
     assert md["text"] == "label"
 
@@ -159,7 +159,7 @@ def test_ids_as_empty_pandas_series_does_not_crash_defaults_to_label(patch_color
     import pandas as pd
 
     header = HeaderStub(bodyparts=("bp1",), individuals=("",))
-    md = populate_keypoint_layer_metadata(header, labels=["bp1"], ids=pd.Series([], dtype=str, name="individuals"))
+    md = populate_keypoint_layer_properties(header, labels=["bp1"], ids=pd.Series([], dtype=str, name="individuals"))
     assert md["face_color"] == "label"
     assert md["text"] == "label"
     assert md["properties"]["id"] == []
@@ -169,6 +169,6 @@ def test_ids_as_pandas_series_multi_animal_uses_id(patch_color_cycles):
     import pandas as pd
 
     header = HeaderStub(bodyparts=("bp1",), individuals=("animal1",))
-    md = populate_keypoint_layer_metadata(header, labels=["bp1"], ids=pd.Series(["animal1"], name="individuals"))
+    md = populate_keypoint_layer_properties(header, labels=["bp1"], ids=pd.Series(["animal1"], name="individuals"))
     assert md["face_color"] == "id"
     assert md["text"] == "{id}–{label}"

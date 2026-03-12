@@ -12,7 +12,7 @@ from vispy import keys
 
 from napari_deeplabcut import _widgets, keypoints
 from napari_deeplabcut.core import io
-from napari_deeplabcut.core.io import populate_keypoint_layer_metadata
+from napari_deeplabcut.core.io import populate_keypoint_layer_properties
 from napari_deeplabcut.ui.color_scheme_display import ColorSchemeDisplay
 from napari_deeplabcut.ui.labels_and_dropdown import KeypointsDropdownMenu, LabelPair
 from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
@@ -310,7 +310,7 @@ def test_trajectory_loader_ignores_invalid_properties(make_napari_viewer, make_r
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
     header = make_real_header_factory(individuals=("",))
-    md = populate_keypoint_layer_metadata(
+    md = populate_keypoint_layer_properties(
         header,
         labels=["bodypart1"],
         ids=[""],

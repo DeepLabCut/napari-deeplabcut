@@ -1,6 +1,8 @@
 """Main widget and controls for napari-deeplabcut, including the tutorial and shortcuts windows."""
 
 # src/napari_deeplabcut/_widgets.py
+from __future__ import annotations
+
 import hashlib
 import logging
 import os
@@ -39,6 +41,7 @@ from qtpy.QtWidgets import (
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut._writer import _write_image
+from napari_deeplabcut.config import settings
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.layers import (
@@ -63,7 +66,6 @@ from napari_deeplabcut.core.paths import (
 from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.core.sidecar import get_default_scorer, set_default_scorer
 from napari_deeplabcut.misc import (
-    build_color_cycles,
     encode_categories,
 )
 from napari_deeplabcut.napari_compat import (
@@ -222,6 +224,14 @@ class KeypointControls(QWidget):
         self._layout.addLayout(help_buttons)
 
         grid = QGridLayout()
+
+        self._confirm_overwrite_cb = QCheckBox("Confirm overwrite saves", parent=self)
+        self._confirm_overwrite_cb.setToolTip(
+            "When enabled, saving a layer that would overwrite existing keypoints will show a confirmation dialog."
+        )
+        self._confirm_overwrite_cb.setChecked(settings.get_overwrite_confirmation_enabled())
+        self._confirm_overwrite_cb.stateChanged.connect(self._toggle_overwrite_confirmation)
+
         self._trail_cb = QCheckBox("Show trails", parent=self)
         self._trail_cb.setToolTip("Show the trails for each keypoint over time, in the main video viewer")
         self._trail_cb.setChecked(False)
@@ -238,9 +248,10 @@ class KeypointControls(QWidget):
         self._show_traj_plot_cb.setEnabled(False)
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
 
-        grid.addWidget(self._show_traj_plot_cb, 0, 0)
-        grid.addWidget(self._trail_cb, 1, 0)
-        grid.addWidget(self._view_scheme_cb, 2, 0)
+        grid.addWidget(self._confirm_overwrite_cb, 0, 0)
+        grid.addWidget(self._show_traj_plot_cb, 1, 0)
+        grid.addWidget(self._trail_cb, 2, 0)
+        grid.addWidget(self._view_scheme_cb, 3, 0)
 
         self._layout.addLayout(grid)
 
@@ -371,6 +382,9 @@ class KeypointControls(QWidget):
 
         # apply the new color cycles + recolor safely
         for _layer, store in self._stores.items():
+            _layer.metadata["config_colormap"] = new_metadata.get(
+                "config_colormap", _layer.metadata.get("config_colormap")
+            )
             _layer.metadata["face_color_cycles"] = new_metadata["face_color_cycles"]
             _layer.metadata["colormap_name"] = new_metadata.get("colormap_name", _layer.metadata.get("colormap_name"))
             self._apply_points_coloring_from_metadata(_layer)
@@ -403,9 +417,22 @@ class KeypointControls(QWidget):
         except Exception:
             return None
 
+    @staticmethod
+    def get_layer_controls(layer: Points) -> KeypointControls | None:
+        return getattr(layer, "_dlc_controls", None)
+
+    @staticmethod
+    def get_layer_store(layer: Points) -> keypoints.KeypointStore | None:
+        return getattr(layer, "_dlc_store", None)
+
     def _wire_points_layer(self, layer: Points) -> keypoints.KeypointStore | None:
         if not self._validate_header(layer):
             return None
+        existing = getattr(layer, "_dlc_store", None)
+        if existing is not None:
+            self._stores[layer] = existing
+            layer._dlc_controls = self
+            return existing
 
         # ensure presence of IO metadata for saving & routing
         mig = migrate_points_layer_metadata(layer)
@@ -418,6 +445,8 @@ class KeypointControls(QWidget):
 
         store = keypoints.KeypointStore(self.viewer, layer)
         self._stores[layer] = store
+        layer._dlc_store = store
+        layer._dlc_controls = self
 
         # default root/paths from current image meta if missing
         if not layer.metadata.get("root") and self._image_meta.root:
@@ -975,105 +1004,41 @@ class KeypointControls(QWidget):
             self._color_scheme_panel.schedule_update()
 
     def _apply_points_coloring_from_metadata(self, layer: Points) -> None:
-        """Apply categorical (cycle) coloring if safe, otherwise fall back without crashing."""
-        md = layer.metadata or {}
-        cycles = md.get("face_color_cycles") or {}
+        """Apply categorical coloring using centralized resolver policy."""
+        resolver = self._color_scheme_panel._resolver
+        cycles = resolver.get_face_color_cycles(layer)
         if not cycles:
-            return
-
-        # Empty layer: never enable cycle mode
-        try:
-            if layer.data is None or len(layer.data) == 0:
+            try:
                 layer.face_color_mode = "direct"
-                return
-        except Exception:
-            layer.face_color_mode = "direct"
+            except Exception:
+                pass
             return
 
-        header = self._get_header_model_from_metadata(md)
+        prop = resolver.get_active_color_property(layer)
+        if prop not in cycles or not cycles[prop]:
+            return
 
-        # Multi-animal heuristic (robust to missing header)
-        is_multi = False
-        try:
-            inds = getattr(header, "individuals", None)
-            is_multi = bool(inds and len(inds) > 0 and str(inds[0]) != "")
-        except Exception:
-            is_multi = False
-
-        # Default choice
-        prop = "id" if (is_multi and "id" in cycles) else "label"
-
-        # Respect user-selected mode where possible
-        if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL) and "id" in cycles:
-            prop = "id"
-        elif self.color_mode == str(keypoints.ColorMode.BODYPART) and "label" in cycles:
-            prop = "label"
-
-        # Fallback if chosen prop missing in cycles
-        if prop not in cycles:
-            prop = "id" if "id" in cycles else "label"
-
-        # Ensure properties exist for chosen prop
         props = getattr(layer, "properties", {}) or {}
         values = props.get(prop, None)
 
-        if values is None or len(values) == 0:
-            layer.face_color_mode = "direct"
-            return
-
-        # If id is selected but all are blank/None → fallback to label (common single-animal case)
+        # id mode on single-animal / blank ids -> fallback to label
         if prop == "id":
             try:
-                vals = np.asarray(values, dtype=object).ravel()
-                if all(v in ("", None) or misc._is_nan_value(v) for v in vals):
-                    if "label" in cycles and props.get("label", None) is not None:
-                        prop = "label"
-                        values = props.get(prop, None)
+                vals = np.asarray(values, dtype=object).ravel() if values is not None else np.array([], dtype=object)
+                if len(vals) == 0 or all(v in ("", None) or misc._is_nan_value(v) for v in vals):
+                    prop = "label"
+                    values = props.get("label", None)
+            except Exception:
+                prop = "label"
+                values = props.get("label", None)
+
+        if values is None or len(values) == 0 or misc._array_has_nan(values):
+            try:
+                layer.face_color_mode = "direct"
             except Exception:
                 pass
-
-        # Still missing/empty after fallback
-        if values is None or len(values) == 0:
-            layer.face_color_mode = "direct"
             return
 
-        # NaN guard: avoid napari categorical crash
-        if misc._array_has_nan(values):
-            layer.face_color_mode = "direct"
-            return
-
-        # Ensure current_properties[prop] is set to a valid key (not NaN/None/"")
-        try:
-            cp = layer.current_properties
-            bad_current = (
-                prop not in cp
-                or cp[prop] is None
-                or len(cp[prop]) == 0
-                or cp[prop][0] in ("", None)
-                or misc._is_nan_value(cp[prop][0])
-            )
-            if bad_current:
-                default_val = None
-
-                # Prefer header-derived default
-                if header is not None:
-                    if prop == "label" and getattr(header, "bodyparts", None):
-                        default_val = str(header.bodyparts[0])
-                    elif prop == "id" and getattr(header, "individuals", None):
-                        default_val = str(header.individuals[0]) if header.individuals else ""
-
-                # Fallback to first cycle key
-                if default_val is None:
-                    keys = list(cycles[prop].keys())
-                    default_val = str(keys[0]) if keys else ""
-
-                cp[prop] = np.array([default_val], dtype=object)
-                layer.current_properties = cp
-        except Exception:
-            layer.face_color_mode = "direct"
-            return
-
-        # Apply cycle configuration (guard napari validation)
         try:
             layer.face_color = prop
             layer.face_color_cycle = cycles[prop]
@@ -1089,30 +1054,60 @@ class KeypointControls(QWidget):
         """
         Best-effort remap of time/frame indices in non-Image layers to match current Image order.
 
-        Safety principles:
-        - Never delete user data automatically (only remap what is safe).
-        - Only write back to layer.data after successful transformation.
-        - Always sync layer.metadata with self._images_meta when possible.
+        Safety principles
+        -----------------
+        - Never delete or silently corrupt user data.
+        - Only write back to layer.data after a remap has been accepted as safe.
+        - Always sync non-path image metadata when possible.
+        - Do NOT replace metadata["paths"] unless remap is accepted as safe.
+        - Specifically reject ambiguous basename-only remaps (depth=1 with duplicate /
+        non-bijective warnings), which commonly happen when data are moved out of the
+        standard DLC labeled-data layout.
         """
         try:
             new_paths = self._image_meta.paths
             if not new_paths:
                 return
 
-            md = layer.metadata or {}
+            if layer.metadata is None:
+                layer.metadata = {}
+
+            md = layer.metadata
             old_paths = md.get("paths") or []
 
-            # Always sync basic metadata from image meta (in place)
+            # Always sync safe non-path metadata from image meta.
+            # Do NOT sync "paths" yet; that is only safe after we decide remap is acceptable.
             try:
-                layer.metadata.update(self._image_meta.model_dump(exclude_none=True))
+                safe_image_meta = self._image_meta.model_dump(exclude_none=True)
+                safe_image_meta.pop("paths", None)
+                layer.metadata.update(safe_image_meta)
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to sync non-path image metadata for layer=%r",
+                    getattr(layer, "name", str(layer)),
+                    exc_info=True,
+                )
 
             if not old_paths:
+                logger.debug(
+                    "Skipping remap for layer=%r: no existing layer metadata paths.",
+                    getattr(layer, "name", str(layer)),
+                )
                 return
 
             # Determine time column (napari-specific choice)
             time_col = 1 if isinstance(layer, Tracks) else 0
+
+            arr_before = np.asarray(layer.data)
+            logger.debug(
+                "Remap start layer=%r old_paths_len=%s new_paths_len=%s data_shape=%s frame_min=%s frame_max=%s",
+                getattr(layer, "name", str(layer)),
+                len(old_paths),
+                len(new_paths or []),
+                getattr(arr_before, "shape", None),
+                int(np.nanmin(arr_before[:, time_col])) if arr_before.size else None,
+                int(np.nanmax(arr_before[:, time_col])) if arr_before.size else None,
+            )
 
             res = remap_layer_data_by_paths(
                 data=layer.data,
@@ -1122,16 +1117,29 @@ class KeypointControls(QWidget):
                 policy=PathMatchPolicy.ORDERED_DEPTHS,
             )
 
-            if res.changed and res.data is not None:
+            logger.debug(
+                "Remap result layer=%r changed=%s mapped_count=%s depth=%s message=%s warnings=%s",
+                getattr(layer, "name", str(layer)),
+                res.changed,
+                res.mapped_count,
+                res.depth_used,
+                res.message,
+                res.warnings,
+            )
+
+            if res.applied and res.data is not None:
                 layer.data = res.data
 
-            # Optional debug logging
+            if res.accept_paths_update:
+                layer.metadata["paths"] = list(new_paths)
+
+            # Final debug logging
             if res.depth_used is None:
                 logger.debug("Remap skipped for %s: %s", getattr(layer, "name", str(layer)), res.message)
             else:
                 logger.debug(
                     "Remap %s for %s (depth=%s, mapped=%s): %s",
-                    "applied" if res.changed else "skipped",
+                    "applied" if res.changed else "accepted-noop",
                     getattr(layer, "name", str(layer)),
                     res.depth_used,
                     res.mapped_count,
@@ -1285,6 +1293,11 @@ class KeypointControls(QWidget):
 
         return True
 
+    def _toggle_overwrite_confirmation(self, state) -> None:
+        enabled = Qt.CheckState(state) == Qt.CheckState.Checked
+        settings.set_overwrite_confirmation_enabled(enabled)
+        self.viewer.status = "Overwrite confirmation enabled" if enabled else "Overwrite confirmation disabled"
+
     # Hack to save a KeyPoints layer without showing the Save dialog
     def _save_layers_dialog(self, selected=False):
         """Save layers (all or selected) to disk, using ``LayerList.save()``.
@@ -1294,6 +1307,11 @@ class KeypointControls(QWidget):
             If True, only layers that are selected in the viewer will be saved.
             By default, all layers are saved.
         """
+        from napari.utils.notifications import show_warning
+
+        from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
+        from napari_deeplabcut.ui.dialogs import maybe_confirm_overwrite
+
         selected_layers = list(self.viewer.layers.selection)
         msg = ""
         if not len(self.viewer.layers):
@@ -1316,6 +1334,30 @@ class KeypointControls(QWidget):
                 layer.metadata.get("io", {}).get("kind"),
                 layer.metadata.get("save_target"),
             )
+            try:
+                attributes = {
+                    "name": layer.name,
+                    "metadata": dict(layer.metadata or {}),
+                    "properties": dict(layer.properties or {}),
+                }
+                report = compute_overwrite_report_for_points_save(layer.data, attributes)
+            except Exception as e:
+                logger.exception("Failed to compute overwrite preflight for layer %r", getattr(layer, "name", layer))
+                QMessageBox.warning(
+                    self,
+                    "Cannot save",
+                    f"Failed to prepare save preflight:\n{e}",
+                    QMessageBox.Ok,
+                )
+                return
+
+            if report is not None:
+                if not maybe_confirm_overwrite(
+                    parent=self,
+                    report=report,
+                ):
+                    show_warning("Save cancelled: existing keypoints would have been overwritten.")
+                    return
 
             self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
             self.viewer.status = "Data successfully saved"
@@ -1373,12 +1415,7 @@ class KeypointControls(QWidget):
             if not isinstance(layer, Points) or not layer.metadata:
                 continue
 
-            layer.metadata["colormap_name"] = colormap_name
-            hdr = self._get_header_model_from_metadata(layer.metadata or {})
-            if hdr is None:
-                return
-            layer.metadata["face_color_cycles"] = build_color_cycles(hdr, colormap_name)
-
+            layer.metadata["config_colormap"] = colormap_name
             self._apply_points_coloring_from_metadata(layer)
 
         self._update_color_scheme()

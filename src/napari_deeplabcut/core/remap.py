@@ -27,21 +27,29 @@ class RemapResult:
     Attributes
     ----------
     changed:
-        True if output data differs from input data (remap applied).
+        True if output data differs from input data.
+    applied:
+        True if the remap is considered safe and should be applied upstream.
+    accept_paths_update:
+        True if upstream may safely replace metadata["paths"] with the new paths.
+    is_ambiguous:
+        True if remap was rejected because matching was ambiguous/risky.
     depth_used:
         Canonicalization depth used to match paths (e.g. 3, 2, 1), or None.
     mapped_count:
         Number of old frame indices that had a mapping into new indices.
     message:
-        Human-readable summary suitable for debug logs.
+        Human-readable summary suitable for logs / UI.
     data:
-        Remapped data object (same type shape intent as input), or None if not remapped.
+        Remapped data object (same type shape intent as input), or None if not applied.
     warnings:
         Tuple of warning strings describing ambiguity/risk detected during remap decision.
-        This is informational only and does not affect behavior.
     """
 
     changed: bool
+    applied: bool
+    accept_paths_update: bool
+    is_ambiguous: bool
     depth_used: int | None
     mapped_count: int
     message: str
@@ -131,15 +139,14 @@ def remap_time_indices(
     """
     Remap time indices in a data container (array-like or list-of-arrays).
 
-    Returns
-    -------
-    RemapResult
+    This function is intentionally policy-free: it only applies a provided
+    index mapping and reports whether anything changed.
     """
     if data is None:
-        return RemapResult(False, None, 0, "No data to remap (data is None).", None)
+        return RemapResult(False, False, False, False, None, 0, "No data to remap (data is None).", None)
 
     if not idx_map:
-        return RemapResult(False, None, 0, "No index mapping available (empty idx_map).", None)
+        return RemapResult(False, False, False, False, None, 0, "No index mapping available (empty idx_map).", None)
 
     # Shapes-like: list of arrays
     if isinstance(data, list):
@@ -165,7 +172,6 @@ def remap_time_indices(
                 new_data.append(arr2)
                 continue
 
-            # changed detection (best-effort)
             try:
                 if not np.array_equal(t2, np.asarray(t).astype(int, copy=False)):
                     changed = True
@@ -177,6 +183,9 @@ def remap_time_indices(
 
         return RemapResult(
             changed=changed,
+            applied=changed,
+            accept_paths_update=changed,
+            is_ambiguous=False,
             depth_used=None,
             mapped_count=len(idx_map),
             message="Remapped list-like vertices." if changed else "List-like vertices unchanged.",
@@ -186,10 +195,12 @@ def remap_time_indices(
     # Array-like
     arr = np.asarray(data)
     if arr.size == 0:
-        return RemapResult(False, None, len(idx_map), "No data to remap (empty array).", None)
+        return RemapResult(False, False, False, False, None, len(idx_map), "No data to remap (empty array).", None)
 
     if arr.ndim < 2 or arr.shape[1] <= time_col:
-        return RemapResult(False, None, len(idx_map), "Data shape does not contain a time column.", None)
+        return RemapResult(
+            False, False, False, False, None, len(idx_map), "Data shape does not contain a time column.", None
+        )
 
     arr2 = np.array(arr, copy=True)
     t = arr2[:, time_col]
@@ -197,7 +208,7 @@ def remap_time_indices(
     try:
         t2 = _remap_array(t, idx_map)
     except Exception:
-        return RemapResult(False, None, len(idx_map), "Failed to remap time column.", None)
+        return RemapResult(False, False, False, False, None, len(idx_map), "Failed to remap time column.", None)
 
     try:
         unchanged = np.array_equal(t2, np.asarray(t).astype(int, copy=False))
@@ -205,10 +216,10 @@ def remap_time_indices(
         unchanged = False
 
     if unchanged:
-        return RemapResult(False, None, len(idx_map), "Time column unchanged after remap.", None)
+        return RemapResult(False, False, False, False, None, len(idx_map), "Time column unchanged after remap.", None)
 
     arr2[:, time_col] = t2
-    return RemapResult(True, None, len(idx_map), "Remapped array-like data.", arr2)
+    return RemapResult(True, True, True, False, None, len(idx_map), "Remapped array-like data.", arr2)
 
 
 def remap_layer_data_by_paths(
@@ -220,21 +231,28 @@ def remap_layer_data_by_paths(
     policy: PathMatchPolicy = PathMatchPolicy.ORDERED_DEPTHS,
 ) -> RemapResult:
     """
-    High-level remap: infer idx_map from old/new paths, then remap `data`.
+    High-level remap: infer idx_map from old/new paths, assess safety, then
+    remap `data` only when the mapping is acceptable.
 
-    Adds ambiguity detection: emits warnings when remapping is risky.
-    Does NOT change behavior (still remaps when possible).
+    Policy
+    ------
+    - Safe remaps are applied automatically.
+    - Ambiguous basename-only remaps (depth=1 with duplicate canonical keys
+      and/or non-bijective mapping) are rejected.
     """
     old_paths = list(old_paths or [])
     new_paths = list(new_paths or [])
+
     if not old_paths:
-        return RemapResult(False, None, 0, "No old paths present; cannot remap.", None)
+        return RemapResult(False, False, False, False, None, 0, "No old paths present; cannot remap.", None)
     if not new_paths:
-        return RemapResult(False, None, 0, "No new paths present; cannot remap.", None)
+        return RemapResult(False, False, False, False, None, 0, "No new paths present; cannot remap.", None)
 
     depth = find_matching_depth(old_paths, new_paths, policy=policy)
     if depth is None:
-        return RemapResult(False, None, 0, "No overlap between old and new paths; skipping remap.", None)
+        return RemapResult(
+            False, False, False, False, None, 0, "No overlap between old and new paths; skipping remap.", None
+        )
 
     old_keys = [canonicalize_path(p, depth) for p in old_paths]
     new_keys = [canonicalize_path(p, depth) for p in new_paths]
@@ -242,7 +260,6 @@ def remap_layer_data_by_paths(
     overlap = set(old_keys) & set(new_keys)
     overlap_ratio = (len(overlap) / max(1, min(len(old_keys), len(new_keys)))) if overlap else 0.0
 
-    # Build mapping: canonical key -> new index (first occurrence)
     key_to_new_idx = {k: i for i, k in enumerate(new_keys)}
     idx_map: dict[int, int] = {}
     for old_idx, k in enumerate(old_keys):
@@ -250,16 +267,35 @@ def remap_layer_data_by_paths(
         if new_idx is not None:
             idx_map[old_idx] = new_idx
 
+    identity_mappings = sum(1 for old_i, new_i in idx_map.items() if old_i == new_i)
+    logger.debug(
+        "Remap mapping stats: depth=%s old=%s new=%s mapped=%s identity=%s overlap=%s",
+        depth,
+        len(old_keys),
+        len(new_keys),
+        len(idx_map),
+        identity_mappings,
+        len(overlap),
+    )
+
     if not idx_map:
-        return RemapResult(False, None, 0, "No overlap between old and new paths; skipping remap.", None)
+        return RemapResult(
+            False, False, False, False, None, 0, "No overlap between old and new paths; skipping remap.", None
+        )
 
-    # If ordering already matches, skip
+    # If ordering already matches, accept metadata paths update but no data remap needed.
     if old_keys == new_keys:
-        return RemapResult(False, depth, len(idx_map), "Path keys already aligned; no remap needed.", None)
+        return RemapResult(
+            changed=False,
+            applied=False,
+            accept_paths_update=True,
+            is_ambiguous=False,
+            depth_used=depth,
+            mapped_count=len(idx_map),
+            message="Path keys already aligned; no remap needed.",
+            data=None,
+        )
 
-    # -----------------------------
-    # Ambiguity / risk detection
-    # -----------------------------
     warnings: list[str] = []
 
     dup_old = _find_duplicates(old_keys)
@@ -274,28 +310,46 @@ def remap_layer_data_by_paths(
     mapped_ratio = len(idx_map) / max(1, len(old_keys))
     if overlap_ratio < _WARN_OVERLAP_RATIO:
         warnings.append(
-            f"Low path overlap ratio at depth={depth}: {overlap_ratio:.2f} (overlap={len(overlap)}, "
-            f"old={len(old_keys)}, new={len(new_keys)})."
+            f"Low path overlap ratio at depth={depth}: {overlap_ratio:.2f} "
+            f"(overlap={len(overlap)}, old={len(old_keys)}, new={len(new_keys)})."
         )
     if mapped_ratio < _WARN_MAPPED_RATIO:
         warnings.append(f"Low mapping coverage: {mapped_ratio:.2f} (mapped={len(idx_map)} of old={len(old_keys)}).")
 
-    # Non-bijective mapping is a strong ambiguity signal (multiple old -> same new)
-    if len(set(idx_map.values())) < len(idx_map):
+    non_bijective = len(set(idx_map.values())) < len(idx_map)
+    if non_bijective:
         warnings.append("Non-bijective mapping detected (multiple old indices map to the same new index).")
 
-    # Emit warnings (does not change behavior)
     for w in warnings:
         logger.warning("Remap may be ambiguous/risky: %s", w)
 
-    # Apply remap to data
+    # Reject ambiguous basename-only remaps.
+    ambiguous_depth1 = depth == 1 and (bool(dup_old) or bool(dup_new) or non_bijective)
+    if ambiguous_depth1:
+        msg = "Rejected ambiguous depth=1 remap; keeping original frame indices and paths."
+        logger.warning(msg)
+        return RemapResult(
+            changed=False,
+            applied=False,
+            accept_paths_update=False,
+            is_ambiguous=True,
+            depth_used=depth,
+            mapped_count=len(idx_map),
+            message=msg,
+            data=None,
+            warnings=tuple(warnings),
+        )
+
     res = remap_time_indices(data=data, time_col=time_col, idx_map=idx_map)
 
     return RemapResult(
         changed=res.changed,
+        applied=res.changed,
+        accept_paths_update=True,
+        is_ambiguous=False,
         depth_used=depth,
         mapped_count=res.mapped_count,
         message=res.message,
-        data=res.data,
+        data=res.data if res.changed else None,
         warnings=tuple(warnings),
     )

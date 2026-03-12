@@ -21,6 +21,8 @@ from qtpy.QtWidgets import (
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut.config.models import DLCHeaderModel
+from napari_deeplabcut.config.settings import DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP, DEFAULT_SINGLE_ANIMAL_CMAP
+from napari_deeplabcut.misc import build_color_cycles
 from napari_deeplabcut.ui.labels_and_dropdown import LabelPair
 
 logger = logging.getLogger(__name__)
@@ -163,6 +165,48 @@ class ColorSchemeResolver:
         self._get_header_model = get_header_model
         self._config_header_cache: dict[str, DLCHeaderModel | None] = {}
 
+    def is_multianimal(self, layer: Points) -> bool:
+        md = layer.metadata or {}
+        header = self._get_header_model(md)
+        if header is None:
+            return False
+        try:
+            inds = getattr(header, "individuals", None)
+            return bool(inds and len(inds) > 0 and str(inds[0]) != "")
+        except Exception:
+            return False
+
+    def get_config_colormap(self, layer: Points) -> str:
+        md = layer.metadata or {}
+        cmap = md.get("config_colormap")
+        if isinstance(cmap, str) and cmap:
+            return cmap
+        return DEFAULT_SINGLE_ANIMAL_CMAP
+
+    def get_active_color_property(self, layer: Points) -> str:
+        if self.is_multianimal(layer) and self._get_color_mode() == str(keypoints.ColorMode.INDIVIDUAL):
+            return "id"
+        return "label"
+
+    def get_face_color_cycles(self, layer: Points) -> dict[str, dict]:
+        md = layer.metadata or {}
+        header = self._get_header_model(md)
+        if header is None:
+            return {}
+
+        config_cmap = self.get_config_colormap(layer)
+
+        bodypart_cycles = build_color_cycles(header, config_cmap) or {}
+        if self.is_multianimal(layer):
+            individual_cycles = build_color_cycles(header, DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP) or {}
+        else:
+            individual_cycles = bodypart_cycles
+
+        return {
+            "label": bodypart_cycles.get("label", {}),
+            "id": individual_cycles.get("id", {}),
+        }
+
     # ------------------------------------------------------------------
     # Target layer / color property
     # ------------------------------------------------------------------
@@ -179,44 +223,15 @@ class ColorSchemeResolver:
         return None
 
     def get_color_property(self, layer: Points) -> str | None:
-        """
-        Determine which categorical property currently drives coloring.
-
-        Rules:
-        - use 'id' in individual mode when available/valid
-        - otherwise use 'label'
-        - fallback safely to any available cycle key
-        """
-        md = layer.metadata or {}
-        cycles = md.get("face_color_cycles") or {}
-        if not cycles:
-            return None
-
-        header = self._get_header_model(md)
-
-        is_multi = False
-        try:
-            inds = getattr(header, "individuals", None)
-            is_multi = bool(inds and len(inds) > 0 and str(inds[0]) != "")
-        except Exception:
-            is_multi = False
-
-        prop = "id" if (is_multi and "id" in cycles) else "label"
-
-        color_mode = self._get_color_mode()
-        if color_mode == str(keypoints.ColorMode.INDIVIDUAL) and "id" in cycles:
-            prop = "id"
-        elif color_mode == str(keypoints.ColorMode.BODYPART) and "label" in cycles:
-            prop = "label"
-
-        if prop not in cycles:
-            if "label" in cycles:
-                return "label"
-            if "id" in cycles:
-                return "id"
-            return None
-
-        return prop
+        prop = self.get_active_color_property(layer)
+        cycles = self.get_face_color_cycles(layer)
+        if prop in cycles and cycles.get(prop):
+            return prop
+        if "label" in cycles and cycles.get("label"):
+            return "label"
+        if "id" in cycles and cycles.get("id"):
+            return "id"
+        return None
 
     # ------------------------------------------------------------------
     # Active/on-screen category extraction
@@ -410,12 +425,11 @@ class ColorSchemeResolver:
         if layer is None:
             return {}
 
-        md = layer.metadata or {}
-        cycles = md.get("face_color_cycles") or {}
+        cycles = self.get_face_color_cycles(layer)
         if not cycles:
             return {}
 
-        prop = self.get_color_property(layer)
+        prop = self.get_active_color_property(layer)
         if prop is None:
             return {}
 
@@ -480,6 +494,7 @@ class ColorSchemePanel(QWidget):
         )
 
         self.display = ColorSchemeDisplay(parent=self)
+        self.display.added.connect(self._wire_display_entry)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._toggle)
@@ -648,3 +663,158 @@ class ColorSchemePanel(QWidget):
         except RuntimeError:
             # display already deleted
             return
+
+    def _wire_display_entry(self, widget) -> None:
+        """Connect a legend entry click to selecting matching points in the layer."""
+        try:
+            widget.part_label.clicked.connect(lambda _checked=False, w=widget: self._on_display_entry_clicked(w))
+        except Exception:
+            logger.debug("Failed to wire ColorSchemeDisplay entry click", exc_info=True)
+
+    def _on_display_entry_clicked(self, widget) -> None:
+        """Select points in the target layer that match the clicked legend category."""
+        if self._disposed:
+            return
+
+        category = getattr(widget, "part_name", None)
+        if not category:
+            return
+        category = str(category)
+
+        layer = self._resolver.get_target_layer()
+        if layer is None:
+            return
+
+        prop = self._resolver.get_color_property(layer)
+        if prop is None:
+            return
+
+        # Prefer matches in the current frame/slice first.
+        indices = self._matching_point_indices(
+            layer=layer,
+            prop=prop,
+            category=category,
+            current_frame_only=True,
+        )
+
+        # If config view is showing categories not present in the current frame,
+        # fall back to the first frame containing that category and jump there.
+        # We could disable this if it's not intuitive, but this preserves interactivity.
+        if not indices:
+            indices = self._matching_point_indices(
+                layer=layer,
+                prop=prop,
+                category=category,
+                current_frame_only=False,
+            )
+
+            # Optional safe fallback: if "id" legend was derived from label-like data,
+            # allow matching on label as a last resort.
+            if not indices and prop == "id":
+                indices = self._matching_point_indices(
+                    layer=layer,
+                    prop="label",
+                    category=category,
+                    current_frame_only=False,
+                )
+
+            if not indices:
+                return
+
+            # Jump to the frame of the first found point when possible.
+            try:
+                data = np.asarray(layer.data)
+                if data.ndim == 2 and data.shape[1] > 0:
+                    frame = int(data[indices[0], 0])
+                    try:
+                        self.viewer.dims.set_current_step(0, frame)
+                    except AttributeError:
+                        # Older napari fallback
+                        self.viewer.dims.set_point(0, frame)
+            except Exception:
+                logger.debug("Failed to move to frame for clicked legend entry", exc_info=True)
+
+            # Re-resolve in the new frame so selection reflects what is now visible.
+            refreshed = self._matching_point_indices(
+                layer=layer,
+                prop=prop,
+                category=category,
+                current_frame_only=True,
+            )
+            if refreshed:
+                indices = refreshed
+
+        try:
+            self.viewer.layers.selection.active = layer
+        except Exception:
+            logger.debug("Failed to activate target layer from legend click", exc_info=True)
+
+        try:
+            layer.mode = "select"
+        except Exception:
+            logger.debug("Failed to switch Points layer to select mode", exc_info=True)
+
+        try:
+            layer.selected_data = set(map(int, indices))
+        except Exception:
+            logger.debug("Failed to update selected_data from legend click", exc_info=True)
+
+    def _matching_point_indices(
+        self,
+        *,
+        layer: Points,
+        prop: str,
+        category: str,
+        current_frame_only: bool,
+    ) -> list[int]:
+        """
+        Return indices of points whose categorical property matches ``category``.
+
+        If ``current_frame_only`` is True, restrict matches to the current frame/slice
+        on axis 0 when possible, and prefer points that are currently shown.
+        """
+        props = getattr(layer, "properties", {}) or {}
+        values = props.get(prop, None)
+        if values is None or len(values) == 0:
+            return []
+
+        values = np.asarray(values, dtype=object).ravel()
+        if len(values) == 0:
+            return []
+
+        matches = np.zeros(len(values), dtype=bool)
+        for i, v in enumerate(values):
+            if v in ("", None) or misc._is_nan_value(v):
+                continue
+            matches[i] = str(v) == category
+
+        if not np.any(matches):
+            return []
+
+        # Restrict to current frame/slice when requested and when data supports it.
+        if current_frame_only:
+            try:
+                data = np.asarray(layer.data)
+                if len(data) == len(values) and data.ndim == 2 and data.shape[1] > 0:
+                    current_step = self.viewer.dims.current_step
+                    if len(current_step) > 0:
+                        frame = current_step[0]
+                        matches &= np.asarray(data[:, 0] == frame)
+            except Exception:
+                logger.debug("Failed to filter legend click selection by current frame", exc_info=True)
+
+            if not np.any(matches):
+                return []
+
+        # Prefer currently shown points, but only if that leaves at least one result.
+        try:
+            shown = getattr(layer, "shown", None)
+            if shown is not None and len(shown) == len(values):
+                shown = np.asarray(shown, dtype=bool)
+                shown_matches = matches & shown
+                if np.any(shown_matches):
+                    matches = shown_matches
+        except Exception:
+            logger.debug("Failed to apply layer.shown mask for legend click selection", exc_info=True)
+
+        return np.flatnonzero(matches).astype(int).tolist()
