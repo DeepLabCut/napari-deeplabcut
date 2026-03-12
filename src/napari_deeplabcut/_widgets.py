@@ -1089,30 +1089,60 @@ class KeypointControls(QWidget):
         """
         Best-effort remap of time/frame indices in non-Image layers to match current Image order.
 
-        Safety principles:
-        - Never delete user data automatically (only remap what is safe).
-        - Only write back to layer.data after successful transformation.
-        - Always sync layer.metadata with self._images_meta when possible.
+        Safety principles
+        -----------------
+        - Never delete or silently corrupt user data.
+        - Only write back to layer.data after a remap has been accepted as safe.
+        - Always sync non-path image metadata when possible.
+        - Do NOT replace metadata["paths"] unless remap is accepted as safe.
+        - Specifically reject ambiguous basename-only remaps (depth=1 with duplicate /
+        non-bijective warnings), which commonly happen when data are moved out of the
+        standard DLC labeled-data layout.
         """
         try:
             new_paths = self._image_meta.paths
             if not new_paths:
                 return
 
-            md = layer.metadata or {}
+            if layer.metadata is None:
+                layer.metadata = {}
+
+            md = layer.metadata
             old_paths = md.get("paths") or []
 
-            # Always sync basic metadata from image meta (in place)
+            # Always sync safe non-path metadata from image meta.
+            # Do NOT sync "paths" yet; that is only safe after we decide remap is acceptable.
             try:
-                layer.metadata.update(self._image_meta.model_dump(exclude_none=True))
+                safe_image_meta = self._image_meta.model_dump(exclude_none=True)
+                safe_image_meta.pop("paths", None)
+                layer.metadata.update(safe_image_meta)
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to sync non-path image metadata for layer=%r",
+                    getattr(layer, "name", str(layer)),
+                    exc_info=True,
+                )
 
             if not old_paths:
+                logger.debug(
+                    "Skipping remap for layer=%r: no existing layer metadata paths.",
+                    getattr(layer, "name", str(layer)),
+                )
                 return
 
             # Determine time column (napari-specific choice)
             time_col = 1 if isinstance(layer, Tracks) else 0
+
+            arr_before = np.asarray(layer.data)
+            logger.debug(
+                "Remap start layer=%r old_paths_len=%s new_paths_len=%s data_shape=%s frame_min=%s frame_max=%s",
+                getattr(layer, "name", str(layer)),
+                len(old_paths),
+                len(new_paths or []),
+                getattr(arr_before, "shape", None),
+                int(np.nanmin(arr_before[:, time_col])) if arr_before.size else None,
+                int(np.nanmax(arr_before[:, time_col])) if arr_before.size else None,
+            )
 
             res = remap_layer_data_by_paths(
                 data=layer.data,
@@ -1122,16 +1152,48 @@ class KeypointControls(QWidget):
                 policy=PathMatchPolicy.ORDERED_DEPTHS,
             )
 
-            if res.changed and res.data is not None:
+            logger.debug(
+                "Remap result layer=%r changed=%s mapped_count=%s depth=%s message=%s warnings=%s",
+                getattr(layer, "name", str(layer)),
+                res.changed,
+                res.mapped_count,
+                res.depth_used,
+                res.message,
+                res.warnings,
+            )
+
+            if res.applied and res.data is not None:
                 layer.data = res.data
 
-            # Optional debug logging
+            if res.accept_paths_update:
+                layer.metadata["paths"] = list(new_paths)
+
+            # Sync paths only if remap was safe enough to accept.
+            # This includes:
+            # - an applied remap
+            # - or an explicit aligned/no-op remap with a valid depth
+            if res.depth_used is not None:
+                try:
+                    layer.metadata["paths"] = list(new_paths)
+                    logger.debug(
+                        "Accepted remap metadata sync for layer=%r new metadata paths_len=%s",
+                        getattr(layer, "name", str(layer)),
+                        len(layer.metadata.get("paths") or []),
+                    )
+                except Exception:
+                    logger.debug(
+                        "Failed to update metadata paths after accepted remap for layer=%r",
+                        getattr(layer, "name", str(layer)),
+                        exc_info=True,
+                    )
+
+            # Final debug logging
             if res.depth_used is None:
                 logger.debug("Remap skipped for %s: %s", getattr(layer, "name", str(layer)), res.message)
             else:
                 logger.debug(
                     "Remap %s for %s (depth=%s, mapped=%s): %s",
-                    "applied" if res.changed else "skipped",
+                    "applied" if res.changed else "accepted-noop",
                     getattr(layer, "name", str(layer)),
                     res.depth_used,
                     res.mapped_count,
