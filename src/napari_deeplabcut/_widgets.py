@@ -426,6 +426,11 @@ class KeypointControls(QWidget):
     def _wire_points_layer(self, layer: Points) -> keypoints.KeypointStore | None:
         if not self._validate_header(layer):
             return None
+        existing = getattr(layer, "_dlc_store", None)
+        if existing is not None:
+            self._stores[layer] = existing
+            layer._dlc_controls = self
+            return existing
 
         # ensure presence of IO metadata for saving & routing
         mig = migrate_points_layer_metadata(layer)
