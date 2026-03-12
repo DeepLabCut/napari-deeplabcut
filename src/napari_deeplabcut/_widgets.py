@@ -41,6 +41,7 @@ from qtpy.QtWidgets import (
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut import keypoints, misc
 from napari_deeplabcut._writer import _write_image
+from napari_deeplabcut.config import settings
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.layers import (
@@ -224,6 +225,14 @@ class KeypointControls(QWidget):
         self._layout.addLayout(help_buttons)
 
         grid = QGridLayout()
+
+        self._confirm_overwrite_cb = QCheckBox("Confirm overwrite saves", parent=self)
+        self._confirm_overwrite_cb.setToolTip(
+            "When enabled, saving a layer that would overwrite existing keypoints will show a confirmation dialog."
+        )
+        self._confirm_overwrite_cb.setChecked(settings.get_overwrite_confirmation_enabled())
+        self._confirm_overwrite_cb.stateChanged.connect(self._toggle_overwrite_confirmation)
+
         self._trail_cb = QCheckBox("Show trails", parent=self)
         self._trail_cb.setToolTip("Show the trails for each keypoint over time, in the main video viewer")
         self._trail_cb.setChecked(False)
@@ -240,9 +249,10 @@ class KeypointControls(QWidget):
         self._show_traj_plot_cb.setEnabled(False)
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
 
-        grid.addWidget(self._show_traj_plot_cb, 0, 0)
-        grid.addWidget(self._trail_cb, 1, 0)
-        grid.addWidget(self._view_scheme_cb, 2, 0)
+        grid.addWidget(self._confirm_overwrite_cb, 0, 0)
+        grid.addWidget(self._show_traj_plot_cb, 1, 0)
+        grid.addWidget(self._trail_cb, 2, 0)
+        grid.addWidget(self._view_scheme_cb, 3, 0)
 
         self._layout.addLayout(grid)
 
@@ -1339,6 +1349,11 @@ class KeypointControls(QWidget):
             return False
 
         return True
+
+    def _toggle_overwrite_confirmation(self, state) -> None:
+        enabled = Qt.CheckState(state) == Qt.CheckState.Checked
+        settings.set_overwrite_confirmation_enabled(enabled)
+        self.viewer.status = "Overwrite confirmation enabled" if enabled else "Overwrite confirmation disabled"
 
     # Hack to save a KeyPoints layer without showing the Save dialog
     def _save_layers_dialog(self, selected=False):

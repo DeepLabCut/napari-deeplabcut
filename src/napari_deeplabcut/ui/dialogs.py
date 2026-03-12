@@ -8,6 +8,7 @@ from qtpy.QtCore import QPoint, Qt
 from qtpy.QtSvgWidgets import QSvgWidget
 from qtpy.QtWidgets import QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QSizePolicy, QVBoxLayout
 
+from napari_deeplabcut.config.settings import get_overwrite_confirmation_enabled
 from napari_deeplabcut.core.conflicts import OverwriteConflictReport
 
 # from napari_deeplabcut.core.dataframes import summarize_keypoint_conflicts
@@ -275,6 +276,9 @@ def maybe_confirm_overwrite(
     report: OverwriteConflictReport,
 ) -> bool:
     if not report.has_conflicts:
+        return True
+
+    if not get_overwrite_confirmation_enabled():
         return True
 
     return OverwriteConflictsDialog.confirm(
