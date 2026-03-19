@@ -4,7 +4,6 @@ This module intentionally does not make decisions about what constitutes
 valid DLC points metadata; it only reads what it needs (face_color_cycles).
 """
 
-# src/napari_deeplabcut/ui/plots/trajectory.py
 from __future__ import annotations
 
 import logging
@@ -17,22 +16,25 @@ import napari
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvas, NavigationToolbar2QT
 from napari.utils.events import Event
-from qtpy.QtCore import QSize, Qt
+from qtpy.QtCore import QSize, Qt, QTimer
 from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
 
 import napari_deeplabcut.core.io as io
-from napari_deeplabcut.core.layers import get_first_points_layer, get_first_video_image_layer
+from napari_deeplabcut.core.layers import (
+    get_first_image_layer,
+    get_first_points_layer,
+    get_first_video_image_layer,
+)
+from napari_deeplabcut.utils.deprecations import deprecated
 
 logger = logging.getLogger(__name__)
-
 
 _PACKAGE = "napari_deeplabcut"
 
 
 @lru_cache(maxsize=1)
 def _pkg_root():
-    # Traversable root of the package
     return files(_PACKAGE)
 
 
@@ -52,6 +54,11 @@ class NapariNavigationToolbar(NavigationToolbar2QT):
         super().__init__(*args, **kwargs)
         self.setIconSize(QSize(28, 28))
 
+    @staticmethod
+    def _qicon(pathlike) -> QIcon:
+        """Build a QIcon safely from any path-like object."""
+        return QIcon(str(pathlike))
+
     def _update_buttons_checked(self) -> None:
         """Update toggle tool icons when selected/unselected."""
         super()._update_buttons_checked()
@@ -59,39 +66,39 @@ class NapariNavigationToolbar(NavigationToolbar2QT):
 
         if "pan" in self._actions:
             if self._actions["pan"].isChecked():
-                self._actions["pan"].setIcon(QIcon(Path(icon_dir) / "Pan_checked.png"))
+                self._actions["pan"].setIcon(self._qicon(Path(icon_dir) / "Pan_checked.png"))
             else:
-                self._actions["pan"].setIcon(QIcon(Path(icon_dir) / "Pan.png"))
+                self._actions["pan"].setIcon(self._qicon(Path(icon_dir) / "Pan.png"))
 
         if "zoom" in self._actions:
             if self._actions["zoom"].isChecked():
-                self._actions["zoom"].setIcon(QIcon(Path(icon_dir) / "Zoom_checked.png"))
+                self._actions["zoom"].setIcon(self._qicon(Path(icon_dir) / "Zoom_checked.png"))
             else:
-                self._actions["zoom"].setIcon(QIcon(Path(icon_dir) / "Zoom.png"))
+                self._actions["zoom"].setIcon(self._qicon(Path(icon_dir) / "Zoom.png"))
 
 
 class KeypointMatplotlibCanvas(QWidget):
     """Trajectory plot using matplotlib for keypoints (t-y plot)."""
 
-    # FIXME: y axis should be reversed due to napari using top-left as origin
-
     def __init__(self, napari_viewer, parent=None):
         super().__init__(parent=parent)
 
         self.viewer = napari_viewer
+
         with mplstyle.context(self.mpl_style_sheet_path):
             self.canvas = FigureCanvas()
             self.canvas.figure.set_size_inches(4, 2, forward=True)
             self.canvas.figure.set_layout_engine("constrained")
             self.ax = self.canvas.figure.subplots()
+            self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
+            self.ax.set_xlabel("Frame")
+            self.ax.set_ylabel("Y position")
 
-        self.toolbar = NapariNavigationToolbar(self.canvas, parent=self)
+        # self.toolbar = NapariNavigationToolbar(self.canvas, parent=self)
+        self.toolbar = NavigationToolbar2QT(self.canvas, parent=self)
+        self.toolbar.setIconSize(QSize(28, 28))
         self._replace_toolbar_icons()
         self.canvas.mpl_connect("button_press_event", self.on_doubleclick)
-
-        self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
-        self.ax.set_xlabel("Frame")
-        self.ax.set_ylabel("Y position")
 
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setMinimum(50)
@@ -122,11 +129,20 @@ class KeypointMatplotlibCanvas(QWidget):
 
         self.viewer.dims.events.current_step.connect(self.update_plot_range)
         self._n = 0
-        self.update_plot_range(Event(type_name="", value=[self.viewer.dims.current_step[0]]))
+        self.update_plot_range(
+            Event(type_name="", value=[self.viewer.dims.current_step[0]]),
+            force=True,
+        )
+        self._apply_axis_theme()
 
         self.viewer.layers.events.inserted.connect(self._load_dataframe)
         self.viewer.dims.events.range.connect(self._update_slider_max)
         self._lines: dict[str, list] = {}
+
+        # If layers already existed before this widget was created
+        # (e.g. drag-and-drop load before opening the plugin), populate
+        # the plot from the current viewer state on the next event-loop turn.
+        QTimer.singleShot(0, self.refresh_from_viewer_layers)
 
     def on_doubleclick(self, event):
         if getattr(event, "dblclick", False):
@@ -134,9 +150,49 @@ class KeypointMatplotlibCanvas(QWidget):
                 return
             show = list(self._lines.values())[0][0].get_visible()
             for lines in self._lines.values():
-                for l in lines:
-                    l.set_visible(not show)
+                for line in lines:
+                    line.set_visible(not show)
             self._refresh_canvas(value=self._n)
+
+    def refresh_from_viewer_layers(self) -> None:
+        """
+        Refresh the trajectory plot from the current viewer state.
+
+        This is safe to call:
+        - after drag/drop loads that happened before the widget was opened
+        - after layer adoption / remap
+        - after later explicit layer changes
+
+        It intentionally:
+        1) reloads the dataframe from the current Points layer
+        2) updates the slider max from the current Image/Video layer
+        3) re-syncs visible lines to current point selection
+        """
+        try:
+            self._load_dataframe()
+        except Exception:
+            logger.debug("Trajectory plot: failed to load dataframe from viewer layers", exc_info=True)
+
+        try:
+            self._update_slider_max()
+        except Exception:
+            logger.debug("Trajectory plot: failed to update slider max", exc_info=True)
+
+        try:
+            self.sync_visible_lines_to_points_selection()
+        except Exception:
+            logger.debug("Trajectory plot: failed to sync visible lines to point selection", exc_info=True)
+
+    def _apply_axis_theme(self) -> None:
+        """Force axis/text colors to match napari theme."""
+        is_light = self._napari_theme_has_light_bg()
+        fg = "black" if is_light else "white"
+
+        self.ax.tick_params(axis="both", colors=fg, which="both")
+        self.ax.xaxis.label.set_color(fg)
+        self.ax.yaxis.label.set_color(fg)
+        self.ax.title.set_color(fg)
+        self.vline.set_color(fg)
 
     def _napari_theme_has_light_bg(self) -> bool:
         theme = napari.utils.theme.get_theme(self.viewer.theme)
@@ -147,15 +203,13 @@ class KeypointMatplotlibCanvas(QWidget):
     def mpl_style_sheet_path(self) -> Path:
         if self._napari_theme_has_light_bg():
             return _styles_traversable() / "light.mplstyle"
-        else:
-            return _styles_traversable() / "dark.mplstyle"
+        return _styles_traversable() / "dark.mplstyle"
 
     def _get_path_to_icon(self) -> Path:
         icon_root = _assets_traversable() / "icons"
         if self._napari_theme_has_light_bg():
             return icon_root / "black"
-        else:
-            return icon_root / "white"
+        return icon_root / "white"
 
     def _replace_toolbar_icons(self) -> None:
         icon_dir = self._get_path_to_icon()
@@ -167,53 +221,87 @@ class KeypointMatplotlibCanvas(QWidget):
                 )
             if text == "Zoom":
                 action.setToolTip("Zoom to rectangle; Click once to activate; Click again to deactivate")
-            if len(text) > 0:
-                icon_path = icon_dir / (text + ".png")
-                action.setIcon(QIcon(str(icon_path)))
+            if text:
+                icon_path = Path(icon_dir) / f"{text}.png"
+                try:
+                    action.setIcon(self.toolbar._qicon(icon_path))
+                except AttributeError:
+                    logger.debug(f"Failed to set toolbar icon from {icon_path}", exc_info=True)
 
     def _load_dataframe(self, event=None) -> None:
-        points_layer = get_first_points_layer(self.viewer)
-        if points_layer is None:
-            return
-        # Preserve existing semantics (numpy bool inversion) from original code
-        try:
-            if ~np.any(points_layer.data):
+        with mplstyle.context(self.mpl_style_sheet_path):
+            points_layer = get_first_points_layer(self.viewer)
+            data = getattr(points_layer, "data", None)
+
+            if points_layer is None or data is None or len(data) == 0:
                 return
-        except Exception:
-            return
 
-        # Silly hack so the window does not hang the first time it is shown
-        self.show()
-        self.hide()
+            # Silly hack so the window does not hang the first time it is shown
+            self.show()
+            self.hide()
 
-        try:
-            self.df = io.form_df(
-                points_layer.data,
-                layer_metadata=points_layer.metadata,
-                layer_properties=points_layer.properties,
-            )
-        except Exception as e:
-            logger.error("Failed to form DataFrame from points layer: %r", e, exc_info=True)
-            return
-
-        self._lines.clear()
-        self.ax.clear()
-        self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
-        self.ax.set_xlabel("Frame")
-        self.ax.set_ylabel("Y position")
-
-        for keypoint in self.df.columns.get_level_values("bodyparts").unique():
-            y = self.df.xs((keypoint, "y"), axis=1, level=["bodyparts", "coords"])
-            x = np.arange(len(y))
             try:
-                color = points_layer.metadata["face_color_cycles"]["label"][keypoint]
-            except Exception:
-                color = "C0"
-            lines = self.ax.plot(x, y, color=color, label=str(keypoint))
-            self._lines[str(keypoint)] = lines
+                self.df = io.form_df(
+                    points_layer.data,
+                    layer_metadata=points_layer.metadata,
+                    layer_properties=points_layer.properties,
+                )
+            except Exception as e:
+                logger.error("Failed to form DataFrame from points layer: %r", e, exc_info=True)
+                return
 
-        self._refresh_canvas(value=self._n)
+            image_layer = get_first_video_image_layer(self.viewer)
+            if image_layer is None:
+                image_layer = get_first_image_layer(self.viewer)
 
+            self._lines = {}
+            self.ax.clear()
+            self.ax.set_xlabel("Frame")
+            self.ax.set_ylabel("Y position")
+            self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
+            self._apply_axis_theme()
+
+            height = None
+            if image_layer is not None:
+                try:
+                    img_data = image_layer.data
+                    if getattr(image_layer, "rgb", False):
+                        height = img_data.shape[-3]
+                    else:
+                        height = img_data.shape[-2]
+                except Exception:
+                    height = None
+
+            for keypoint in self.df.columns.get_level_values("bodyparts").unique():
+                y = (
+                    self.df.xs(
+                        (keypoint, "y"),
+                        axis=1,
+                        level=["bodyparts", "coords"],
+                    )
+                    .to_numpy()
+                    .squeeze()
+                )
+                x = np.arange(len(y))
+                try:
+                    color = points_layer.metadata["face_color_cycles"]["label"][keypoint]
+                except Exception:
+                    color = "C0"
+                lines = self.ax.plot(x, y, color=color, label=str(keypoint))
+                self._lines[str(keypoint)] = lines
+
+            # Match napari image coordinates: y increases downward
+            if height is not None:
+                self.ax.set_ylim(height, 0)
+            else:
+                self.ax.invert_yaxis()
+
+            self._refresh_canvas(value=self._n)
+
+    @deprecated(
+        details="No longer used, instead visibility is based on napari Points selection.",
+        replacement="sync_visible_lines_to_points_selection",
+    )
     def _toggle_line_visibility(self, keypoint: str) -> None:
         if keypoint not in self._lines:
             return
@@ -221,31 +309,46 @@ class KeypointMatplotlibCanvas(QWidget):
             artist.set_visible(not artist.get_visible())
         self._refresh_canvas(value=self._n)
 
+    def show_only_keypoint(self, keypoint: str) -> None:
+        """Show only one keypoint trajectory; if unknown, show all."""
+        if keypoint not in self._lines:
+            self._show_all_keypoints()
+            return
+        self._set_visible_keypoints({keypoint})
+
     def _refresh_canvas(self, value: int) -> None:
         if self.df is None:
             return
-        start = max(0, value - self._window // 2)
-        end = min(value + self._window // 2, len(self.df))
-        self.ax.set_xlim(start, end)
-        self.vline.set_xdata([value])
-        self.canvas.draw()
+
+        with mplstyle.context(self.mpl_style_sheet_path):
+            start = max(0, value - self._window // 2)
+            end = min(value + self._window // 2, len(self.df))
+            self.ax.set_xlim(start, end)
+            self.vline.set_xdata([value])
+            self.canvas.draw()
 
     def set_window(self, value: int) -> None:
         self._window = value
         self.slider_value.setText(str(value))
         self.update_plot_range(Event(type_name="", value=[self._n]))
 
-    def update_plot_range(self, event) -> None:
+    def update_plot_range(self, event, force: bool = False) -> None:
+        if not self.isVisible() and not force:
+            return
+
         value = event.value[0]
         self._n = value
+
         if self.df is None:
             return
+
         self._refresh_canvas(value)
 
     def _update_slider_max(self, event=None) -> None:
         img = get_first_video_image_layer(self.viewer)
         if img is None:
             return
+
         try:
             n_frames = img.data.shape[0]
         except Exception:
@@ -255,3 +358,88 @@ class KeypointMatplotlibCanvas(QWidget):
             self.slider.setMaximum(self.slider.minimum())
         else:
             self.slider.setMaximum(n_frames - 1)
+
+    def _set_visible_keypoints(self, visible_keypoints: set[str]) -> None:
+        """Show only the given keypoint trajectories."""
+        if not self._lines:
+            return
+
+        for keypoint, artists in self._lines.items():
+            show = keypoint in visible_keypoints
+            for artist in artists:
+                artist.set_visible(show)
+
+        self._refresh_canvas(value=self._n)
+
+    def _show_all_keypoints(self) -> None:
+        """Show all trajectories."""
+        if not self._lines:
+            return
+
+        for artists in self._lines.values():
+            for artist in artists:
+                artist.set_visible(True)
+
+        self._refresh_canvas(value=self._n)
+
+    def _selected_bodyparts_from_points_layer(self) -> set[str]:
+        """
+        Return the set of selected bodypart labels from the first Points layer.
+
+        Notes
+        -----
+        - We intentionally key visibility by `label` because this plot currently
+        groups trajectories by bodypart name.
+        - If nothing is selected, returns an empty set.
+        """
+        points_layer = get_first_points_layer(self.viewer)
+        if points_layer is None:
+            return set()
+
+        selected = getattr(points_layer, "selected_data", None)
+        if not selected:
+            return set()
+
+        props = getattr(points_layer, "properties", {}) or {}
+        labels = props.get("label", None)
+        if labels is None:
+            return set()
+
+        try:
+            labels_arr = np.asarray(labels, dtype=object).ravel()
+        except Exception:
+            return set()
+
+        visible: set[str] = set()
+        for idx in selected:
+            try:
+                i = int(idx)
+            except Exception:
+                continue
+            if 0 <= i < len(labels_arr):
+                val = labels_arr[i]
+                if val is None:
+                    continue
+                text = str(val)
+                if text:
+                    visible.add(text)
+
+        return visible
+
+    def sync_visible_lines_to_points_selection(self) -> None:
+        """
+        Sync trajectory visibility to the current napari Points selection.
+
+        Behavior:
+        - no selected points -> show all trajectories
+        - selected points    -> show only trajectories whose bodypart label is selected
+        """
+        if not self._lines:
+            return
+
+        visible = self._selected_bodyparts_from_points_layer()
+        if not visible:
+            self._show_all_keypoints()
+            return
+
+        self._set_visible_keypoints(visible)

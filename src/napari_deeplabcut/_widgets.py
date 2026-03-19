@@ -16,7 +16,7 @@ from types import MethodType
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from napari.layers import Image, Points, Shapes, Tracks
+from napari.layers import Image, Points, Tracks
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
 from pydantic import ValidationError
@@ -45,8 +45,11 @@ from napari_deeplabcut.config import settings
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.layers import (
+    PointsInteractionEvent,
+    PointsInteractionObserver,
     find_last_layer,
     get_first_points_layer,
+    get_first_shapes_layer,
     get_points_layer_with_tables,
     is_machine_layer,
 )
@@ -278,9 +281,17 @@ class KeypointControls(QWidget):
         self._view_scheme_cb.setChecked(True)
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
         self._show_color_scheme()
-        self._color_scheme_panel.display.added.connect(
-            lambda w: w.part_label.clicked.connect(self._matplotlib_canvas._toggle_line_visibility),
+        # self._color_scheme_panel.display.added.connect(
+        #     lambda w: w.part_label.clicked.connect(self._on_color_scheme_label_clicked),
+        # )
+
+        self._points_interactions = PointsInteractionObserver(
+            self.viewer,
+            self._on_points_interaction,
+            debounce_ms=0,
+            watch_content=False,
         )
+        self._points_interactions.install()
 
         # Substitute default menu action with custom one
         for action in self.viewer.window.file_menu.actions()[::-1]:
@@ -330,6 +341,10 @@ class KeypointControls(QWidget):
         # If layers already exist (user loaded data before opening this widget),
         # adopt them so keypoint controls take ownership immediately.
         QTimer.singleShot(0, self._adopt_existing_layers)
+
+    @cached_property
+    def settings(self):
+        return QSettings()
 
     # ######################## #
     # Layer setup core methods #
@@ -553,6 +568,11 @@ class KeypointControls(QWidget):
         except Exception:
             pass
 
+        # Important: refresh the trajectory plot from the final adopted state.
+        # This fixes the case where layers were loaded before the plugin opened
+        # (e.g. drag-and-drop DLC data triggering the reader automatically).
+        self._refresh_trajectory_plot_from_layers()
+
     def _adopt_layer(self, layer, index: int) -> None:
         """
         Run the relevant portion of on_insert() for an already-existing layer.
@@ -604,10 +624,7 @@ class KeypointControls(QWidget):
         if window is None:
             return
 
-        # If napari hasn't materialized its Qt window yet, skip (safe no-op).
         if getattr(window, "_qt_window", None) is None:
-            # In normal UI runs this won't happen when the user hits the checkbox.
-            # In tests/headless it may—so just do nothing.
             return
 
         try:
@@ -629,14 +646,41 @@ class KeypointControls(QWidget):
         if Qt.CheckState(state) == Qt.CheckState.Checked:
             self._ensure_mpl_canvas_docked()
             if self._mpl_docked:
+                self._matplotlib_canvas.update_plot_range(
+                    Event(type_name="", value=[self.viewer.dims.current_step[0]]),
+                    force=True,
+                )
+                self._matplotlib_canvas.sync_visible_lines_to_points_selection()
                 self._matplotlib_canvas.show()
         else:
             if self._mpl_docked:
                 self._matplotlib_canvas.hide()
 
-    @cached_property
-    def settings(self):
-        return QSettings()
+    def _on_points_interaction(self, event: PointsInteractionEvent) -> None:
+        """
+        Keep the trajectory plot in sync with the active points-layer selection.
+
+        This is intentionally selection-driven:
+        - no selected points -> all trajectories
+        - selected points    -> only selected labels' trajectories
+        """
+        if {"selection", "active_layer", "layers"} & set(event.reasons):
+            self._matplotlib_canvas.sync_visible_lines_to_points_selection()
+
+    # def _on_color_scheme_label_clicked(self, _text: str) -> None:
+    #     """
+    #     Let the color-scheme panel perform its normal point-selection logic first,
+    #     then sync the trajectory plot visibility to the resulting napari selection.
+    #     """
+    #     QTimer.singleShot(0, self._matplotlib_canvas.sync_visible_lines_to_points_selection)
+
+    def _refresh_trajectory_plot_from_layers(self) -> None:
+        """
+        Refresh trajectory plot from the current viewer state.
+
+        Deferred through QTimer so it runs after layer adoption/remap settles.
+        """
+        QTimer.singleShot(0, self._matplotlib_canvas.refresh_from_viewer_layers)
 
     def load_superkeypoints_diagram(self):
         points_layer = get_first_points_layer(self.viewer)
@@ -828,30 +872,25 @@ class KeypointControls(QWidget):
         if self._trails is None:
             store = list(self._stores.values())[0]
 
-            # Determine coloring mode
             mode = "label"
             if self.color_mode == str(keypoints.ColorMode.INDIVIDUAL):
                 mode = "id"
 
             categories = store.layer.properties.get(mode)
-            # Check for single animal data
             if categories is None or (mode == "id" and (not categories[0])):
                 mode = "label"
                 categories = store.layer.properties["label"]
 
             inds = encode_categories(categories, is_path=False, do_sort=False)
-
-            # Build Tracks data
             temp = np.c_[inds, store.layer.data]
-            cmap = "viridis"
-            for layer in self.viewer.layers:
-                if isinstance(layer, Points):
-                    colormap_name = layer.metadata.get("colormap_name")
-                    if colormap_name:
-                        cmap = colormap_name
-                        break
 
-            # 5) Create Tracks layer
+            cmap = "viridis"
+            points_layer = get_first_points_layer(self.viewer)
+            if points_layer is not None:
+                colormap_name = points_layer.metadata.get("colormap_name")
+                if colormap_name:
+                    cmap = colormap_name
+
             self._trails = self.viewer.add_tracks(
                 temp,
                 colormap=cmap,
@@ -927,27 +966,33 @@ class KeypointControls(QWidget):
     def _store_crop_coordinates(self, *args):
         if not (project_path := self._project_path):
             return
-        for layer in self.viewer.layers:
-            if isinstance(layer, Shapes):
-                try:
-                    ind = layer.shape_type.index("rectangle")
-                except ValueError:
-                    return
-                bbox = layer.data[ind][:, 1:]
-                h = self.viewer.dims.range[2][1]
-                bbox[:, 0] = h - bbox[:, 0]
-                bbox = np.clip(bbox, 0, a_max=None).astype(int)
-                y1, x1 = bbox.min(axis=0)
-                y2, x2 = bbox.max(axis=0)
-                temp = {"crop": ", ".join(map(str, [x1, x2, y1, y2]))}
-                config_path = os.path.join(project_path, "config.yaml")
-                cfg = io.load_config(config_path)
-                video_name = self._image_meta.name
-                if not video_name:
-                    return
-                cfg["video_sets"][os.path.join(project_path, "videos", video_name)] = temp
-                io.write_config(config_path, cfg)
-                break
+
+        layer = get_first_shapes_layer(self.viewer)
+        if layer is None:
+            return
+
+        try:
+            ind = layer.shape_type.index("rectangle")
+        except ValueError:
+            return
+
+        bbox = layer.data[ind][:, 1:]
+        h = self.viewer.dims.range[2][1]
+        bbox[:, 0] = h - bbox[:, 0]
+        bbox = np.clip(bbox, 0, a_max=None).astype(int)
+        y1, x1 = bbox.min(axis=0)
+        y2, x2 = bbox.max(axis=0)
+
+        temp = {"crop": ", ".join(map(str, [x1, x2, y1, y2]))}
+        config_path = os.path.join(project_path, "config.yaml")
+        cfg = io.load_config(config_path)
+
+        video_name = self._image_meta.name
+        if not video_name:
+            return
+
+        cfg["video_sets"][os.path.join(project_path, "videos", video_name)] = temp
+        io.write_config(config_path, cfg)
 
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)
