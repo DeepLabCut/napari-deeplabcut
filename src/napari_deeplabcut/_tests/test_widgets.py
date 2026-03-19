@@ -302,11 +302,8 @@ def test_ensure_mpl_canvas_docked_missing_window(viewer, qtbot):
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_trajectory_loader_ignores_invalid_properties(make_napari_viewer, make_real_header_factory):
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
-
-    controls = KeypointControls(viewer)
+def test_trajectory_loader_ignores_invalid_properties(viewer, make_real_header_factory):
+    controls = _widgets.KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
     header = make_real_header_factory(individuals=("",))
