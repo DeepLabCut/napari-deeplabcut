@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 from napari.layers import Points
 from napari.utils.events import EmitterGroup, Event
+from qtpy.QtWidgets import QWidget
 
 
 class FakeSelection:
@@ -186,3 +187,12 @@ def make_points_layer(make_header):
         return layer
 
     return _make_points_layer
+
+
+@pytest.fixture
+def dialog_parent(qtbot):
+    parent = QWidget()
+    parent.setGeometry(100, 200, 800, 600)
+    qtbot.addWidget(parent)
+    parent.show()
+    return parent

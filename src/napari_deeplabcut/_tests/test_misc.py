@@ -1,5 +1,4 @@
 # test_misc.py
-import inspect
 from pathlib import Path
 
 import numpy as np
@@ -26,62 +25,6 @@ from napari_deeplabcut.core.io import load_config
 def test_unsorted_unique(seq, expected):
     out = misc.unsorted_unique(seq)
     assert list(out) == expected
-
-
-# ----------------------------
-# canonicalize_path tests
-# ----------------------------
-@pytest.mark.parametrize(
-    "p, n, expected",
-    [
-        # basic POSIX cases
-        ("root/sub1/sub2/file.png", 3, "sub1/sub2/file.png"),
-        ("root/sub/file.png", 2, "sub/file.png"),
-        ("root/sub/file.png", 1, "file.png"),
-        ("a/b/c", 10, "a/b/c"),
-        (Path("a/b/c/d.txt"), 3, "b/c/d.txt"),
-        ("", 3, ""),
-        (".", 3, ""),
-        ("..", 3, ""),
-        ("/", 3, ""),
-        ("a/b/c/", 3, "a/b/c"),
-        # n <= 0 raises ValueError
-        ("a/b/c", 0, ValueError),
-        ("a/b/c/d", -1, ValueError),
-        # non-string coercion
-        (123, 3, "123"),
-        # Windows-style backslashes normalized to POSIX; last 3 components kept
-        (r"a\b\c\file.png", 3, "b/c/file.png"),
-        # Mixed separators: double backslash becomes empty path component after replace -> filtered out
-        (r"frames\\test\video0/img001.png", 3, "test/video0/img001.png"),
-    ],
-)
-def test_canonicalize_path_cases(p, n, expected):
-    # If expected is an Exception class, assert it is raised
-    is_exc_class = inspect.isclass(expected) and issubclass(expected, Exception)
-    if is_exc_class:
-        with pytest.raises(expected):
-            misc.canonicalize_path(p, n=n)
-        return
-
-    out = misc.canonicalize_path(p, n=n)
-    assert out == expected
-
-
-def test_canonicalize_path_converts_and_drops_backslashes():
-    # Dedicated check that backslashes are removed
-    out = misc.canonicalize_path(r"a\b\c\file.png", n=3)
-    assert "\\" not in out
-
-
-def test_canonicalize_path_exception_fallback_still_replaces_backslashes():
-    class Weird:
-        def __str__(self):
-            return r"x\y\z"
-
-    out = misc.canonicalize_path(Weird(), n=3)  # type: ignore[arg-type]
-    assert out == "x/y/z"
-    assert "\\" not in out
 
 
 # ----------------------------

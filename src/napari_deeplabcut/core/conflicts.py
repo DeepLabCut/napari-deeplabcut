@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/core/conflicts.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -98,9 +99,6 @@ def compute_overwrite_report_for_points_save(
 
     # Same GT fallback logic as write_hdf(...)
     if not out_path:
-        if source_kind == AnnotationKind.MACHINE:
-            raise MissingProvenanceError("Cannot resolve provenance output path for MACHINE source.")
-
         dataset_dir = infer_dataset_folder_from_points_meta(pts_meta)
 
         if dataset_dir is not None:
