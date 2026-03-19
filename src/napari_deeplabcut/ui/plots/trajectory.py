@@ -18,7 +18,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvas, NavigationToolbar2QT
 from napari.utils.events import Event
 from qtpy.QtCore import QSize, Qt, QTimer
 from qtpy.QtGui import QIcon
-from qtpy.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
+from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QSlider, QVBoxLayout, QWidget
 
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut.core.layers import (
@@ -87,7 +87,7 @@ class KeypointMatplotlibCanvas(QWidget):
 
         with mplstyle.context(self.mpl_style_sheet_path):
             self.canvas = FigureCanvas()
-            self.canvas.figure.set_size_inches(4, 2, forward=True)
+            # self.canvas.figure.set_size_inches(4, 2, forward=True)
             self.canvas.figure.set_layout_engine("constrained")
             self.ax = self.canvas.figure.subplots()
             self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
@@ -111,21 +111,33 @@ class KeypointMatplotlibCanvas(QWidget):
         self._window = self.slider.value()
         self.slider.valueChanged.connect(self.set_window)
 
-        layout = QVBoxLayout()
-        layout.addWidget(self.canvas)
-        layout.addWidget(self.toolbar)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.updateGeometry()
 
-        layout2 = QHBoxLayout()
-        layout2.addWidget(self.slider)
-        layout2.addWidget(self.slider_value)
-        layout.addLayout(layout2)
+        self.toolbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.slider_value.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        # Give almost all vertical stretch to the plot canvas
+        layout.addWidget(self.canvas, stretch=1)
+        layout.addWidget(self.toolbar, stretch=0)
+
+        slider_row = QHBoxLayout()
+        slider_row.addWidget(self.slider, stretch=1)
+        slider_row.addWidget(self.slider_value, stretch=0)
+        layout.addLayout(slider_row, stretch=0)
 
         self.setLayout(layout)
 
         self.frames = []
         self.keypoints = []
         self.df = None
-        self.setMinimumHeight(300)
+        self.setMinimumSize(280, 350)
 
         self.viewer.dims.events.current_step.connect(self.update_plot_range)
         self._n = 0
@@ -145,6 +157,25 @@ class KeypointMatplotlibCanvas(QWidget):
         # (e.g. drag-and-drop load before opening the plugin), populate
         # the plot from the current viewer state on the next event-loop turn.
         QTimer.singleShot(0, self.refresh_from_viewer_layers)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.canvas.draw_idle()
+
+    def sizeHint(self) -> QSize:
+        """
+        Preferred initial size for the trajectory plot dock widget.
+
+        Wide enough for the toolbar + slider, and tall enough that the plot
+        is useful by default without preventing later resizing.
+        """
+        return QSize(480, 340)
+
+    def minimumSizeHint(self) -> QSize:
+        """
+        Smallest comfortable size before the widget becomes cramped.
+        """
+        return QSize(280, 440)
 
     def on_doubleclick(self, event):
         if getattr(event, "dblclick", False):
