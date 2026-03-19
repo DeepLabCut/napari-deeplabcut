@@ -13,6 +13,7 @@ from napari.utils import colormaps
 from natsort import natsorted
 
 from napari_deeplabcut.core.paths import canonicalize_path
+from napari_deeplabcut.utils.deprecations import DeprecationMode, deprecated
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,12 @@ def find_project_config_path(labeled_data_path: str) -> str:
     return str(Path(labeled_data_path).parents[2] / "config.yaml")
 
 
+@deprecated(
+    since="napari-deeplabcut>0.2.1.8, DLC>3.0.0rc14",
+    mode=DeprecationMode.WARN,
+    details="This is no longer used by deeplabcut as of PR #3234 "
+    "'Run update check in separate thread' being merged and will be removed in a future release.",
+)
 def is_latest_version():
     import json
     import urllib.request
@@ -89,71 +96,6 @@ def unsorted_unique(array: Sequence) -> np.ndarray:
     """Return the unsorted unique elements of an array."""
     _, inds = np.unique(array, return_index=True)
     return np.asarray(array)[np.sort(inds)]
-
-
-# # FIXME @C-Achard replace with schema in core
-# class DLCHeader:
-#     def __init__(self, columns: pd.MultiIndex):
-#         self.columns = columns
-
-#     @classmethod
-#     def from_config(cls, config: dict) -> DLCHeader:
-#         multi = config.get("multianimalproject", False)
-#         scorer = [config["scorer"]]
-#         if multi:
-#             columns = pd.MultiIndex.from_product(
-#                 [
-#                     scorer,
-#                     config["individuals"],
-#                     config["multianimalbodyparts"],
-#                     ["x", "y"],
-#                 ]
-#             )
-#             if len(config["uniquebodyparts"]):
-#                 temp = pd.MultiIndex.from_product([scorer, ["single"], config["uniquebodyparts"], ["x", "y"]])
-#                 columns = columns.append(temp)
-#             columns.set_names(["scorer", "individuals", "bodyparts", "coords"], inplace=True)
-#         else:
-#             columns = pd.MultiIndex.from_product(
-#                 [scorer, config["bodyparts"], ["x", "y"]],
-#                 names=["scorer", "bodyparts", "coords"],
-#             )
-#         return cls(columns)
-
-#     def form_individual_bodypart_pairs(self) -> list[tuple[str]]:
-#         to_drop = [name for name in self.columns.names if name not in ("individuals", "bodyparts")]
-#         temp = self.columns.droplevel(to_drop).unique()
-#         if "individuals" not in temp.names:
-#             temp = pd.MultiIndex.from_product([self.individuals, temp])
-#         return temp.to_list()
-
-#     @property
-#     def scorer(self) -> str:
-#         return self._get_unique("scorer")[0]
-
-#     @scorer.setter
-#     def scorer(self, scorer: str):
-#         self.columns = self.columns.set_levels([scorer], level="scorer")
-
-#     @property
-#     def individuals(self) -> list[str]:
-#         individuals = self._get_unique("individuals")
-#         if individuals is None:
-#             return [""]
-#         return individuals
-
-#     @property
-#     def bodyparts(self) -> list[str]:
-#         return self._get_unique("bodyparts")
-
-#     @property
-#     def coords(self) -> list[str]:
-#         return self._get_unique("coords")
-
-#     def _get_unique(self, name: str) -> list | None:
-#         if name in self.columns.names:
-#             return list(unsorted_unique(self.columns.get_level_values(name)))
-#         return None
 
 
 class CycleEnumMeta(EnumMeta):
