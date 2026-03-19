@@ -121,6 +121,17 @@ def deprecated(
     Mark a function or class as deprecated.
 
     Behavior can be controlled globally via policy/env/context, or per-usage via `mode=...`.
+
+    Args:
+        since: Version when the deprecation was introduced.
+        remove_in: Version when the deprecated API will be removed.
+        replacement: Optional API to use instead of the deprecated one.
+        details: Additional details to include in the deprecation message.
+        mode: Optional override for this deprecation's behavior.
+        category: Optional warning category to use.
+        stacklevel: Optional stack level for the warning.
+        policy: Deprecation policy to use.
+        add_to_docstring: Whether to add the deprecation message to the docstring.
     """
     warning_category = category or policy.category
     warning_stacklevel = stacklevel or policy.stacklevel
