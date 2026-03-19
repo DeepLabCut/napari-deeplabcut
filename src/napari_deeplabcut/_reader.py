@@ -63,7 +63,7 @@ def get_folder_parser(path):
         return None
     if not looks_like_dlc_labeled_folder(path):
         # TODO: @C-Achard raise explaining why it is not considered a DLC-labeled folder
-        # e.g. no h5 files, no labeled-data in path, etc1
+        # e.g. no h5 files, no labeled-data in path, etc.
         return None
 
     layers = []
