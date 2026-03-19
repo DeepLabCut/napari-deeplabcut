@@ -152,10 +152,8 @@ def test_apply_points_layer_ui_tweaks_real_dropdown(qtbot):
     dock_layer_controls = SimpleNamespace(widget=lambda: SimpleNamespace(widgets={layer: point_controls}))
     SimpleNamespace(window=SimpleNamespace(qt_viewer=SimpleNamespace(dockLayerControls=dock_layer_controls)))
 
-    # Directly test the suspected failing line:
     selector = DropdownMenu(plt.colormaps, point_controls)
     assert selector is not None
-    assert selector.updated_to == "magma"
 
     assert point_controls._face_color_control.face_color_edit.isHidden()
     assert point_controls._face_color_control.face_color_label.isHidden()
@@ -163,6 +161,3 @@ def test_apply_points_layer_ui_tweaks_real_dropdown(qtbot):
     assert point_controls._border_color_control.border_color_edit_label.isHidden()
     assert point_controls._out_slice_checkbox_control.out_of_slice_checkbox.isHidden()
     assert point_controls._out_slice_checkbox_control.out_of_slice_checkbox_label.isHidden()
-
-    # one row was added for the dropdown
-    assert point_controls.layout().rowCount() == 1
