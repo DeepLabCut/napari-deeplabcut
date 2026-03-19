@@ -8,6 +8,7 @@ from typing import Any, TypeVar
 
 import numpy as np
 from napari.layers import Image, Points, Shapes, Tracks
+from qtpy.QtCore import QTimer
 
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 from napari_deeplabcut.core.keypoints import build_color_cycles
@@ -390,3 +391,228 @@ def find_relevant_image_layer(viewer) -> Image | None:
             return layer
 
     return None
+
+
+# -----------------------------------------------
+#  Points interaction observer
+# -----------------------------------------------
+
+
+@dataclass(frozen=True)
+class PointsInteractionEvent:
+    """
+    Structured points-layer interaction event.
+
+    Parameters
+    ----------
+    viewer:
+        The napari viewer.
+    layer:
+        The active Points layer at the time the event flushes, or None.
+    reasons:
+        A normalized set of reasons that triggered the event. Typical values:
+        {"selection"}, {"active_layer"}, {"layers"}, {"data"}, {"properties"}.
+    """
+
+    viewer: Any
+    layer: Points | None
+    reasons: frozenset[str]
+
+
+def _iter_event_emitters(event_group: Any, names: tuple[str, ...]):
+    """
+    Yield (name, emitter) pairs for names that exist on an event group.
+    """
+    if event_group is None:
+        return
+    for name in names:
+        emitter = getattr(event_group, name, None)
+        if emitter is not None:
+            yield name, emitter
+
+
+def capture_points_state(
+    layer: Points,
+    *,
+    include_data: bool = False,
+    include_properties: bool = False,
+) -> dict[str, Any]:
+    """
+    Best-effort snapshot helper for future history/undo systems.
+
+    This is intentionally separate from the observer so callers can choose
+    whether they want lightweight interaction events or heavier snapshots.
+    """
+    state: dict[str, Any] = {
+        "name": getattr(layer, "name", None),
+        "selected_data": tuple(sorted(int(i) for i in getattr(layer, "selected_data", set()) or set())),
+        "n_points": len(getattr(layer, "data", []) or []),
+    }
+
+    if include_data:
+        try:
+            state["data"] = getattr(layer, "data", None).copy()
+        except Exception:
+            state["data"] = None
+
+    if include_properties:
+        try:
+            props = getattr(layer, "properties", {}) or {}
+            state["properties"] = {k: v.copy() if hasattr(v, "copy") else v for k, v in dict(props).items()}
+        except Exception:
+            state["properties"] = None
+
+    return state
+
+
+class PointsInteractionObserver:
+    """
+    Observe the active napari Points layer and emit coalesced interaction events.
+
+    Public / stable anchors used
+    ----------------------------
+    - viewer.layers.selection.events.active
+    - layer.selected_data.events.changed / active
+    - layer.selected_data.events.items_changed (if present; useful in practice)
+    - viewer.layers.events.inserted / removed / reordered (if present)
+
+    Notes
+    -----
+    This is intentionally conservative:
+    - it avoids private napari APIs
+    - it tolerates event-name differences by connecting only to emitters that exist
+    - it coalesces bursts of events into one callback using a QTimer
+    """
+
+    def __init__(
+        self,
+        viewer: Any,
+        callback: Callable[[PointsInteractionEvent], None],
+        *,
+        debounce_ms: int = 0,
+        watch_content: bool = False,
+    ) -> None:
+        self.viewer = viewer
+        self.callback = callback
+        self.debounce_ms = max(0, int(debounce_ms))
+        self.watch_content = watch_content
+
+        self._active_layer: Points | None = None
+        self._viewer_connections: list[tuple[Any, Callable]] = []
+        self._layer_connections: list[tuple[Any, Callable]] = []
+        self._pending_reasons: set[str] = set()
+
+        self._timer = QTimer()
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._flush)
+
+    # ------------------------------------------------------------------
+    # Public lifecycle
+    # ------------------------------------------------------------------
+
+    def install(self) -> None:
+        """
+        Install the observer onto the viewer.
+        """
+        self._connect_viewer_events()
+        self._rebind_active_points_layer()
+        self._schedule("install")
+
+    def close(self) -> None:
+        """
+        Disconnect all emitters and stop the timer.
+        """
+        self._timer.stop()
+        self._disconnect_all(self._layer_connections)
+        self._disconnect_all(self._viewer_connections)
+        self._active_layer = None
+        self._pending_reasons.clear()
+
+    # ------------------------------------------------------------------
+    # Internal connection helpers
+    # ------------------------------------------------------------------
+
+    def _connect(self, emitter: Any, callback: Callable, bucket: list[tuple[Any, Callable]]) -> None:
+        emitter.connect(callback)
+        bucket.append((emitter, callback))
+
+    def _disconnect_all(self, bucket: list[tuple[Any, Callable]]) -> None:
+        while bucket:
+            emitter, callback = bucket.pop()
+            try:
+                emitter.disconnect(callback)
+            except Exception:
+                pass
+
+    def _connect_viewer_events(self) -> None:
+        # Active layer changes are the most important public hook.
+        active_emitter = getattr(self.viewer.layers.selection.events, "active", None)
+        if active_emitter is not None:
+            self._connect(active_emitter, self._on_active_layer_changed, self._viewer_connections)
+
+        layer_events = getattr(self.viewer.layers, "events", None)
+        for _name, emitter in _iter_event_emitters(layer_events, ("inserted", "removed", "reordered")):
+            self._connect(emitter, self._on_layers_changed, self._viewer_connections)
+
+    def _rebind_active_points_layer(self) -> None:
+        self._disconnect_all(self._layer_connections)
+
+        active = getattr(self.viewer.layers.selection, "active", None)
+        if not isinstance(active, Points):
+            self._active_layer = None
+            return
+
+        self._active_layer = active
+
+        # Primary selection hooks: Selection model events
+        selection = getattr(active, "selected_data", None)
+        selection_events = getattr(selection, "events", None)
+
+        for _name, emitter in _iter_event_emitters(selection_events, ("changed", "active", "items_changed")):
+            self._connect(emitter, self._on_selection_changed, self._layer_connections)
+
+        # Optional content hooks, useful for future history/versioning use cases.
+        if self.watch_content:
+            layer_events = getattr(active, "events", None)
+            for event_name in ("data", "properties", "current_properties", "mode"):
+                for _name, emitter in _iter_event_emitters(layer_events, (event_name,)):
+                    self._connect(emitter, self._on_content_changed, self._layer_connections)
+
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+
+    def _on_active_layer_changed(self, event=None) -> None:
+        self._rebind_active_points_layer()
+        self._schedule("active_layer")
+
+    def _on_layers_changed(self, event=None) -> None:
+        # The active layer may or may not have changed, but rebinding is cheap and safe.
+        self._rebind_active_points_layer()
+        self._schedule("layers")
+
+    def _on_selection_changed(self, event=None) -> None:
+        self._schedule("selection")
+
+    def _on_content_changed(self, event=None) -> None:
+        self._schedule("content")
+
+    # ------------------------------------------------------------------
+    # Coalescing
+    # ------------------------------------------------------------------
+
+    def _schedule(self, reason: str) -> None:
+        self._pending_reasons.add(reason)
+        if not self._timer.isActive():
+            self._timer.start(self.debounce_ms)
+
+    def _flush(self) -> None:
+        reasons = frozenset(self._pending_reasons)
+        self._pending_reasons.clear()
+
+        event = PointsInteractionEvent(
+            viewer=self.viewer,
+            layer=self._active_layer,
+            reasons=reasons,
+        )
+        self.callback(event)

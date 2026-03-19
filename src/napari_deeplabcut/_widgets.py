@@ -61,6 +61,8 @@ from napari_deeplabcut.core.config_sync import (
 from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
 from napari_deeplabcut.core.layers import (
+    PointsInteractionEvent,
+    PointsInteractionObserver,
     compute_label_progress,
     find_relevant_image_layer,
     get_first_points_layer,
@@ -299,9 +301,17 @@ class KeypointControls(QWidget):
         self._view_scheme_cb.setChecked(True)
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
         self._show_color_scheme()
-        self._color_scheme_panel.display.added.connect(
-            lambda w: w.part_label.clicked.connect(self._matplotlib_canvas._toggle_line_visibility),
+        # self._color_scheme_panel.display.added.connect(
+        #     lambda w: w.part_label.clicked.connect(self._on_color_scheme_label_clicked),
+        # )
+
+        self._points_interactions = PointsInteractionObserver(
+            self.viewer,
+            self._on_points_interaction,
+            debounce_ms=0,
+            watch_content=False,
         )
+        self._points_interactions.install()
         ### UI setup ends here
 
         # Modes init
@@ -361,6 +371,10 @@ class KeypointControls(QWidget):
 
         # Refresh layers stats widget
         QTimer.singleShot(0, self._refresh_layer_status_panel)
+
+    @cached_property
+    def settings(self):
+        return QSettings()
 
     # ######################## #
     # Layer setup core methods #
@@ -596,6 +610,11 @@ class KeypointControls(QWidget):
         except Exception:
             pass
 
+        # Important: refresh the trajectory plot from the final adopted state.
+        # This fixes the case where layers were loaded before the plugin opened
+        # (e.g. drag-and-drop DLC data triggering the reader automatically).
+        self._refresh_trajectory_plot_from_layers()
+
     def _adopt_layer(self, layer, index: int) -> None:
         """
         Run the relevant portion of on_insert() for an already-existing layer.
@@ -647,10 +666,7 @@ class KeypointControls(QWidget):
         if window is None:
             return
 
-        # If napari hasn't materialized its Qt window yet, skip (safe no-op).
         if getattr(window, "_qt_window", None) is None:
-            # In normal UI runs this won't happen when the user hits the checkbox.
-            # In tests/headless it may—so just do nothing.
             return
 
         try:
@@ -672,14 +688,41 @@ class KeypointControls(QWidget):
         if Qt.CheckState(state) == Qt.CheckState.Checked:
             self._ensure_mpl_canvas_docked()
             if self._mpl_docked:
+                self._matplotlib_canvas.update_plot_range(
+                    Event(type_name="", value=[self.viewer.dims.current_step[0]]),
+                    force=True,
+                )
+                self._matplotlib_canvas.sync_visible_lines_to_points_selection()
                 self._matplotlib_canvas.show()
         else:
             if self._mpl_docked:
                 self._matplotlib_canvas.hide()
 
-    @cached_property
-    def settings(self):
-        return QSettings()
+    def _on_points_interaction(self, event: PointsInteractionEvent) -> None:
+        """
+        Keep the trajectory plot in sync with the active points-layer selection.
+
+        This is intentionally selection-driven:
+        - no selected points -> all trajectories
+        - selected points    -> only selected labels' trajectories
+        """
+        if {"selection", "active_layer", "layers"} & set(event.reasons):
+            self._matplotlib_canvas.sync_visible_lines_to_points_selection()
+
+    # def _on_color_scheme_label_clicked(self, _text: str) -> None:
+    #     """
+    #     Let the color-scheme panel perform its normal point-selection logic first,
+    #     then sync the trajectory plot visibility to the resulting napari selection.
+    #     """
+    #     QTimer.singleShot(0, self._matplotlib_canvas.sync_visible_lines_to_points_selection)
+
+    def _refresh_trajectory_plot_from_layers(self) -> None:
+        """
+        Refresh trajectory plot from the current viewer state.
+
+        Deferred through QTimer so it runs after layer adoption/remap settles.
+        """
+        QTimer.singleShot(0, self._matplotlib_canvas.refresh_from_viewer_layers)
 
     def load_superkeypoints_diagram(self):
         points_layer = get_first_points_layer(self.viewer)
