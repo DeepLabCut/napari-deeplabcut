@@ -57,8 +57,8 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
         # caller wires signal to its handler; keep this compat layer minimal
         point_controls.layout().addRow("colormap", colormap_selector)
         return colormap_selector
-    except Exception:
-        logger.debug("Failed to add colormap selector: %r", exc_info=True)
+    except Exception as e:
+        logger.debug("Failed to add colormap selector: %r", e, exc_info=True)
         return None
 
 
