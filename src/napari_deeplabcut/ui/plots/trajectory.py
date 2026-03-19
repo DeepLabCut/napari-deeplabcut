@@ -97,7 +97,7 @@ class KeypointMatplotlibCanvas(QWidget):
         # self.toolbar = NapariNavigationToolbar(self.canvas, parent=self)
         self.toolbar = NavigationToolbar2QT(self.canvas, parent=self)
         self.toolbar.setIconSize(QSize(28, 28))
-        self._replace_toolbar_icons()
+        self._set_toolbar_tooltips()
         self.canvas.mpl_connect("button_press_event", self.on_doubleclick)
 
         self.slider = QSlider(Qt.Horizontal)
@@ -139,6 +139,8 @@ class KeypointMatplotlibCanvas(QWidget):
         self.viewer.dims.events.range.connect(self._update_slider_max)
         self._lines: dict[str, list] = {}
 
+        self._apply_napari_theme()
+        self._connect_theme_events()
         # If layers already existed before this widget was created
         # (e.g. drag-and-drop load before opening the plugin), populate
         # the plot from the current viewer state on the next event-loop turn.
@@ -259,7 +261,7 @@ class KeypointMatplotlibCanvas(QWidget):
             self.ax.set_xlabel("Frame")
             self.ax.set_ylabel("Y position")
             self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
-            self._apply_axis_theme()
+            self._apply_napari_theme()
 
             height = None
             if image_layer is not None:
@@ -443,3 +445,114 @@ class KeypointMatplotlibCanvas(QWidget):
             return
 
         self._set_visible_keypoints(visible)
+
+    def _set_toolbar_tooltips(self) -> None:
+        """Set clearer tooltips for the stock matplotlib toolbar."""
+        for action in self.toolbar.actions():
+            text = action.text()
+            if text == "Pan":
+                action.setToolTip(
+                    "Pan/Zoom: Left button pans; Right button zooms; Click once to activate; Click again to deactivate"
+                )
+            elif text == "Zoom":
+                action.setToolTip("Zoom to rectangle; Click once to activate; Click again to deactivate")
+
+    # def _apply_toolbar_icons(self) -> None:
+    #     """
+    #     Apply static black/white toolbar icons based on the current napari theme.
+
+    #     This does not override toolbar behavior; it only replaces the displayed icons.
+    #     """
+    #     icon_dir = self._get_path_to_icon()
+    #     for action in self.toolbar.actions():
+    #         text = action.text()
+    #         if not text:
+    #             continue
+
+    #         icon_path = Path(icon_dir) / f"{text}.png"
+    #         if icon_path.exists():
+    #             action.setIcon(QIcon(str(icon_path)))
+
+    def _apply_toolbar_stylesheet(self) -> None:
+        """
+        Apply a minimal Qt stylesheet so the toolbar background has enough contrast.
+
+        In light mode:
+        - toolbar background becomes light gray
+        - buttons remain mostly transparent until hover/checked
+
+        In dark mode:
+        - keep a subtle dark/transparent look
+        """
+        is_light = self._napari_theme_has_light_bg()
+
+        if is_light:
+            fg = "#202020"
+            toolbar_bg = "#ececec"  # light gray background for the whole toolbar
+            hover = "rgba(0, 0, 0, 0.06)"
+            pressed = "rgba(0, 0, 0, 0.12)"
+            border = "rgba(0, 0, 0, 0.10)"
+        else:
+            fg = "#f2f2f2"
+            toolbar_bg = "transparent"
+            hover = "rgba(255, 255, 255, 0.10)"
+            pressed = "rgba(255, 255, 255, 0.18)"
+            border = "rgba(255, 255, 255, 0.12)"
+
+        self.toolbar.setStyleSheet(
+            f"""
+            QToolBar {{
+                background: {toolbar_bg};
+                border: none;
+                spacing: 2px;
+                padding: 2px;
+            }}
+            QToolButton {{
+                color: {fg};
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 4px;
+                padding: 2px;
+                margin: 1px;
+            }}
+            QToolButton:hover {{
+                background: {hover};
+                border: 1px solid {border};
+            }}
+            QToolButton:pressed {{
+                background: {pressed};
+            }}
+            QToolButton:checked {{
+                background: {pressed};
+                border: 1px solid {border};
+            }}
+            """
+        )
+
+    def _apply_label_styles(self) -> None:
+        """Apply light/dark text color to simple Qt labels in this widget."""
+        fg = "black" if self._napari_theme_has_light_bg() else "white"
+        self.slider_value.setStyleSheet(f"color: {fg};")
+
+    def _apply_napari_theme(self) -> None:
+        """
+        Re-apply all napari-dependent styling.
+
+        Safe to call repeatedly.
+        """
+        self._apply_axis_theme()
+        # self._apply_toolbar_icons()
+        self._apply_toolbar_stylesheet()
+        self._apply_label_styles()
+        self.canvas.draw_idle()
+
+    def _connect_theme_events(self) -> None:
+        """
+        Re-apply theme when the viewer theme changes, if the event exists.
+
+        Safe across versions: if the event is absent, this becomes a no-op.
+        """
+        viewer_events = getattr(self.viewer, "events", None)
+        theme_emitter = getattr(viewer_events, "theme", None)
+        if theme_emitter is not None:
+            theme_emitter.connect(lambda event=None: self._apply_napari_theme())

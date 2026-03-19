@@ -646,6 +646,7 @@ class KeypointControls(QWidget):
         if Qt.CheckState(state) == Qt.CheckState.Checked:
             self._ensure_mpl_canvas_docked()
             if self._mpl_docked:
+                self._matplotlib_canvas._apply_napari_theme()
                 self._matplotlib_canvas.update_plot_range(
                     Event(type_name="", value=[self.viewer.dims.current_step[0]]),
                     force=True,
