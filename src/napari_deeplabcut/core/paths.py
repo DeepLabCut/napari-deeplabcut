@@ -56,7 +56,7 @@ def canonicalize_path(p: str | Path, n: int = 3) -> str:
     try:
         s = str(p)
     except Exception:
-        logger.debug("Failed to stringify path %r", p, exc_info=True)
+        logger.debug("Failed to stringify path of type %s", type(p).__name__, exc_info=True)
         return ""
 
     s = s.replace("\\", "/")
