@@ -73,8 +73,7 @@ def load_config(config_path: str):
 # Read config file and create keypoint layer metadata
 def read_config(configname: str) -> list[LayerData]:
     config = load_config(configname)
-    # FIXME duplicated DLCHeader misc/models
-    header = misc.DLCHeader.from_config(config)
+    header = DLCHeaderModel.from_config(config)
     metadata = populate_keypoint_layer_metadata(
         header,
         size=config["dotsize"],
@@ -104,6 +103,57 @@ def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
 # =============================================================================
 # NOTE: This reader returns a napari Points layer (data + metadata + "points")
 # and attaches provenance via attach_source_and_io.
+def _infer_dataset_folder_from_points_meta(pts_meta: PointsMetadata) -> Path | None:
+    """
+    Infer DLC dataset folder (…/labeled-data/<dataset>) from PointsMetadata.
+
+    Uses:
+      - pts_meta.project (config parent) as project root
+      - pts_meta.paths (canonicalized relpaths like labeled-data/test/img000.png)
+      - pts_meta.root as a fallback hint
+
+    Returns a Path to dataset folder or None if not inferable.
+    """
+    project = getattr(pts_meta, "project", None)
+    paths = getattr(pts_meta, "paths", None) or []
+    root = getattr(pts_meta, "root", None)
+
+    # If root itself is already dataset folder, use it
+    try:
+        if root:
+            rp = Path(root).expanduser().resolve()
+            if "labeled-data" in [p.lower() for p in rp.parts] and rp.name.lower() != "labeled-data":
+                return rp
+    except Exception:
+        pass
+
+    # Infer from paths like "labeled-data/<dataset>/img000.png"
+    dataset_name = None
+    for s in paths:
+        if not isinstance(s, str):
+            continue
+        parts = s.replace("\\", "/").split("/")
+        try:
+            i = [p.lower() for p in parts].index("labeled-data")
+            if i + 1 < len(parts):
+                dataset_name = parts[i + 1]
+                break
+        except ValueError:
+            continue
+
+    if not dataset_name:
+        return None
+
+    # Need a project root anchor to build full dataset path
+    if not project:
+        return None
+
+    try:
+        proj = Path(project).expanduser().resolve()
+    except Exception:
+        proj = Path(project)
+
+    return proj / "labeled-data" / dataset_name
 
 
 def read_hdf(filename: str) -> list[LayerData]:
@@ -123,7 +173,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     """
     temp = pd.read_hdf(str(file))
     temp = merge_multiple_scorers(temp)
-    header = misc.DLCHeader(temp.columns)
+    header = DLCHeaderModel(columns=temp.columns)
     temp = temp.droplevel("scorer", axis=1)
 
     # Handle legacy/single-animal column layout by inserting empty "individuals" level.
@@ -289,7 +339,7 @@ def form_df(
     points_data:
         array-like of shape (N, 3) in napari-style [frame, y, x]
     layer_metadata:
-        dict that must contain at least: 'header' (DLCHeader-like or DLCHeaderModel), optional 'paths'
+        dict that must contain at least: 'header' (DLCHeaderModel), optional 'paths'
     layer_properties:
         dict that must contain: 'label', 'id', optional 'likelihood'
     """
@@ -308,7 +358,7 @@ def form_df(
     elif isinstance(header_obj, DLCHeaderModel):
         header_model = header_obj
     else:
-        # Accept a misc.DLCHeader-like object (has .columns)
+        # Accept a DLCHeaderModel-like object (has .columns)
         cols = getattr(header_obj, "columns", None)
         if cols is None:
             raise TypeError("layer_metadata['header'] must be a DLCHeaderModel or an object with a .columns attribute.")
@@ -423,20 +473,26 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     # If provenance returned nothing, default to requested path
     if not out_path:
         # Strict only for MACHINE
-        # Safety: never write back to machine sources unless promotion target exists
         if source_kind == AnnotationKind.MACHINE:
             raise MissingProvenanceError("Cannot resolve provenance output path for MACHINE source.")
 
-        # GT fallback
-        root = pts_meta.root
-        if not root:
-            raise MissingProvenanceError("GT fallback requires root.")
+        # Prefer dataset folder if inferable (DLC convention)
+        dataset_dir = _infer_dataset_folder_from_points_meta(pts_meta)
 
-        root_path = Path(root)
+        # If dataset_dir exists or can be created, use it; else fall back to pts_meta.root
+        if dataset_dir is not None:
+            dataset_dir.mkdir(parents=True, exist_ok=True)
+            root_path = dataset_dir
+        else:
+            root = pts_meta.root
+            if not root:
+                raise MissingProvenanceError("GT fallback requires root (and dataset folder could not be inferred).")
+            root_path = Path(root)
+
         candidates = sorted(root_path.glob("CollectedData_*.h5"))
         if len(candidates) > 1:
             raise AmbiguousSaveError(
-                f"Multiple CollectedData_*.h5 files found in {root}."
+                f"Multiple CollectedData_*.h5 files found in {root_path}."
                 " Cannot determine where to save."
                 " Please specify a save_target with explicit path and scorer.",
                 candidates=[str(c) for c in candidates],
@@ -482,7 +538,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
 
         # Normalize columns to DLC header if possible
         try:
-            header = misc.DLCHeader(df_out.columns)
+            header = DLCHeaderModel(columns=df_out.columns)
             df_out = df_out.reindex(header.columns, axis=1)
         except Exception:
             pass
@@ -517,7 +573,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
 # =============================================================================
 # SUPERKEYPOINTS (assets: diagram + JSON)
 # =============================================================================
-# NOTE: These are used to support DLCHeader superkeypoints workflows.
+# NOTE: These are used to support DLCHeaderModel superkeypoints workflows.
 
 
 def load_superkeypoints_json_from_path(json_path: str | Path):

@@ -6,8 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from napari_deeplabcut import _writer, misc
-from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut import _writer
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 from napari_deeplabcut.core import io
 from napari_deeplabcut.core.errors import MissingProvenanceError
 
@@ -51,7 +51,7 @@ def test_writer_aborts_if_machine_source_without_save_target(tmp_path: Path):
         [["John"], ["bodypart1", "bodypart2"], ["x", "y"]],
         names=["scorer", "bodyparts", "coords"],
     )
-    header = misc.DLCHeader(cols)
+    header = DLCHeaderModel(columns=cols)
 
     metadata = _make_minimal_points_metadata(
         tmp_path, header, name="machinelabels-iter0", kind=AnnotationKind.MACHINE, save_target=None
@@ -75,7 +75,7 @@ def test_writer_promotion_writes_collecteddata_and_rewrites_scorer(tmp_path: Pat
         [["machine"], ["bodypart1", "bodypart2"], ["x", "y"]],
         names=["scorer", "bodyparts", "coords"],
     )
-    header = misc.DLCHeader(cols)
+    header = DLCHeaderModel(columns=cols)
 
     # Ensure overwrite confirm always returns True
     monkeypatch.setattr(io, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
