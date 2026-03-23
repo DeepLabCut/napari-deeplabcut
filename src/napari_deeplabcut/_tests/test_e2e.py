@@ -1121,7 +1121,7 @@ def test_config_placeholder_points_layer_colors_after_first_keypoint_added(make_
 
     # Add first point (we don't assume which keypoint is active)
     placeholder.add(np.array([0.0, 20.0, 10.0], dtype=float))
-    qtbot.waitUntil(lambda: (placeholder.data is not None and len(placeholder.data) == 1), timeout=2000)
+    qtbot.waitUntil(lambda: placeholder.data is not None and len(placeholder.data) == 1, timeout=2000)
 
     # Wait for recolor to activate cycle mode
     qtbot.waitUntil(lambda: placeholder.face_color_mode == "cycle", timeout=5000)
@@ -1149,7 +1149,7 @@ def test_config_placeholder_points_layer_colors_after_first_keypoint_added(make_
 
     # Add second point; it should generally advance to the next keypoint
     placeholder.add(np.array([0.0, 33.0, 44.0], dtype=float))
-    qtbot.waitUntil(lambda: (placeholder.data is not None and len(placeholder.data) == 2), timeout=2000)
+    qtbot.waitUntil(lambda: placeholder.data is not None and len(placeholder.data) == 2, timeout=2000)
 
     label1 = str(placeholder.properties["label"][1])
     expected1 = np.asarray(placeholder.metadata["face_color_cycles"]["label"][label1], dtype=float)
@@ -1207,7 +1207,7 @@ def test_config_placeholder_multianimal_colors_by_id_after_first_keypoint_added(
     store.current_keypoint = keypoints.Keypoint("bodypart1", "animal1")
     placeholder.add(np.array([0.0, 12.0, 34.0], dtype=float))
 
-    qtbot.waitUntil(lambda: (placeholder.data is not None and len(placeholder.data) == 1), timeout=2_000)
+    qtbot.waitUntil(lambda: placeholder.data is not None and len(placeholder.data) == 1, timeout=2_000)
 
     # Wait for recolor timer to switch to cycle mode (singleShot(0))
     qtbot.waitUntil(lambda: placeholder.face_color_mode == "cycle", timeout=5_000)
@@ -1224,7 +1224,7 @@ def test_config_placeholder_multianimal_colors_by_id_after_first_keypoint_added(
     store.current_keypoint = keypoints.Keypoint("bodypart2", "animal2")
     placeholder.add(np.array([0.0, 56.0, 78.0], dtype=float))
 
-    qtbot.waitUntil(lambda: (placeholder.data is not None and len(placeholder.data) == 2), timeout=2_000)
+    qtbot.waitUntil(lambda: placeholder.data is not None and len(placeholder.data) == 2, timeout=2_000)
     qtbot.wait(50)  # small buffer for color refresh
 
     assert placeholder.face_color_mode == "cycle"
