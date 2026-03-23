@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from napari.layers import Points
 
-from napari_deeplabcut.core.layers import populate_keypoint_layer_metadata
+from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
 
 
 @pytest.mark.usefixtures("qtbot")
@@ -19,7 +19,7 @@ def test_on_insert_empty_points_layer_does_not_crash(make_napari_viewer, make_re
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
     header = make_real_header_factory(individuals=("animal1",))  # either is fine
-    md = populate_keypoint_layer_metadata(
+    md = populate_keypoint_layer_properties(
         header,
         labels=[],  # empty properties
         ids=[],  # empty properties
@@ -48,7 +48,7 @@ def test_on_insert_empty_points_layer_does_not_enable_cycle_mode(make_napari_vie
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
     header = make_real_header_factory(individuals=("",))  # single animal
-    md = populate_keypoint_layer_metadata(
+    md = populate_keypoint_layer_properties(
         header,
         labels=[],
         ids=[],
@@ -75,7 +75,7 @@ def test_adopt_existing_empty_points_layer_does_not_crash(make_napari_viewer, ma
 
     # Add layer BEFORE creating the widget (forces adoption path)
     header = make_real_header_factory(individuals=("animal1",))
-    md = populate_keypoint_layer_metadata(
+    md = populate_keypoint_layer_properties(
         header,
         labels=[],
         ids=[],
@@ -109,7 +109,7 @@ def test_layer_insert_does_not_crash_when_current_property_is_nan(make_napari_vi
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
     header = make_real_header_factory(individuals=("",))
-    md = populate_keypoint_layer_metadata(
+    md = populate_keypoint_layer_properties(
         header,
         labels=["bodypart1"],
         ids=[""],

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 from qtpy.QtWidgets import QInputDialog, QMessageBox
@@ -66,10 +65,7 @@ def inputdialog(monkeypatch):
 @pytest.fixture(autouse=True)
 def overwrite_confirm(monkeypatch):
     """
-    Control the overwrite-confirmation path used by the writer.
-
-    NOTE: the io module imports/uses maybe_confirm_overwrite at module scope,
-    so we patch napari_deeplabcut.core.io.maybe_confirm_overwrite.
+    Control the overwrite-confirmation path used by the UI preflight.
 
     API:
       - forbid(): fail test if confirmation is requested for a real overwrite
@@ -81,42 +77,30 @@ def overwrite_confirm(monkeypatch):
     calls = []
     state = {"mode": "always_true", "result": True}
 
-    def _metadata_keys(meta: Any) -> list[str] | None:
-        """Support dict metadata or pydantic models with model_dump()."""
-        if meta is None:
-            return None
-        if isinstance(meta, dict):
-            return sorted(list(meta.keys()))
-        dump = getattr(meta, "model_dump", None)
-        if callable(dump):
-            try:
-                d = dump()
-                if isinstance(d, dict):
-                    return sorted(list(d.keys()))
-            except Exception:
-                return None
-        return None
-
-    def _patched_maybe_confirm_overwrite(metadata, key_conflict):
-        n_pairs = int(key_conflict.to_numpy().sum()) if hasattr(key_conflict, "to_numpy") else 0
-        n_images = int(key_conflict.any(axis=1).to_numpy().sum()) if hasattr(key_conflict, "any") else None
+    def _patched_maybe_confirm_overwrite(parent, report):
+        n_pairs = getattr(report, "n_overwrites", 0)
+        n_images = getattr(report, "n_frames", None)
 
         calls.append(
             {
-                "metadata_keys": _metadata_keys(metadata),
+                "parent_type": type(parent).__name__ if parent is not None else None,
+                "layer_name": getattr(report, "layer_name", None),
+                "destination_path": getattr(report, "destination_path", None),
                 "n_pairs": n_pairs,
                 "n_images": n_images,
+                "details_text": getattr(report, "details_text", None),
             }
         )
 
+        # In "forbid" mode: only fail if there is a real overwrite.
         if state["mode"] == "forbid" and n_pairs > 0:
             raise AssertionError("maybe_confirm_overwrite was called unexpectedly for a real overwrite (n_pairs > 0).")
 
         return state["result"]
 
-    import napari_deeplabcut.core.io as io_mod
+    import napari_deeplabcut.ui.dialogs as dlg
 
-    monkeypatch.setattr(io_mod, "maybe_confirm_overwrite", _patched_maybe_confirm_overwrite)
+    monkeypatch.setattr(dlg, "maybe_confirm_overwrite", _patched_maybe_confirm_overwrite)
 
     class Controller:
         @property

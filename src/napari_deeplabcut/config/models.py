@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -442,7 +443,8 @@ class PointsMetadata(BaseModel):
     ----------
     - header defines keypoint structure
     - root + paths must align with ImageMetadata when present
-    - face_color_cycles must be consistent with header
+    - config_colormap stores the configured bodypart colormap when known
+    - face_color_cycles, when present, is derived display state and not authoritative
     """
 
     kind: MetadataKind = Field(default=MetadataKind.POINTS)
@@ -457,6 +459,7 @@ class PointsMetadata(BaseModel):
     io: IOProvenance | None = None
     save_target: IOProvenance | None = None
 
+    config_colormap: str | None = None
     face_color_cycles: dict[str, dict[str, Any]] | None = None
     colormap_name: str | None = None
 
@@ -466,3 +469,60 @@ class PointsMetadata(BaseModel):
     controls: Any | None = Field(default=None, exclude=True)
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+
+
+# -----------------------------------------------------------------------------
+# Save conflict models
+# -----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ConflictEntry:
+    frame_label: str
+    keypoints: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class OverwriteConflictReport:
+    """
+    UI-facing overwrite-conflict contract.
+
+    This model is intentionally decoupled from pandas so the dialog layer only
+    depends on plain Python data structures.
+
+    Semantics
+    ---------
+    n_overwrites:
+        Number of (frame/image, keypoint) overwrite events.
+    n_frames:
+        Number of distinct frames/images affected.
+    entries:
+        Detailed per-frame/image conflict rows to display in the dialog.
+    truncated_entries:
+        Number of additional frame/image rows omitted from `entries`.
+    layer_name:
+        Optional source layer name to display in the dialog.
+    destination_path:
+        Optional destination path to display in the dialog.
+    """
+
+    n_overwrites: int
+    n_frames: int
+    entries: tuple[ConflictEntry, ...]
+    truncated_entries: int = 0
+    layer_name: str | None = None
+    destination_path: str | None = None
+
+    @property
+    def has_conflicts(self) -> bool:
+        return self.n_overwrites > 0
+
+    @property
+    def details_text(self) -> str:
+        if not self.entries:
+            return "No detailed conflicts."
+        lines = [f"{entry.frame_label} → {', '.join(entry.keypoints)}" for entry in self.entries]
+        if self.truncated_entries:
+            lines.append("")
+            lines.append(f"… and {self.truncated_entries} more frame/image entries.")
+        return "\n".join(lines)

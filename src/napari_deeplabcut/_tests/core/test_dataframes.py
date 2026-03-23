@@ -13,7 +13,6 @@ from napari_deeplabcut.core.dataframes import (
     harmonize_keypoint_row_index,
     keypoint_conflicts,
     merge_multiple_scorers,
-    summarize_keypoint_conflicts,
 )
 from napari_deeplabcut.core.schemas import PointsWriteInputModel
 
@@ -172,19 +171,6 @@ def test_keypoint_conflicts_detects_conflict_multi_animal_4level():
 
     assert kc.loc["img000.png"].any()
     assert any(("animal1" in str(c) and "bp1" in str(c)) for c in kc.columns)
-
-
-def test_summarize_keypoint_conflicts_formats_human_readable_text():
-    # Build a key_conflict frame like keypoint_conflicts returns: index=image, columns=keypoint
-    key_conflict = pd.DataFrame(
-        [[True, False]],
-        index=pd.MultiIndex.from_tuples([("labeled-data", "test", "img000.png")]),
-        columns=pd.MultiIndex.from_tuples([("animal1", "bp1"), ("animal1", "bp2")]),
-    )
-    txt = summarize_keypoint_conflicts(key_conflict, max_items=10)
-    assert "existing keypoint" in txt.lower()
-    assert "img000.png" in txt
-    assert "bp1" in txt
 
 
 # -----------------------------------------------------------------------------

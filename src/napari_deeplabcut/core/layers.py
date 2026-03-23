@@ -21,8 +21,8 @@ T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
 
-# Helper to populate keypoint layer metadata
-def populate_keypoint_layer_metadata(
+# Helper to populate keypoint layer properties
+def populate_keypoint_layer_properties(
     header: DLCHeaderModel,
     *,
     labels: Sequence[str] | None = None,
@@ -165,7 +165,9 @@ def find_last_layer(
     return last
 
 
-# ---- Convenience wrappers used by deeplabcut widgets ----
+# --------------------
+# Convenience wrappers
+# --------------------
 
 
 def get_first_points_layer(viewer_or_layers: Any) -> Any | None:

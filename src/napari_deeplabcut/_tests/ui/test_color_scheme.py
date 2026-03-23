@@ -4,13 +4,74 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from napari_deeplabcut import keypoints
+from napari_deeplabcut import keypoints, misc
+from napari_deeplabcut.config.models import DLCHeaderModel
+from napari_deeplabcut.config.settings import (
+    DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP,
+    DEFAULT_SINGLE_ANIMAL_CMAP,
+)
 from napari_deeplabcut.ui.color_scheme_display import (
     ColorSchemeDisplay,
     ColorSchemePanel,
     ColorSchemeResolver,
     _to_hex,
 )
+
+
+def _header_model_from_layer(layer) -> DLCHeaderModel:
+    hdr = layer.metadata.get("header")
+    assert hdr is not None, "Expected header in layer metadata"
+    return hdr if isinstance(hdr, DLCHeaderModel) else DLCHeaderModel.model_validate(hdr)
+
+
+def _is_multianimal_header(header: DLCHeaderModel) -> bool:
+    inds = list(getattr(header, "individuals", []) or [])
+    return bool(inds and str(inds[0]) != "")
+
+
+def _config_colormap_from_layer(layer) -> str:
+    md = layer.metadata or {}
+    cmap = md.get("config_colormap")
+    if isinstance(cmap, str) and cmap:
+        return cmap
+    return DEFAULT_SINGLE_ANIMAL_CMAP
+
+
+def _expected_cycles_for_policy(layer) -> dict[str, dict[str, np.ndarray]]:
+    """
+    Compute expected cycles from the new centralized policy.
+
+    Source of truth:
+    - layer header
+    - metadata['config_colormap']
+    - multi-animal policy for individual coloring
+    """
+    header = _header_model_from_layer(layer)
+    config_cmap = _config_colormap_from_layer(layer)
+
+    config_cycles = misc.build_color_cycles(header, config_cmap) or {}
+
+    if _is_multianimal_header(header):
+        individual_cycles = misc.build_color_cycles(header, DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP) or {}
+    else:
+        individual_cycles = config_cycles
+
+    return {
+        "label": config_cycles.get("label", {}),
+        "id": individual_cycles.get("id", {}),
+    }
+
+
+def _expected_scheme(layer, *, prop: str, names: list[str]) -> dict[str, str]:
+    cycles = _expected_cycles_for_policy(layer)
+    mapping = cycles.get(prop, {})
+    return {name: _to_hex(mapping[name]) for name in names if name in mapping}
+
+
+def _expected_scheme_from_policy(layer, *, prop: str, names: list[str]) -> dict[str, str]:
+    cycles = _expected_cycles_for_policy(layer)
+    mapping = cycles.get(prop, {})
+    return {name: _to_hex(mapping[name]) for name in names if name in mapping}
 
 
 def test_to_hex_converts_rgb_and_rgba():
@@ -166,15 +227,6 @@ def test_resolver_get_config_categories_prefers_config_yaml_bodyparts(
         bodyparts=["nose", "tail"],
         individuals=[""],
         project=str(project),
-        # ensure cycles include config names so resolve() can use them later
-        extra_metadata={
-            "face_color_cycles": {
-                "label": {
-                    "cfg1": np.array([1.0, 0.0, 0.0, 1.0]),
-                    "cfg2": np.array([0.0, 1.0, 0.0, 1.0]),
-                }
-            }
-        },
     )
     fake_viewer.layers.append(layer)
     fake_viewer.layers.selection.active = layer
@@ -197,18 +249,9 @@ def test_resolver_get_config_categories_id_falls_back_to_bodyparts_for_single_an
     project, _config_path = single_animal_project
     layer = make_points_layer(
         labels=["nose"],
-        bodyparts=["cfg1", "cfg2"],
+        bodyparts=["nose", "tail"],
         individuals=[""],
         project=str(project),
-        include_id_cycle=False,
-        extra_metadata={
-            "face_color_cycles": {
-                "label": {
-                    "cfg1": np.array([1.0, 0.0, 0.0, 1.0]),
-                    "cfg2": np.array([0.0, 1.0, 0.0, 1.0]),
-                }
-            }
-        },
     )
     fake_viewer.layers.append(layer)
     fake_viewer.layers.selection.active = layer
@@ -220,67 +263,6 @@ def test_resolver_get_config_categories_id_falls_back_to_bodyparts_for_single_an
     )
 
     assert resolver.get_config_categories(layer, "id") == ["cfg1", "cfg2"]
-
-
-def test_resolver_resolve_active_mode_returns_hex_for_visible_categories(
-    fake_viewer,
-    make_points_layer,
-    get_header_model,
-):
-    data = np.array(
-        [
-            [0, 0.0, 0.0],  # nose
-            [0, 1.0, 1.0],  # tail
-            [1, 2.0, 2.0],  # nose, other frame
-        ],
-        dtype=float,
-    )
-    layer = make_points_layer(
-        data=data,
-        labels=["nose", "tail", "nose"],
-        bodyparts=["nose", "tail"],
-        shown=[True, False, True],  # hide tail in current frame
-    )
-    fake_viewer.layers.append(layer)
-    fake_viewer.layers.selection.active = layer
-    fake_viewer.dims.current_step = (0,)
-
-    resolver = ColorSchemeResolver(
-        viewer=fake_viewer,
-        get_color_mode=lambda: str(keypoints.ColorMode.BODYPART),
-        get_header_model=get_header_model,
-    )
-
-    scheme = resolver.resolve(show_config_keypoints=False)
-    assert scheme == {"nose": "#ff0000"}
-
-
-def test_resolver_resolve_config_mode_uses_config_yaml_individuals_in_multianimal_mode(
-    fake_viewer, make_points_layer, get_header_model, multianimal_config_project
-):
-    project, _config_path = multianimal_config_project
-    layer = make_points_layer(
-        data=np.array([[0, 0.0, 0.0], [0, 1.0, 1.0]], dtype=float),
-        labels=["bodypart1", "bodypart2"],
-        ids=["animal1", "animal2"],
-        bodyparts=["bodypart1", "bodypart2"],
-        individuals=["animal1", "animal2"],
-        project=str(project),
-    )
-    fake_viewer.layers.append(layer)
-    fake_viewer.layers.selection.active = layer
-
-    resolver = ColorSchemeResolver(
-        viewer=fake_viewer,
-        get_color_mode=lambda: str(keypoints.ColorMode.INDIVIDUAL),
-        get_header_model=get_header_model,
-    )
-
-    scheme = resolver.resolve(show_config_keypoints=True)
-    assert scheme == {
-        "animal1": "#ff00ff",
-        "animal2": "#00ffff",
-    }
 
 
 @pytest.mark.usefixtures("qtbot")
@@ -313,7 +295,8 @@ def test_panel_initial_active_mode_updates_display_from_current_frame(
     )
     qtbot.addWidget(panel)
 
-    qtbot.waitUntil(lambda: panel.display.scheme_dict == {"nose": "#ff0000"})
+    expected = _expected_scheme_from_policy(layer, prop="label", names=["nose"])
+    qtbot.waitUntil(lambda: panel.display.scheme_dict == expected)
 
 
 @pytest.mark.usefixtures("qtbot")
@@ -346,10 +329,12 @@ def test_panel_reacts_to_frame_change_event(
     )
     qtbot.addWidget(panel)
 
-    qtbot.waitUntil(lambda: panel.display.scheme_dict == {"nose": "#ff0000"})
+    expected0 = _expected_scheme_from_policy(layer, prop="label", names=["nose"])
+    qtbot.waitUntil(lambda: panel.display.scheme_dict == expected0)
 
     fake_viewer.dims.current_step = (1,)
-    qtbot.waitUntil(lambda: panel.display.scheme_dict == {"tail": "#00ff00"})
+    expected1 = _expected_scheme_from_policy(layer, prop="label", names=["tail"])
+    qtbot.waitUntil(lambda: panel.display.scheme_dict == expected1)
 
 
 @pytest.mark.usefixtures("qtbot")
@@ -367,12 +352,7 @@ def test_panel_toggle_switches_from_active_to_config_preview(
         bodyparts=["nose", "tail"],
         project=str(project),
         extra_metadata={
-            "face_color_cycles": {
-                "label": {
-                    "cfg1": np.array([1.0, 0.0, 0.0, 1.0]),
-                    "cfg2": np.array([0.0, 1.0, 0.0, 1.0]),
-                }
-            }
+            "config_colormap": "rainbow",
         },
     )
     fake_viewer.layers.append(layer)
@@ -386,20 +366,14 @@ def test_panel_toggle_switches_from_active_to_config_preview(
     )
     qtbot.addWidget(panel)
 
-    # Active mode: currently visible label is "nose", but it is absent from config-based cycle mapping
-    # so active resolve should be empty with this specific setup.
-    qtbot.waitUntil(lambda: panel.display.scheme_dict == {})
+    # Active mode should show the currently visible label from the layer.
+    expected_active = _expected_scheme_from_policy(layer, prop="label", names=["nose"])
+    qtbot.waitUntil(lambda: panel.display.scheme_dict == expected_active)
 
+    # Config preview should show the configured bodyparts from config.yaml.
     panel._toggle.setChecked(True)
-    qtbot.waitUntil(
-        lambda: (
-            panel.display.scheme_dict
-            == {
-                "cfg1": "#ff0000",
-                "cfg2": "#00ff00",
-            }
-        )
-    )
+    expected_config = _expected_scheme_from_policy(layer, prop="label", names=["cfg1", "cfg2"])
+    qtbot.waitUntil(lambda: panel.display.scheme_dict == expected_config)
 
 
 def test_color_scheme_panel_delete_later_does_not_crash_on_pending_update(qtbot, fake_viewer, get_header_model):

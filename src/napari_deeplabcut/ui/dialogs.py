@@ -4,12 +4,14 @@ from __future__ import annotations
 from collections import namedtuple
 from pathlib import Path
 
-import pandas as pd
 from qtpy.QtCore import QPoint, Qt
 from qtpy.QtSvgWidgets import QSvgWidget
 from qtpy.QtWidgets import QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QSizePolicy, QVBoxLayout
 
-from napari_deeplabcut.core.dataframes import summarize_keypoint_conflicts
+from napari_deeplabcut.config.settings import get_overwrite_confirmation_enabled
+from napari_deeplabcut.core.conflicts import OverwriteConflictReport
+
+# from napari_deeplabcut.core.dataframes import summarize_keypoint_conflicts
 
 Tip = namedtuple("Tip", ["msg", "pos"])
 
@@ -139,70 +141,90 @@ class Tutorial(QDialog):
 # --------------------------------------------------------------------------------------
 # Conflict resolution dialog for overwriting existing keypoints when saving annotations.
 # --------------------------------------------------------------------------------------
-def _conflict_stats(key_conflict: pd.DataFrame) -> tuple[int, int]:
-    """
-    Returns:
-      n_pairs  = number of (image, keypoint) pairs that will be overwritten
-      n_images = number of distinct images affected
-    """
-    n_pairs = int(key_conflict.to_numpy().sum())
-    n_images = int(key_conflict.any(axis=1).to_numpy().sum())
-    return n_pairs, n_images
-
-
-def _build_overwrite_warning_text(key_conflict: pd.DataFrame, max_items: int = 15) -> tuple[str, str]:
-    """
-    Returns (summary, details).
-    Summary: short sentence for dialog top.
-    Details: scrollable text body listing image → keypoint examples.
-    """
-    n_pairs, n_images = _conflict_stats(key_conflict)
-    summary = f"{n_pairs} existing keypoint(s) will be overwritten across {n_images} image(s)."
-    details = summarize_keypoint_conflicts(key_conflict, max_items=max_items)
-    return summary, details
-
-
-def maybe_confirm_overwrite(metadata: dict, key_conflict: pd.DataFrame) -> bool:
-    """
-    Returns True if save should proceed, False if user cancels.
-    If no GUI controls are present, returns True (non-interactive).
-    """
-    if not key_conflict.to_numpy().any():
-        return True
-
-    controls = metadata.get("controls")
-    if controls is None:
-        return True  # headless/scripted save: no dialog
-
-    summary, details = _build_overwrite_warning_text(key_conflict)
-    return OverwriteConflictsDialog.confirm(controls, summary=summary, details=details)
-
-
 class OverwriteConflictsDialog(QDialog):
     """
-    Scrollable warning dialog listing keypoints that will be overwritten.
-    Returns True if user chooses to proceed, False otherwise.
+    Warning dialog listing keypoints that will be overwritten.
+
+    Design goals:
+    - compact initial size
+    - no horizontal scrolling
+    - conflict list clearly separated from summary/context
+    - details show which frame/image and which keypoints conflict
     """
 
-    def __init__(self, parent, *, title: str, summary: str, details: str):
+    def __init__(
+        self,
+        parent,
+        *,
+        title: str,
+        summary: str,
+        layer_text: str,
+        dest_text: str,
+        affected_text: str,
+        details: str,
+    ):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setModal(True)
-        self.setMinimumSize(700, 450)
+        self.setSizeGripEnabled(True)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
 
+        # Summary
         summary_label = QLabel(summary)
         summary_label.setWordWrap(True)
+        summary_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        summary_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         layout.addWidget(summary_label)
 
-        text = QPlainTextEdit()
+        # Context block
+        layer_label = QLabel(f"<b>Layer:</b> {layer_text}")
+        layer_label.setWordWrap(True)
+        layer_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layer_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        layout.addWidget(layer_label)
+
+        dest_label = QLabel(f"<b>Destination:</b> {dest_text}")
+        dest_label.setWordWrap(True)
+        dest_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        dest_label.setToolTip(dest_text)  # helpful for long paths
+        dest_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        layout.addWidget(dest_label)
+
+        affected_label = QLabel(f"<b>Affected:</b> {affected_text}")
+        affected_label.setWordWrap(True)
+        affected_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        affected_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        layout.addWidget(affected_label)
+
+        # Detail section label
+        details_label = QLabel("Conflicts (frame/image → keypoints):")
+        details_label.setWordWrap(True)
+        details_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        layout.addWidget(details_label)
+
+        # Scrollable conflict list
+        text = QPlainTextEdit(self)
         text.setReadOnly(True)
         text.setPlainText(details)
-        text.setLineWrapMode(QPlainTextEdit.NoWrap)
-        text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        text.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        text.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        text.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        text.setCenterOnScroll(False)
+        self.text = text
+
+        # Keep default height compact, but allow the user to resize larger
+        fm = text.fontMetrics()
+        line_h = fm.lineSpacing()
+        text.setMinimumHeight(line_h * 5 + 16)
+        text.setMaximumHeight(line_h * 14 + 24)
+
         layout.addWidget(text)
 
+        # Buttons
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
 
@@ -218,7 +240,52 @@ class OverwriteConflictsDialog(QDialog):
         btn_row.addWidget(self.overwrite_btn)
         layout.addLayout(btn_row)
 
+        # Let content drive the initial size instead of hardcoding a large minimum
+        self.adjustSize()
+        self.sizeHint()
+        # self.resize(
+        #     min(max(hint.width(), 480), 820),
+        #     min(max(hint.height(), 240), 520),
+        # )
+
     @staticmethod
-    def confirm(parent, *, summary: str, details: str, title="Overwrite warning") -> bool:
-        dlg = OverwriteConflictsDialog(parent, title=title, summary=summary, details=details)
+    def confirm(
+        parent,
+        *,
+        summary: str,
+        layer_text: str,
+        dest_text: str,
+        affected_text: str,
+        details: str,
+        title: str = "Overwrite warning",
+    ) -> bool:
+        dlg = OverwriteConflictsDialog(
+            parent,
+            title=title,
+            summary=summary,
+            layer_text=layer_text,
+            dest_text=dest_text,
+            affected_text=affected_text,
+            details=details,
+        )
         return dlg.exec_() == QDialog.Accepted
+
+
+def maybe_confirm_overwrite(
+    parent,
+    report: OverwriteConflictReport,
+) -> bool:
+    if not report.has_conflicts:
+        return True
+
+    if not get_overwrite_confirmation_enabled():
+        return True
+
+    return OverwriteConflictsDialog.confirm(
+        parent,
+        summary="Saving will overwrite existing keypoints in the destination file.",
+        layer_text=report.layer_name or "Unknown layer",
+        dest_text=report.destination_path or "Unknown destination",
+        affected_text=f"{report.n_overwrites} keypoint overwrite(s) across {report.n_frames} frame(s)/image(s).",
+        details=report.details_text,
+    )

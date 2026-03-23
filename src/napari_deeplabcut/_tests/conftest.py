@@ -13,7 +13,8 @@ from skimage.io import imsave
 
 from napari_deeplabcut import keypoints
 from napari_deeplabcut.config.models import DLCHeaderModel
-from napari_deeplabcut.core import io as napari_dlc_io
+from napari_deeplabcut.config.settings import set_auto_open_keypoint_controls
+from napari_deeplabcut.core import io as io
 
 # os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
 
@@ -24,6 +25,14 @@ os.environ["NAPARI_ASYNC"] = "0"  # avoid async teardown surprises in tests
 # os.environ["PYTEST_QT_API"] = "pyqt6" # only for local testing with pyqt6, we use pyside6 otherwise
 logging.getLogger("napari_deeplabcut").propagate = True
 logging.getLogger("napari-deeplabcut").propagate = True
+
+
+@pytest.fixture(autouse=True)
+def disable_auto_open_keypoint_controls():
+    """Disable auto-opening of keypoint controls in tests by default."""
+    original_value = set_auto_open_keypoint_controls(False)
+    yield
+    set_auto_open_keypoint_controls(original_value)
 
 
 @pytest.fixture(autouse=True)
@@ -182,7 +191,7 @@ def config_path(tmp_path_factory):
         },
     }
     path = str(tmp_path_factory.mktemp("configs") / "config.yaml")
-    napari_dlc_io.write_config(
+    io.write_config(
         path,
         params=cfg,
     )
@@ -229,7 +238,7 @@ def single_animal_project(tmp_path: Path):
     }
 
     config_path = project / "config.yaml"
-    napari_dlc_io.write_config(config_path, cfg)
+    io.write_config(config_path, cfg)
     return project, config_path
 
 

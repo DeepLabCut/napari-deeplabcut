@@ -8,8 +8,8 @@ import pytest
 
 from napari_deeplabcut import _writer
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
-from napari_deeplabcut.core import io
 from napari_deeplabcut.core.errors import MissingProvenanceError
+from napari_deeplabcut.ui import dialogs
 
 
 def _make_minimal_points_metadata(
@@ -78,7 +78,7 @@ def test_writer_promotion_writes_collecteddata_and_rewrites_scorer(tmp_path: Pat
     header = DLCHeaderModel(columns=cols)
 
     # Ensure overwrite confirm always returns True
-    monkeypatch.setattr(io, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
+    monkeypatch.setattr(dialogs, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
 
     # Pretend we loaded from a machine file but will promote to GT file CollectedData_Alice.h5
     save_target = {

@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from datetime import datetime
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -33,21 +32,21 @@ from pydantic import ValidationError
 
 from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, PointsMetadata
+from napari_deeplabcut.config.settings import DEFAULT_SINGLE_ANIMAL_CMAP
 from napari_deeplabcut.core import schemas as dlc_schemas
 from napari_deeplabcut.core.dataframes import (
     form_df_from_validated,
     guarantee_multiindex_rows,
     harmonize_keypoint_column_index,
     harmonize_keypoint_row_index,
-    keypoint_conflicts,
     merge_multiple_scorers,
+    set_df_scorer,
 )
-from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError, UnresolvablePathError
-from napari_deeplabcut.core.layers import populate_keypoint_layer_metadata
+from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
+from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
 from napari_deeplabcut.core.metadata import attach_source_and_io, parse_points_metadata
 from napari_deeplabcut.core.paths import canonicalize_path
-from napari_deeplabcut.core.provenance import resolve_provenance_path
-from napari_deeplabcut.ui.dialogs import maybe_confirm_overwrite
+from napari_deeplabcut.core.provenance import infer_dataset_folder_from_points_meta, resolve_output_path_from_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -74,22 +73,24 @@ def load_config(config_path: str):
 def read_config(configname: str) -> list[LayerData]:
     config = load_config(configname)
     header = DLCHeaderModel.from_config(config)
-    metadata = populate_keypoint_layer_metadata(
+    layer_props = populate_keypoint_layer_properties(
         header,
         size=config["dotsize"],
         pcutoff=config["pcutoff"],
         colormap=config["colormap"],
         likelihood=np.array([1]),
     )
-    metadata["name"] = f"CollectedData_{config['scorer']}"
-    metadata["ndim"] = 3
-    metadata["property_choices"] = metadata.pop("properties")
-    metadata["metadata"]["project"] = str(Path(configname).parent)
+    layer_props["name"] = f"CollectedData_{config['scorer']}"
+    layer_props["ndim"] = 3
+    layer_props["property_choices"] = layer_props.pop("properties")
+    layer_props["metadata"]["project"] = str(Path(configname).parent)
+    layer_props["metadata"]["config_colormap"] = str(config.get("colormap", DEFAULT_SINGLE_ANIMAL_CMAP))
+
     conversion_tables = config.get("SuperAnimalConversionTables")
     if conversion_tables is not None:
         super_animal, table = conversion_tables.popitem()
-        metadata["metadata"]["tables"] = {super_animal: table}
-    return [(None, metadata, "points")]
+        layer_props["metadata"]["tables"] = {super_animal: table}
+    return [(None, layer_props, "points")]
 
 
 def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
@@ -103,57 +104,57 @@ def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
 # =============================================================================
 # NOTE: This reader returns a napari Points layer (data + metadata + "points")
 # and attaches provenance via attach_source_and_io.
-def _infer_dataset_folder_from_points_meta(pts_meta: PointsMetadata) -> Path | None:
-    """
-    Infer DLC dataset folder (…/labeled-data/<dataset>) from PointsMetadata.
+# def _infer_dataset_folder_from_points_meta(pts_meta: PointsMetadata) -> Path | None:
+#     """
+#     Infer DLC dataset folder (…/labeled-data/<dataset>) from PointsMetadata.
 
-    Uses:
-      - pts_meta.project (config parent) as project root
-      - pts_meta.paths (canonicalized relpaths like labeled-data/test/img000.png)
-      - pts_meta.root as a fallback hint
+#     Uses:
+#       - pts_meta.project (config parent) as project root
+#       - pts_meta.paths (canonicalized relpaths like labeled-data/test/img000.png)
+#       - pts_meta.root as a fallback hint
 
-    Returns a Path to dataset folder or None if not inferable.
-    """
-    project = getattr(pts_meta, "project", None)
-    paths = getattr(pts_meta, "paths", None) or []
-    root = getattr(pts_meta, "root", None)
+#     Returns a Path to dataset folder or None if not inferable.
+#     """
+#     project = getattr(pts_meta, "project", None)
+#     paths = getattr(pts_meta, "paths", None) or []
+#     root = getattr(pts_meta, "root", None)
 
-    # If root itself is already dataset folder, use it
-    try:
-        if root:
-            rp = Path(root).expanduser().resolve()
-            if "labeled-data" in [p.lower() for p in rp.parts] and rp.name.lower() != "labeled-data":
-                return rp
-    except Exception:
-        pass
+#     # If root itself is already dataset folder, use it
+#     try:
+#         if root:
+#             rp = Path(root).expanduser().resolve()
+#             if "labeled-data" in [p.lower() for p in rp.parts] and rp.name.lower() != "labeled-data":
+#                 return rp
+#     except Exception:
+#         pass
 
-    # Infer from paths like "labeled-data/<dataset>/img000.png"
-    dataset_name = None
-    for s in paths:
-        if not isinstance(s, str):
-            continue
-        parts = s.replace("\\", "/").split("/")
-        try:
-            i = [p.lower() for p in parts].index("labeled-data")
-            if i + 1 < len(parts):
-                dataset_name = parts[i + 1]
-                break
-        except ValueError:
-            continue
+#     # Infer from paths like "labeled-data/<dataset>/img000.png"
+#     dataset_name = None
+#     for s in paths:
+#         if not isinstance(s, str):
+#             continue
+#         parts = s.replace("\\", "/").split("/")
+#         try:
+#             i = [p.lower() for p in parts].index("labeled-data")
+#             if i + 1 < len(parts):
+#                 dataset_name = parts[i + 1]
+#                 break
+#         except ValueError:
+#             continue
 
-    if not dataset_name:
-        return None
+#     if not dataset_name:
+#         return None
 
-    # Need a project root anchor to build full dataset path
-    if not project:
-        return None
+#     # Need a project root anchor to build full dataset path
+#     if not project:
+#         return None
 
-    try:
-        proj = Path(project).expanduser().resolve()
-    except Exception:
-        proj = Path(project)
+#     try:
+#         proj = Path(project).expanduser().resolve()
+#     except Exception:
+#         proj = Path(project)
 
-    return proj / "labeled-data" / dataset_name
+#     return proj / "labeled-data" / dataset_name
 
 
 def read_hdf(filename: str) -> list[LayerData]:
@@ -178,17 +179,16 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
 
     # Handle legacy/single-animal column layout by inserting empty "individuals" level.
     # Colormap selection also falls back to config when possible.
+    try:
+        cfg = load_config(misc.find_project_config_path(str(file)))
+        config_colormap = str(cfg.get("colormap", DEFAULT_SINGLE_ANIMAL_CMAP))
+    except Exception as e:
+        logger.warning("Could not load config for %s; falling back to default colormap. Error: %s", file, e)
+        config_colormap = DEFAULT_SINGLE_ANIMAL_CMAP
     if "individuals" not in temp.columns.names:
         old_idx = temp.columns.to_frame()
         old_idx.insert(0, "individuals", "")
         temp.columns = pd.MultiIndex.from_frame(old_idx)
-        try:
-            cfg = load_config(misc.find_project_config_path(str(file)))
-            colormap = cfg["colormap"]
-        except FileNotFoundError:
-            colormap = "rainbow"
-    else:
-        colormap = "Set3"
 
     # If the on-disk index is a MultiIndex (path parts), collapse it to string paths.
     if isinstance(temp.index, pd.MultiIndex):
@@ -225,104 +225,105 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     data = data[finite]
     df = df.loc[finite].reset_index(drop=True)
 
-    metadata = populate_keypoint_layer_metadata(
+    layer_props = populate_keypoint_layer_properties(
         header,
         labels=df["bodyparts"],
         ids=df["individuals"],
         likelihood=df.get("likelihood"),
         paths=list(paths2inds),
-        colormap=colormap,
+        colormap=config_colormap,
     )
-    metadata["name"] = file.stem
-    metadata["metadata"]["root"] = str(file.parent)
-    metadata["metadata"]["name"] = metadata["name"]
+    layer_props["name"] = file.stem
+    layer_props["metadata"]["root"] = str(file.parent)
+    layer_props["metadata"]["name"] = layer_props["name"]
+    layer_props["metadata"]["config_colormap"] = config_colormap
 
     # Attach provenance. If explicit kind provided, we store it directly.
     if kind is not None:
-        meta = metadata.setdefault("metadata", {})
+        meta = layer_props.setdefault("metadata", {})
         # Keep legacy source fields too
-        attach_source_and_io(metadata, file)
+        attach_source_and_io(layer_props, file)
         # Override kind in io with explicit kind arg
         if isinstance(meta.get("io"), dict):
             meta["io"]["kind"] = kind  # stored as actual enum, not value
     else:
-        attach_source_and_io(metadata, file)
+        attach_source_and_io(layer_props, file)
 
-    return [(data, metadata, "points")]
-
-
-def _set_df_scorer(df: pd.DataFrame, scorer: str) -> pd.DataFrame:
-    """Return df with scorer level set to the given scorer (if present)."""
-    scorer = (scorer or "").strip()
-    if not scorer:
-        return df
-    if not hasattr(df.columns, "names") or "scorer" not in df.columns.names:
-        return df
-
-    try:
-        cols = df.columns.to_frame(index=False)
-        cols["scorer"] = scorer
-        df = df.copy()
-        df.columns = pd.MultiIndex.from_frame(cols)
-    except Exception:
-        pass
-    return df
+    return [(data, layer_props, "points")]
 
 
-def _resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str | None, AnnotationKind | None]:
-    """
-    Resolve output path with promotion support.
+# def _set_df_scorer(df: pd.DataFrame, scorer: str) -> pd.DataFrame:
+#     """Return df with scorer level set to the given scorer (if present)."""
+#     scorer = (scorer or "").strip()
+#     if not scorer:
+#         return df
+#     if not hasattr(df.columns, "names") or "scorer" not in df.columns.names:
+#         return df
 
-    Returns:
-      (out_path, target_scorer, source_kind)
+#     try:
+#         cols = df.columns.to_frame(index=False)
+#         cols["scorer"] = scorer
+#         df = df.copy()
+#         df.columns = pd.MultiIndex.from_frame(cols)
+#     except Exception:
+#         pass
+#     return df
 
-    - Prefer PointsMetadata.save_target (promotion-to-GT).
-    - For GT sources, fall back to io/source_h5.
-    - For machine sources without save_target, return (None, None, "machine") to allow safe abort.
-    """
-    layer_meta = metadata.get("metadata")
-    if not isinstance(layer_meta, dict):
-        layer_meta = {}
 
-    pts = parse_points_metadata(layer_meta)
-    io = pts.io
-    st = pts.save_target
+# def _resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str | None, AnnotationKind | None]:
+#     """
+#     Resolve output path with promotion support.
 
-    source_kind = getattr(io, "kind", None) if io is not None else None
+#     Returns:
+#       (out_path, target_scorer, source_kind)
 
-    # Promotion target wins
-    if st is not None:
-        try:
-            p = resolve_provenance_path(st, root_anchor=st.project_root, allow_missing=True)
-            target_scorer = getattr(st, "scorer", None)
-            if isinstance(target_scorer, str) and target_scorer.strip():
-                return str(p), target_scorer.strip(), source_kind
-            # Also accept scorer stored in dict extra
-            if isinstance(layer_meta.get("save_target"), dict):
-                s2 = layer_meta["save_target"].get("scorer")
-                if isinstance(s2, str) and s2.strip():
-                    return str(p), s2.strip(), source_kind
-            return str(p), None, source_kind
-        except (MissingProvenanceError, UnresolvablePathError):
-            return None, None, source_kind
+#     - Prefer PointsMetadata.save_target (promotion-to-GT).
+#     - For GT sources, fall back to io/source_h5.
+#     - For machine sources without save_target, return (None, None, "machine") to allow safe abort.
+#     """
+#     layer_meta = metadata.get("metadata")
+#     if not isinstance(layer_meta, dict):
+#         layer_meta = {}
 
-    # Never save back to machine sources
-    if source_kind == AnnotationKind.MACHINE:
-        return None, None, source_kind
-    # GT source: prefer io if available
-    if io is not None:
-        try:
-            p = resolve_provenance_path(io, root_anchor=io.project_root, allow_missing=True)
-            return str(p), None, source_kind
-        except (MissingProvenanceError, UnresolvablePathError):
-            pass
+#     pts = parse_points_metadata(layer_meta)
+#     io = pts.io
+#     st = pts.save_target
 
-    # Legacy fallback: source_h5 (GT only)
-    src = layer_meta.get("source_h5")
-    if isinstance(src, str) and src:
-        return src, None, source_kind
+#     source_kind = getattr(io, "kind", None) if io is not None else None
 
-    return None, None, source_kind
+#     # Promotion target wins
+#     if st is not None:
+#         try:
+#             p = resolve_provenance_path(st, root_anchor=st.project_root, allow_missing=True)
+#             target_scorer = getattr(st, "scorer", None)
+#             if isinstance(target_scorer, str) and target_scorer.strip():
+#                 return str(p), target_scorer.strip(), source_kind
+#             # Also accept scorer stored in dict extra
+#             if isinstance(layer_meta.get("save_target"), dict):
+#                 s2 = layer_meta["save_target"].get("scorer")
+#                 if isinstance(s2, str) and s2.strip():
+#                     return str(p), s2.strip(), source_kind
+#             return str(p), None, source_kind
+#         except (MissingProvenanceError, UnresolvablePathError):
+#             return None, None, source_kind
+
+#     # Never save back to machine sources
+#     if source_kind == AnnotationKind.MACHINE:
+#         return None, None, source_kind
+#     # GT source: prefer io if available
+#     if io is not None:
+#         try:
+#             p = resolve_provenance_path(io, root_anchor=io.project_root, allow_missing=True)
+#             return str(p), None, source_kind
+#         except (MissingProvenanceError, UnresolvablePathError):
+#             pass
+
+#     # Legacy fallback: source_h5 (GT only)
+#     src = layer_meta.get("source_h5")
+#     if isinstance(src, str) and src:
+#         return src, None, source_kind
+
+#     return None, None, source_kind
 
 
 # TODO move to dataframes.py
@@ -460,11 +461,11 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     # requested_out = _normalize_requested_out_path(path, layer_name)
 
     # 2) provenance/save_target is always the source of truth for where to write
-    out_path, target_scorer, source_kind = _resolve_output_path_from_metadata(attributes)
+    out_path, target_scorer, source_kind = resolve_output_path_from_metadata(attributes)
 
     # If promoting to GT and scorer is known, rewrite scorer level
     if target_scorer:
-        df_new = _set_df_scorer(df_new, target_scorer)
+        df_new = set_df_scorer(df_new, target_scorer)
 
     # Never write back to machine sources without an explicit promotion target
     if not out_path and source_kind == AnnotationKind.MACHINE:
@@ -477,7 +478,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             raise MissingProvenanceError("Cannot resolve provenance output path for MACHINE source.")
 
         # Prefer dataset folder if inferable (DLC convention)
-        dataset_dir = _infer_dataset_folder_from_points_meta(pts_meta)
+        dataset_dir = infer_dataset_folder_from_points_meta(pts_meta)
 
         # If dataset_dir exists or can be created, use it; else fall back to pts_meta.root
         if dataset_dir is not None:
@@ -520,10 +521,6 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
         except (KeyError, ValueError):
             df_old = pd.read_hdf(out)
 
-        key_conflict = keypoint_conflicts(df_old, df_new)
-        if not maybe_confirm_overwrite(attributes, key_conflict):
-            raise RuntimeError("User aborted save due to keypoint conflicts.")
-
         # Harmonize indices and merge
         try:
             guarantee_multiindex_rows(df_new)
@@ -556,16 +553,6 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     _atomic_to_hdf(df_out, out, key="keypoints")
     csv_path = out.with_suffix(".csv")
     df_out.to_csv(csv_path)
-
-    # Update UI controls if present (safe in headless)
-    controls = getattr(pts_meta, "controls", None)
-    if controls is not None:
-        controls._is_saved = True
-        try:
-            controls.last_saved_label.setText(f"Last saved at {str(datetime.now().time()).split('.')[0]}")
-            controls.last_saved_label.show()
-        except Exception:
-            pass
 
     return [str(out), str(csv_path)]
 

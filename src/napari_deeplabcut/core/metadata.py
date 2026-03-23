@@ -9,11 +9,10 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, PointsMetadata
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.discovery import infer_annotation_kind_for_file
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.paths import canonicalize_path
-from napari_deeplabcut.core.provenance import build_io_provenance_dict
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +65,29 @@ def _looks_like_project_root(points_root: str | None, project: str | None) -> bo
         return Path(points_root).expanduser().resolve() == Path(project).expanduser().resolve()
     except Exception:
         return points_root == project
+
+
+def build_io_provenance_dict(
+    *,
+    project_root: str | Path,
+    source_relpath_posix: str,
+    kind: AnnotationKind | None,
+    dataset_key: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    """
+    Build a provenance dict for storage in napari layer.metadata.
+
+    Important: uses mode="python" so AnnotationKind stays an enum at runtime.
+    """
+    io = IOProvenance(
+        project_root=str(project_root),
+        source_relpath_posix=source_relpath_posix,
+        kind=kind,
+        dataset_key=dataset_key,
+        **extra,
+    )
+    return io.model_dump(mode="python", exclude_none=True)
 
 
 def infer_image_root(
