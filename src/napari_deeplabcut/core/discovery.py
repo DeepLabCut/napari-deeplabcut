@@ -91,7 +91,7 @@ def discover_annotations(folder: str | Path) -> list[AnnotationArtifact]:
         )
 
     # Stable ordering by primary filename
-    return natsorted(artifacts, key=lambda a: (a.primary_path.name if a.primary_path else a.stem))
+    return natsorted(artifacts, key=lambda a: a.primary_path.name if a.primary_path else a.stem)
 
 
 def discover_annotation_paths(folder: str | Path) -> list[Path]:
