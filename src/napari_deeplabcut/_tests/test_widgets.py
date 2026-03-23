@@ -13,7 +13,8 @@ from vispy import keys
 from napari_deeplabcut import _widgets, keypoints
 from napari_deeplabcut.core import io
 from napari_deeplabcut.core.io import populate_keypoint_layer_metadata
-from napari_deeplabcut.ui.colors_and_dropdown import ColorSchemeDisplay, KeypointsDropdownMenu, LabelPair
+from napari_deeplabcut.ui.color_scheme_display import ColorSchemeDisplay
+from napari_deeplabcut.ui.labels_and_dropdown import KeypointsDropdownMenu, LabelPair
 from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
 

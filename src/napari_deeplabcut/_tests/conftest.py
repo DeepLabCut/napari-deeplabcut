@@ -215,6 +215,25 @@ def superkeypoints_assets():
 
 
 @pytest.fixture
+def single_animal_project(tmp_path: Path):
+    project = tmp_path / "project_single"
+    project.mkdir(parents=True, exist_ok=True)
+
+    cfg = {
+        "scorer": "John",
+        "dotsize": 8,
+        "pcutoff": 0.6,
+        "colormap": "viridis",
+        "bodyparts": ["cfg1", "cfg2"],
+        "video_sets": {},
+    }
+
+    config_path = project / "config.yaml"
+    napari_dlc_io.write_config(config_path, cfg)
+    return project, config_path
+
+
+@pytest.fixture
 def multianimal_config_project(tmp_path: Path):
     """
     Minimal DLC-style multi-animal project config used for E2E tests.
