@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 from qtpy.QtWidgets import QInputDialog, QMessageBox
@@ -61,6 +60,7 @@ def inputdialog(monkeypatch):
             return self
 
     return Controller()
+
 
 @pytest.fixture(autouse=True)
 def overwrite_confirm(monkeypatch):
