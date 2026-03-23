@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -121,11 +120,6 @@ class ColorSchemeDisplay(QScrollArea):
                 w.setVisible(False)
         self._container.adjustSize()
         self._container.updateGeometry()
-
-
-class SchemeSource(StrEnum):
-    ACTIVE = "active"
-    CONFIG = "config"
 
 
 def _to_hex(rgba: Any) -> str:
