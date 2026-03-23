@@ -150,15 +150,9 @@ def test_apply_points_layer_ui_tweaks_real_dropdown(qtbot):
     qtbot.addWidget(point_controls)
 
     dock_layer_controls = SimpleNamespace(widget=lambda: SimpleNamespace(widgets={layer: point_controls}))
-    viewer = SimpleNamespace(
-        window=SimpleNamespace(
-            qt_viewer=SimpleNamespace(dockLayerControls=dock_layer_controls)
-        )
-    )
+    viewer = SimpleNamespace(window=SimpleNamespace(qt_viewer=SimpleNamespace(dockLayerControls=dock_layer_controls)))
 
-    selector = apply_points_layer_ui_tweaks(
-        viewer, layer, dropdown_cls=DropdownMenu, plt_module=plt
-    )
+    selector = apply_points_layer_ui_tweaks(viewer, layer, dropdown_cls=DropdownMenu, plt_module=plt)
     assert selector is not None
 
     assert point_controls._face_color_control.face_color_edit.isHidden()

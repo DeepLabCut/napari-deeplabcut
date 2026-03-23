@@ -97,7 +97,7 @@ table_format = "long"
 
 [tool.pytest.ini_options]
 qt_api = "pyside6"
-testpaths = ["src/napari_deeplabcut/_tests"]
+testpaths = [ "src/napari_deeplabcut/_tests" ]
 markers = [
   "e2e: end-to-end tests. Invoke napari viewer fixtures, slow.",
 ]
