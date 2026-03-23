@@ -392,11 +392,13 @@ def test_panel_toggle_switches_from_active_to_config_preview(
 
     panel._toggle.setChecked(True)
     qtbot.waitUntil(
-        lambda: panel.display.scheme_dict
-        == {
-            "cfg1": "#ff0000",
-            "cfg2": "#00ff00",
-        }
+        lambda: (
+            panel.display.scheme_dict
+            == {
+                "cfg1": "#ff0000",
+                "cfg2": "#00ff00",
+            }
+        )
     )
 
 
