@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/core/trails.py
 from __future__ import annotations
 
 from dataclasses import dataclass
