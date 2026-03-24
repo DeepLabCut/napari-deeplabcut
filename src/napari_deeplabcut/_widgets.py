@@ -64,9 +64,16 @@ from napari_deeplabcut.core.paths import (
     canonicalize_path,
 )
 from napari_deeplabcut.core.remap import remap_layer_data_by_paths
-from napari_deeplabcut.core.sidecar import get_default_scorer, set_default_scorer
+from napari_deeplabcut.core.sidecar import (
+    get_default_scorer,
+    get_trails_config,
+    set_default_scorer,
+    set_trails_config,
+)
 from napari_deeplabcut.core.trails import (
     build_trails_payload,
+    display_config_from_tracks_layer,
+    tracks_kwargs_from_display_config,
     trails_geometry_signature,
     trails_signature,
 )
@@ -848,6 +855,89 @@ class KeypointControls(QWidget):
         except Exception:
             pass
 
+    def _get_trails_anchor(self, layer: Points | None = None) -> str | None:
+        """
+        Resolve the folder-scoped sidecar anchor for the trails source layer.
+
+        This is intentionally a tiny wrapper so future multi-layer support can swap
+        the source-selection logic without touching persistence code.
+        """
+        pts_layer = layer if layer is not None else self._get_trails_source_layer()
+        if pts_layer is None:
+            return None
+        return _safe_folder_anchor_from_points_layer(pts_layer)
+
+    def _persist_current_trails_config(self, *, visible: bool | None = None) -> None:
+        """
+        Persist the current trails display config to the folder sidecar.
+
+        Option A policy:
+        - persist on our own lifecycle actions only
+        - do not try to watch napari's native layer controls continuously
+        """
+        if self._trails is None:
+            return
+
+        anchor = (self._trails.metadata or {}).get("_dlc_trails_anchor")
+        if not anchor:
+            anchor = self._get_trails_anchor()
+
+        if not anchor:
+            return
+
+        try:
+            cfg = display_config_from_tracks_layer(self._trails, visible=visible)
+            set_trails_config(anchor, cfg)
+        except Exception:
+            logger.debug("Failed to persist trails config for anchor=%r", anchor, exc_info=True)
+
+    def _persist_folder_ui_state_for_points_layer(self, layer: Points) -> None:
+        """
+        Best-effort persistence of folder-scoped UI state for a specific DLC-managed
+        points layer.
+
+        This never raises and must never block annotation saving.
+
+        Policy
+        ------
+        - If the current global trails layer belongs to this points layer (or same anchor),
+        snapshot its full display config.
+        - Otherwise, preserve the existing stored trails config and only mark visible=False.
+        """
+        anchor = _safe_folder_anchor_from_points_layer(layer)
+        if not anchor:
+            return
+
+        try:
+            # Case 1: live trails exist and belong to this saved layer/folder.
+            if self._trails is not None:
+                trails_md = self._trails.metadata or {}
+                trails_anchor = trails_md.get("_dlc_trails_anchor")
+                trails_src_id = trails_md.get("_source_points_layer_id")
+
+                same_source = trails_src_id == id(layer)
+                same_anchor = trails_anchor is not None and str(trails_anchor) == str(anchor)
+
+                if same_source or same_anchor:
+                    cfg = display_config_from_tracks_layer(
+                        self._trails,
+                        visible=bool(self._trail_cb.isChecked() and self._trails.visible),
+                    )
+                    set_trails_config(anchor, cfg)
+                    return
+
+            # Case 2: no live trails for this layer -> preserve existing config, but mark hidden.
+            cfg = get_trails_config(anchor)
+            cfg = cfg.model_copy(update={"visible": False})
+            set_trails_config(anchor, cfg)
+
+        except Exception:
+            logger.debug(
+                "Failed to persist folder UI state for saved points layer=%r",
+                getattr(layer, "name", layer),
+                exc_info=True,
+            )
+
     def _resolved_trails_cycle(self, layer: Points) -> dict:
         """
         Return the resolved category->color mapping used by the points layer,
@@ -971,6 +1061,10 @@ class KeypointControls(QWidget):
         if pts_layer is None:
             return
 
+        anchor = self._get_trails_anchor(pts_layer)
+        cfg = get_trails_config(anchor) if anchor else None
+        track_kwargs = tracks_kwargs_from_display_config(cfg) if cfg is not None else {}
+
         selected, active = self._snapshot_selection()
         try:
             payload = build_trails_payload(
@@ -987,15 +1081,23 @@ class KeypointControls(QWidget):
                 properties=payload.properties,
                 color_by=payload.color_by,
                 colormaps_dict=payload.colormaps_dict,
-                tail_length=50,
-                head_length=50,
-                tail_width=6,
                 name="trails",
-                metadata={"_source_points_layer_id": id(pts_layer)},
+                metadata={
+                    "_source_points_layer_id": id(pts_layer),
+                    "_dlc_trails_anchor": anchor,
+                },
+                **track_kwargs,
             )
+            # The user explicitly asked to show trails, so force visible True here.
+            # We still persist visible state in the sidecar for future use, but we do
+            # not let a stale visible=False sidecar entry override an explicit checkbox action.
             self._trails.visible = True
+
             self._trails_geom_sig = payload.geometry_signature
             self._trails_style_sig = payload.signature
+
+            # Persist once so sidecar is normalized even if it was missing/partial.
+            self._persist_current_trails_config(visible=True)
         finally:
             self._restore_selection(selected, active)
 
@@ -1518,6 +1620,15 @@ class KeypointControls(QWidget):
                     return
 
             self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+            # hook to persist UI state on successful save
+            try:
+                self._persist_folder_ui_state_for_points_layer(layer)
+            except Exception:
+                logger.debug(
+                    "Failed to persist folder UI state after save for layer=%r",
+                    getattr(layer, "name", layer),
+                    exc_info=True,
+                )
             self.viewer.status = "Data successfully saved"
         else:
             dlg = QFileDialog()
@@ -1529,6 +1640,19 @@ class KeypointControls(QWidget):
             )
             if filename:
                 self.viewer.layers.save(filename, selected=selected)
+                #  hook to persist UI state on successful save
+                try:
+                    if selected:
+                        candidate_layers = [ly for ly in selected_layers if isinstance(ly, Points)]
+                    else:
+                        candidate_layers = list(self._stores.keys())
+
+                    for ly in candidate_layers:
+                        if ly in self.viewer.layers:
+                            self._persist_folder_ui_state_for_points_layer(ly)
+                except Exception:
+                    logger.debug("Failed to persist sidecar UI state after multi-layer save", exc_info=True)
+
             else:
                 return
         self._is_saved = True
@@ -1617,7 +1741,7 @@ class KeypointControls(QWidget):
     def color_mode(self, mode: str | keypoints.ColorMode):
         self._color_mode = keypoints.ColorMode(mode)
 
-        for layer in self.viewer.layers:
+        for layer in list(self._stores.keys()):
             if isinstance(layer, Points) and layer.metadata:
                 self._apply_points_coloring_from_metadata(layer)
 

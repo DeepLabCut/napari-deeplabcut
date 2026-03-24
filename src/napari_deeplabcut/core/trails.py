@@ -6,10 +6,11 @@ from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
 import numpy as np
-from napari.layers import Points
+from napari.layers import Points, Tracks
 from napari.utils.colormaps import Colormap
 
 from napari_deeplabcut import keypoints
+from napari_deeplabcut.config.models import TrailsDisplayConfig
 
 
 @dataclass(frozen=True)
@@ -237,4 +238,44 @@ def build_trails_payload(
         colormaps_dict={color_key: cmap},
         signature=trails_signature(layer, color_mode),
         geometry_signature=trails_geometry_signature(layer),
+    )
+
+
+def tracks_kwargs_from_display_config(cfg: TrailsDisplayConfig) -> dict:
+    """
+    Convert persistent trails display config into kwargs suitable for viewer.add_tracks().
+
+    Notes
+    -----
+    We intentionally do NOT include `visible` here, because visibility is UI state:
+    when the user explicitly checks "Show trails", the created layer should be shown.
+    """
+    return {
+        "tail_length": int(cfg.tail_length),
+        "head_length": int(cfg.head_length),
+        "tail_width": float(cfg.tail_width),
+        "opacity": float(cfg.opacity),
+        "blending": str(cfg.blending),
+    }
+
+
+def display_config_from_tracks_layer(layer: Tracks, *, visible: bool | None = None) -> TrailsDisplayConfig:
+    """
+    Extract persistent trails display config from an existing Tracks layer.
+
+    Parameters
+    ----------
+    layer
+        Tracks layer to snapshot.
+    visible
+        Optional visibility override. Useful when persisting a deliberate hide/show
+        action without mutating the layer first.
+    """
+    return TrailsDisplayConfig(
+        tail_length=int(getattr(layer, "tail_length", 50)),
+        head_length=int(getattr(layer, "head_length", 50)),
+        tail_width=float(getattr(layer, "tail_width", 6.0)),
+        opacity=float(getattr(layer, "opacity", 1.0)),
+        blending=str(getattr(layer, "blending", "translucent")),
+        visible=bool(layer.visible if visible is None else visible),
     )
