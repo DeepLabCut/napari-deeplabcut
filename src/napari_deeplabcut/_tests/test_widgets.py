@@ -48,7 +48,8 @@ def test_save_layers(viewer, points):
 @pytest.mark.usefixtures("qtbot")
 def test_show_trails(viewer, store):
     controls = _widgets.KeypointControls(viewer)
-    controls._stores["temp"] = store
+    controls._stores[store.layer] = store
+    viewer.layers.selection.active = store.layer
     controls._is_saved = True
     controls._show_trails(state=2)
 

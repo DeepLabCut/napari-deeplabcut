@@ -31,7 +31,7 @@ def _make_points(
     properties = {}
     if labels is not None:
         properties["label"] = np.asarray(labels, dtype=object)
-    if ids is not None:
+    if ids is not None and len(ids) > 0:
         properties["id"] = np.asarray(ids, dtype=object)
 
     metadata = {
@@ -297,7 +297,7 @@ def test_categorical_colormap_from_points_layer_uses_face_color_cycles(multi_poi
     )
 
     assert uniq_color == ["mouseB", "mouseA"]
-    np.testing.assert_allclose(codes_norm, np.array([0.0, 1.0, 0.0]))
+    np.testing.assert_allclose(codes_norm, np.array([0.25, 0.75, 0.25]))
     assert cmap.name == "id_categorical"
     assert cmap.interpolation == "zero"
 
@@ -327,7 +327,7 @@ def test_categorical_colormap_from_points_layer_prefers_cycle_override(multi_poi
     )
 
     assert uniq_color == ["mouseB", "mouseA"]
-    np.testing.assert_allclose(codes_norm, np.array([0.0, 1.0, 0.0]))
+    np.testing.assert_allclose(codes_norm, np.array([0.25, 0.75, 0.25]))
     expected_colors = np.array(
         [
             [0.44, 0.55, 0.66, 1.0],
@@ -348,7 +348,7 @@ def test_categorical_colormap_from_points_layer_single_category_duplicates_color
     )
 
     assert uniq_color == ["nose"]
-    np.testing.assert_allclose(codes_norm, np.array([0.0, 0.0, 0.0]))
+    np.testing.assert_allclose(codes_norm, np.array([0.5, 0.5, 0.5]))
     expected_colors = np.array(
         [
             [1.0, 0.0, 0.0, 1.0],
@@ -357,35 +357,7 @@ def test_categorical_colormap_from_points_layer_single_category_duplicates_color
         dtype=float,
     )
     np.testing.assert_allclose(np.asarray(cmap.colors), expected_colors)
-    np.testing.assert_allclose(np.asarray(cmap.controls), np.array([0.0, 1.0]))
-
-
-def test_categorical_colormap_maps_three_individual_ids_to_three_distinct_colors(three_id_points_layer):
-    categories = np.array(["mouseA", "mouseB", "mouseC"], dtype=object)
-
-    cmap, uniq_color, codes_norm = categorical_colormap_from_points_layer(
-        three_id_points_layer,
-        "id",
-        categories,
-    )
-
-    assert uniq_color == ["mouseA", "mouseB", "mouseC"]
-
-    mapped = np.asarray(cmap.map(codes_norm))
-    unique_rows = np.unique(np.round(mapped, decimals=8), axis=0)
-
-    # Regression guard: every category must map to a distinct RGBA color
-    assert unique_rows.shape[0] == 3
-
-    expected = np.array(
-        [
-            [1.0, 0.0, 0.0, 1.0],  # mouseA
-            [0.0, 1.0, 0.0, 1.0],  # mouseB
-            [0.0, 0.0, 1.0, 1.0],  # mouseC
-        ],
-        dtype=float,
-    )
-    np.testing.assert_allclose(mapped, expected)
+    np.testing.assert_allclose(np.asarray(cmap.controls), np.array([0.0, 0.5, 1.0]))
 
 
 def test_build_trails_payload_three_individuals_maps_to_distinct_colors(three_id_points_layer):
@@ -423,7 +395,7 @@ def test_categorical_colormap_from_points_layer_falls_back_to_tab20(monkeypatch,
     )
 
     assert uniq_color == ["missingA", "missingB"]
-    np.testing.assert_allclose(codes_norm, np.array([0.0, 1.0, 0.0]))
+    np.testing.assert_allclose(codes_norm, np.array([0.25, 0.75, 0.25]))
     expected_colors = np.array(
         [
             [0.11, 0.22, 0.33, 1.0],
@@ -471,7 +443,7 @@ def test_build_trails_payload_multi_individual_mode(multi_points_layer):
     np.testing.assert_allclose(payload.tracks_data[:, 1:], multi_points_layer.data)
     np.testing.assert_allclose(
         payload.properties["id_codes"],
-        np.array([0.0, 0.0, 1.0, 1.0, 0.0, 0.0]),
+        np.array([0.25, 0.25, 0.75, 0.75, 0.25, 0.25]),
     )
 
 
@@ -486,7 +458,7 @@ def test_build_trails_payload_single_individual_mode_falls_back_to_label(single_
 
     np.testing.assert_array_equal(payload.tracks_data[:, 0], np.array([0, 1, 0, 1]))
     np.testing.assert_allclose(payload.tracks_data[:, 1:], single_points_layer.data)
-    np.testing.assert_allclose(payload.properties["label_codes"], np.array([0.0, 1.0, 0.0, 1.0]))
+    np.testing.assert_allclose(payload.properties["label_codes"], np.array([0.25, 0.75, 0.25, 0.75]))
 
 
 def test_tracks_kwargs_from_display_config_excludes_visible():

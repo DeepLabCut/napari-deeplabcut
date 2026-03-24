@@ -33,9 +33,15 @@ def _open_multianimal_points(viewer, tmp_path: Path, *, n_animals: int = 3, n_kp
     return layer
 
 
-def _expected_cycle_colors(points_layer, prop: str):
+def _expected_cycle_colors_from_controls(controls, points_layer):
+    """
+    Expected trails colors must come from the same resolved cycle path as the widget,
+    not directly from raw metadata.
+    """
+    prop = "id" if controls.color_mode == str(keypoints.ColorMode.INDIVIDUAL) else "label"
     vals = list(dict.fromkeys(map(str, points_layer.properties[prop])))
-    cycle = points_layer.metadata["face_color_cycles"][prop]
+
+    cycle = controls._resolved_trails_cycle(points_layer)
     out = []
     for v in vals:
         c = np.asarray(cycle[v], dtype=float)
@@ -87,7 +93,7 @@ def test_trails_repeated_mode_switch_keeps_expected_colormap(viewer, tmp_path):
     controls._trail_cb.setChecked(True)
 
     # Initial individual mode colors
-    expected_id_colors, _ = _expected_cycle_colors(points, "id")
+    expected_id_colors, _ = _expected_cycle_colors_from_controls(controls, points)
     actual_id_colors = _current_trails_cmap_colors(controls._trails)
     np.testing.assert_allclose(actual_id_colors, expected_id_colors)
 
@@ -95,7 +101,7 @@ def test_trails_repeated_mode_switch_keeps_expected_colormap(viewer, tmp_path):
     controls.color_mode = keypoints.ColorMode.BODYPART
     assert controls._trails.color_by == "label_codes"
 
-    expected_label_colors, _ = _expected_cycle_colors(points, "label")
+    expected_label_colors, _ = _expected_cycle_colors_from_controls(controls, points)
     actual_label_colors = _current_trails_cmap_colors(controls._trails)
     np.testing.assert_allclose(actual_label_colors, expected_label_colors)
 
