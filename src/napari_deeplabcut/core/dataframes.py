@@ -320,6 +320,9 @@ def harmonize_keypoint_column_index(df: pd.DataFrame) -> pd.DataFrame:
 
 def align_old_new(df_old: pd.DataFrame, df_new: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Align both dataframes to union of index and columns."""
+    # First harmonize row index structure (deep path MI vs shallow basename index)
+    df_new, df_old = harmonize_keypoint_row_index(df_new, df_old)
+
     df_old = harmonize_keypoint_column_index(df_old)
     df_new = harmonize_keypoint_column_index(df_new)
 
