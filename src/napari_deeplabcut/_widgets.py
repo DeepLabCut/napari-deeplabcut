@@ -989,14 +989,14 @@ class KeypointControls(QWidget):
             self._trails.colormaps_dict = new_cmaps
 
             self._trails.color_by = payload.color_by
-
-            if hasattr(self._trails, "colormaps_dict"):
-                self._trails.colormaps_dict = payload.colormaps_dict
-            elif payload.color_by in payload.colormaps_dict:
-                self._trails.colormap = payload.colormaps_dict[payload.color_by]
-
             self._trails.visible = True
             self._trails_style_sig = payload.signature
+
+            # IMPORTANT: keep trails ownership metadata in sync with the actual source layer
+            self._trails.metadata = dict(self._trails.metadata or {})
+            self._trails.metadata["_source_points_layer_id"] = id(pts_layer)
+            self._trails.metadata["_dlc_trails_anchor"] = self._get_trails_anchor(pts_layer)
+
         except Exception:
             # Fallback to full rebuild if in-place update is not supported
             self._refresh_trails()
@@ -1429,6 +1429,10 @@ class KeypointControls(QWidget):
 
             # Refresh color scheme panel regardless; it will clear itself if no valid target remains.
             self._update_color_scheme()
+            if self._trails is not None:
+                src_id = (self._trails.metadata or {}).get("_source_points_layer_id")
+                if src_id == id(layer):
+                    self._remove_trails_layer()
 
             if n_points_layer == 0:
                 while self._menus:
