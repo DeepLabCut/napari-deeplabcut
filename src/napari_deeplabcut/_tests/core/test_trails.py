@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from napari.layers import Points
+from napari.layers import Points, Tracks
 
 from napari_deeplabcut import keypoints
+from napari_deeplabcut.config.models import TrailsDisplayConfig
 from napari_deeplabcut.core.trails import (
     _rgba_array,
     active_trails_color_property,
     build_trails_payload,
     categorical_colormap_from_points_layer,
+    display_config_from_tracks_layer,
     is_multianimal_points_layer,
+    tracks_kwargs_from_display_config,
+    trails_geometry_signature,
     trails_signature,
     trails_track_ids,
 )
@@ -55,7 +59,7 @@ def single_points_layer():
         dtype=float,
     )
     labels = ["nose", "tail", "nose", "tail"]
-    ids = ["", "", "", ""]  # explicit single-animal convention
+    ids = ["", "", "", ""]
     face_color_cycles = {
         "label": {
             "nose": [1.0, 0.0, 0.0, 1.0],
@@ -78,12 +82,12 @@ def single_points_layer():
 def multi_points_layer():
     data = np.array(
         [
-            [0, 10, 20],  # mouseA nose
-            [0, 12, 22],  # mouseA tail
-            [0, 14, 24],  # mouseB nose
-            [0, 16, 26],  # mouseB tail
-            [1, 11, 21],  # mouseA nose
-            [1, 13, 23],  # mouseA tail
+            [0, 10, 20],
+            [0, 12, 22],
+            [0, 14, 24],
+            [0, 16, 26],
+            [1, 11, 21],
+            [1, 13, 23],
         ],
         dtype=float,
     )
@@ -119,25 +123,47 @@ def no_label_points_layer():
     )
 
 
+@pytest.fixture
+def tracks_layer():
+    data = np.array(
+        [
+            [0, 0, 10, 20],
+            [0, 1, 11, 21],
+            [1, 0, 30, 40],
+        ],
+        dtype=float,
+    )
+    layer = Tracks(
+        data,
+        tail_length=12,
+        head_length=7,
+        tail_width=3.5,
+        opacity=0.4,
+        blending="opaque",
+        name="trails",
+    )
+    layer.visible = False
+    return layer
+
+
 def test_trails_signature_contains_expected_fields(single_points_layer):
     sig = trails_signature(single_points_layer, keypoints.ColorMode.BODYPART)
 
     assert sig[0] == id(single_points_layer)
     assert sig[1] == str(keypoints.ColorMode.BODYPART)
     assert sig[2] == "magma"
-    assert sig[3] == 4  # n_vertices
-    assert sig[4] == 4  # n_labels
-    assert sig[5] == 4  # n_ids
+    assert sig[3] == 4
+    assert sig[4] == ("nose", "tail", "nose", "tail")
+    assert sig[5] == ("", "", "", "")
 
 
-def test_trails_signature_changes_when_metadata_changes(single_points_layer):
-    sig1 = trails_signature(single_points_layer, keypoints.ColorMode.BODYPART)
+def test_trails_geometry_signature_contains_shape_and_properties(single_points_layer):
+    sig = trails_geometry_signature(single_points_layer)
 
-    single_points_layer.metadata["colormap_name"] = "viridis"
-    sig2 = trails_signature(single_points_layer, keypoints.ColorMode.BODYPART)
-
-    assert sig1 != sig2
-    assert sig2[2] == "viridis"
+    assert sig[0] == id(single_points_layer)
+    assert sig[1] == (4, 3)
+    assert sig[2] == ("nose", "tail", "nose", "tail")
+    assert sig[3] == ("", "", "", "")
 
 
 @pytest.mark.parametrize(
@@ -210,9 +236,9 @@ def test_active_trails_color_property_raises_without_labels(no_label_points_laye
 def test_rgba_array_converts_rgb_rgba_and_scalar():
     arr = _rgba_array(
         [
-            [1.0, 0.0, 0.0],  # RGB -> RGBA
-            [0.0, 1.0, 0.0, 0.5],  # RGBA unchanged
-            7.0,  # scalar -> fallback gray
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.5],
+            7.0,
         ]
     )
 
@@ -236,27 +262,46 @@ def test_categorical_colormap_from_points_layer_uses_face_color_cycles(multi_poi
         categories,
     )
 
-    # first-seen order is preserved
     assert uniq_color == ["mouseB", "mouseA"]
-
-    # codes: mouseB -> 0, mouseA -> 1, mouseB -> 0
     np.testing.assert_allclose(codes_norm, np.array([0.0, 1.0, 0.0]))
-
     assert cmap.name == "id_categorical"
     assert cmap.interpolation == "zero"
 
-    # colors should come from metadata cycles in uniq_color order
     expected_colors = np.array(
         [
-            [0.8, 0.6, 0.2, 1.0],  # mouseB
-            [0.2, 0.4, 0.6, 1.0],  # mouseA
+            [0.8, 0.6, 0.2, 1.0],
+            [0.2, 0.4, 0.6, 1.0],
         ],
         dtype=float,
     )
     np.testing.assert_allclose(np.asarray(cmap.colors), expected_colors)
-
-    # n_color=2 -> controls length = 3
     np.testing.assert_allclose(np.asarray(cmap.controls), np.array([0.0, 0.5, 1.0]))
+
+
+def test_categorical_colormap_from_points_layer_prefers_cycle_override(multi_points_layer):
+    categories = np.array(["mouseB", "mouseA", "mouseB"], dtype=object)
+    override = {
+        "mouseA": [0.11, 0.22, 0.33, 1.0],
+        "mouseB": [0.44, 0.55, 0.66, 1.0],
+    }
+
+    cmap, uniq_color, codes_norm = categorical_colormap_from_points_layer(
+        multi_points_layer,
+        "id",
+        categories,
+        cycle_override=override,
+    )
+
+    assert uniq_color == ["mouseB", "mouseA"]
+    np.testing.assert_allclose(codes_norm, np.array([0.0, 1.0, 0.0]))
+    expected_colors = np.array(
+        [
+            [0.44, 0.55, 0.66, 1.0],
+            [0.11, 0.22, 0.33, 1.0],
+        ],
+        dtype=float,
+    )
+    np.testing.assert_allclose(np.asarray(cmap.colors), expected_colors)
 
 
 def test_categorical_colormap_from_points_layer_single_category_duplicates_color(single_points_layer):
@@ -270,8 +315,6 @@ def test_categorical_colormap_from_points_layer_single_category_duplicates_color
 
     assert uniq_color == ["nose"]
     np.testing.assert_allclose(codes_norm, np.array([0.0, 0.0, 0.0]))
-
-    # single category -> duplicated rows for zero interpolation colormap
     expected_colors = np.array(
         [
             [1.0, 0.0, 0.0, 1.0],
@@ -295,7 +338,7 @@ def test_categorical_colormap_from_points_layer_falls_back_to_tab20(monkeypatch,
         assert name == "tab20"
         return DummyCmap()
 
-    monkeypatch.setattr("napari_deeplabcut.core.layers.trails.plt.get_cmap", fake_get_cmap)
+    monkeypatch.setattr("napari_deeplabcut.core.trails.plt.get_cmap", fake_get_cmap)
 
     categories = np.array(["missingA", "missingB", "missingA"], dtype=object)
     cmap, uniq_color, codes_norm = categorical_colormap_from_points_layer(
@@ -306,7 +349,6 @@ def test_categorical_colormap_from_points_layer_falls_back_to_tab20(monkeypatch,
 
     assert uniq_color == ["missingA", "missingB"]
     np.testing.assert_allclose(codes_norm, np.array([0.0, 1.0, 0.0]))
-
     expected_colors = np.array(
         [
             [0.11, 0.22, 0.33, 1.0],
@@ -328,22 +370,11 @@ def test_categorical_colormap_from_points_layer_raises_on_empty_categories(singl
 
 def test_trails_track_ids_single_animal_groups_by_label(single_points_layer):
     track_ids = trails_track_ids(single_points_layer, is_multi=False)
-
-    # labels: nose, tail, nose, tail
-    # first-seen order => nose -> 0, tail -> 1
     np.testing.assert_array_equal(track_ids, np.array([0, 1, 0, 1]))
 
 
 def test_trails_track_ids_multi_animal_groups_by_id_and_label(multi_points_layer):
     track_ids = trails_track_ids(multi_points_layer, is_multi=True)
-
-    # group keys:
-    # mouseA|nose -> 0
-    # mouseA|tail -> 1
-    # mouseB|nose -> 2
-    # mouseB|tail -> 3
-    # mouseA|nose -> 0
-    # mouseA|tail -> 1
     np.testing.assert_array_equal(track_ids, np.array([0, 1, 2, 3, 0, 1]))
 
 
@@ -359,12 +390,10 @@ def test_build_trails_payload_multi_individual_mode(multi_points_layer):
     assert set(payload.properties) == {"id_codes"}
     assert set(payload.colormaps_dict) == {"id_codes"}
     assert payload.signature == trails_signature(multi_points_layer, keypoints.ColorMode.INDIVIDUAL)
+    assert payload.geometry_signature == trails_geometry_signature(multi_points_layer)
 
-    # first col = track ids, remainder = original data
     np.testing.assert_array_equal(payload.tracks_data[:, 0], np.array([0, 1, 2, 3, 0, 1]))
     np.testing.assert_allclose(payload.tracks_data[:, 1:], multi_points_layer.data)
-
-    # in INDIVIDUAL mode, colors are based on ids: mouseA/mouseB
     np.testing.assert_allclose(
         payload.properties["id_codes"],
         np.array([0.0, 0.0, 1.0, 1.0, 0.0, 0.0]),
@@ -378,7 +407,48 @@ def test_build_trails_payload_single_individual_mode_falls_back_to_label(single_
     assert set(payload.properties) == {"label_codes"}
     assert set(payload.colormaps_dict) == {"label_codes"}
     assert payload.signature == trails_signature(single_points_layer, keypoints.ColorMode.INDIVIDUAL)
+    assert payload.geometry_signature == trails_geometry_signature(single_points_layer)
 
     np.testing.assert_array_equal(payload.tracks_data[:, 0], np.array([0, 1, 0, 1]))
     np.testing.assert_allclose(payload.tracks_data[:, 1:], single_points_layer.data)
     np.testing.assert_allclose(payload.properties["label_codes"], np.array([0.0, 1.0, 0.0, 1.0]))
+
+
+def test_tracks_kwargs_from_display_config_excludes_visible():
+    cfg = TrailsDisplayConfig(
+        tail_length=70,
+        head_length=12,
+        tail_width=4.5,
+        opacity=0.75,
+        blending="opaque",
+        visible=False,
+    )
+
+    kwargs = tracks_kwargs_from_display_config(cfg)
+
+    assert kwargs == {
+        "tail_length": 70,
+        "head_length": 12,
+        "tail_width": 4.5,
+        "opacity": 0.75,
+        "blending": "opaque",
+    }
+    assert "visible" not in kwargs
+
+
+def test_display_config_from_tracks_layer_reads_all_display_fields(tracks_layer):
+    cfg = display_config_from_tracks_layer(tracks_layer)
+
+    assert cfg == TrailsDisplayConfig(
+        tail_length=12,
+        head_length=7,
+        tail_width=3.5,
+        opacity=0.4,
+        blending="opaque",
+        visible=False,
+    )
+
+
+def test_display_config_from_tracks_layer_visible_override(tracks_layer):
+    cfg = display_config_from_tracks_layer(tracks_layer, visible=True)
+    assert cfg.visible is True
