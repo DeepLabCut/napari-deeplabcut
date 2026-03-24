@@ -1579,7 +1579,6 @@ class KeypointControls(QWidget):
             If True, only layers that are selected in the viewer will be saved.
             By default, all layers are saved.
         """
-        from napari.utils.notifications import show_warning
 
         from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
         from napari_deeplabcut.ui.dialogs import maybe_confirm_overwrite
@@ -1628,7 +1627,7 @@ class KeypointControls(QWidget):
                     parent=self,
                     report=report,
                 ):
-                    show_warning("Save cancelled: existing keypoints would have been overwritten.")
+                    logger.debug("Save cancelled.")
                     return
 
             self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")

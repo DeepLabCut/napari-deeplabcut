@@ -5,6 +5,8 @@ import logging
 from copy import deepcopy
 from types import MethodType
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -137,18 +139,16 @@ def make_paste_data(controls, *, store):
             not_disp = layer_self._slice_input.not_displayed
             data = deepcopy(layer_self._clipboard["data"])
             offset = [layer_self._slice_indices[i] - layer_self._clipboard["indices"][i] for i in not_disp]
-            data[:, not_disp] = data[:, not_disp] + controls.np.array(offset)
-            layer_self._data = controls.np.append(layer_self.data, data, axis=0)
-            layer_self._shown = controls.np.append(layer_self.shown, deepcopy(layer_self._clipboard["shown"]), axis=0)
-            layer_self._size = controls.np.append(layer_self.size, deepcopy(layer_self._clipboard["size"]), axis=0)
-            layer_self._symbol = controls.np.append(
-                layer_self.symbol, deepcopy(layer_self._clipboard["symbol"]), axis=0
-            )
+            data[:, not_disp] = data[:, not_disp] + np.array(offset)
+            layer_self._data = np.append(layer_self.data, data, axis=0)
+            layer_self._shown = np.append(layer_self.shown, deepcopy(layer_self._clipboard["shown"]), axis=0)
+            layer_self._size = np.append(layer_self.size, deepcopy(layer_self._clipboard["size"]), axis=0)
+            layer_self._symbol = np.append(layer_self.symbol, deepcopy(layer_self._clipboard["symbol"]), axis=0)
 
             layer_self._feature_table.append(layer_self._clipboard["features"])
             layer_self.text._paste(**layer_self._clipboard["text"])
 
-            layer_self._edge_width = controls.np.append(
+            layer_self._edge_width = np.append(
                 layer_self.edge_width,
                 deepcopy(layer_self._clipboard["edge_width"]),
                 axis=0,

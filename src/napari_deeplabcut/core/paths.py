@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # -----------------------------------------------------------------------------
-# Canonicalization (REUSED for now, behavior-preserving)
+# Canonicalization
 # -----------------------------------------------------------------------------
 
 
