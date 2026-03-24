@@ -10,12 +10,12 @@ import numpy as np
 import pandas as pd
 from napari.layers import Points
 
-from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.config.settings import (
     DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP,
     DEFAULT_SINGLE_ANIMAL_CMAP,
 )
+from napari_deeplabcut.keypoints import build_color_cycles
 from napari_deeplabcut.ui.color_scheme_display import _to_hex
 
 
@@ -326,10 +326,10 @@ def _cycles_from_policy(layer) -> dict[str, dict[str, np.ndarray]]:
     header = _header_model_from_layer(layer)
     config_cmap = _config_colormap_from_layer(layer)
 
-    config_cycles = misc.build_color_cycles(header, config_cmap) or {}
+    config_cycles = build_color_cycles(header, config_cmap) or {}
 
     if _is_multianimal_header(header):
-        individual_cycles = misc.build_color_cycles(header, DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP) or {}
+        individual_cycles = build_color_cycles(header, DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP) or {}
     else:
         individual_cycles = config_cycles
 

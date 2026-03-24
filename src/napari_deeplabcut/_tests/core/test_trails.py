@@ -7,7 +7,7 @@ from napari.layers import Points, Tracks
 from napari_deeplabcut import keypoints
 from napari_deeplabcut.config.models import TrailsDisplayConfig
 from napari_deeplabcut.core.trails import (
-    _rgba_array,
+    _trails_rgba_array,
     active_trails_color_property,
     build_trails_payload,
     categorical_colormap_from_points_layer,
@@ -268,7 +268,7 @@ def test_active_trails_color_property_raises_without_labels(no_label_points_laye
 
 
 def test_rgba_array_converts_rgb_rgba_and_scalar():
-    arr = _rgba_array(
+    arr = _trails_rgba_array(
         [
             [1.0, 0.0, 0.0],
             [0.0, 1.0, 0.0, 0.5],

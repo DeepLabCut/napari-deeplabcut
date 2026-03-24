@@ -5,16 +5,18 @@ from collections.abc import Sequence
 from enum import auto
 
 import numpy as np
+from matplotlib import colormaps as mpl_colormaps
 from napari._qt.layer_controls.qt_points_controls import QtPointsControls
 from napari.layers import Points
 from napari.layers.points._points_constants import SYMBOL_TRANSLATION_INVERTED
 from napari.layers.points._points_utils import coerce_symbols
+from napari.utils import colormaps
 from pydantic import ValidationError
 from scipy.spatial import cKDTree
 
 from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.core.metadata import read_points_meta
-from napari_deeplabcut.misc import CycleEnum
+from napari_deeplabcut.misc import CycleEnum, HeaderLike
 
 logger = logging.getLogger(__name__)
 
@@ -298,3 +300,149 @@ def _find_nearest_neighbors(xy_true, xy_pred, k=5):
         if len(picked) == n_preds:
             break
     return neighbors
+
+
+# ----------------------------
+# Colormap functions
+# ----------------------------
+def _rgba_array(colors) -> np.ndarray:
+    """Normalize a color list/array to float RGBA shape (N, 4)."""
+    arr = np.asarray(colors, dtype=float)
+
+    if arr.size == 0:
+        return np.empty((0, 4), dtype=float)
+
+    if arr.ndim == 1:
+        if arr.shape[0] == 3:
+            arr = np.r_[arr, 1.0][None, :]
+        elif arr.shape[0] == 4:
+            arr = arr[None, :]
+        else:
+            raise ValueError(f"Unexpected color shape: {arr.shape!r}")
+    elif arr.ndim == 2 and arr.shape[1] == 3:
+        arr = np.c_[arr, np.ones(len(arr), dtype=float)]
+    elif arr.ndim != 2 or arr.shape[1] != 4:
+        raise ValueError(f"Unexpected colors array shape: {arr.shape!r}")
+
+    return np.asarray(arr, dtype=float)
+
+
+def _repeat_or_trim(colors: np.ndarray, n_colors: int) -> np.ndarray:
+    """Return exactly n_colors rows by trimming or cycling a palette."""
+    if n_colors <= 0:
+        return np.empty((0, 4), dtype=float)
+
+    colors = _rgba_array(colors)
+    if len(colors) == 0:
+        return np.empty((0, 4), dtype=float)
+
+    if len(colors) >= n_colors:
+        return colors[:n_colors]
+
+    reps = int(np.ceil(n_colors / len(colors)))
+    out = np.tile(colors, (reps, 1))[:n_colors]
+
+    logger.debug(
+        "Requested %d colors from a listed palette of length %d; cycling palette.",
+        n_colors,
+        len(colors),
+    )
+    return out
+
+
+def _try_matplotlib_listed_colors(colormap: str | None) -> np.ndarray | None:
+    """
+    Return listed RGBA colors from a matplotlib colormap when available.
+
+    This is the preferred path for qualitative palettes like Set3, tab10, tab20,
+    Dark2, etc., because they should be treated as discrete palettes, not sampled
+    continuously.
+    """
+    if not colormap:
+        return None
+
+    try:
+        mpl_cmap = mpl_colormaps.get_cmap(colormap)
+    except Exception:
+        return None
+
+    listed = getattr(mpl_cmap, "colors", None)
+    if listed is None:
+        return None
+
+    try:
+        return _rgba_array(listed)
+    except Exception:
+        logger.debug("Failed to normalize matplotlib listed colors for %r", colormap, exc_info=True)
+        return None
+
+
+def _sample_continuous_colormap(cmap, n_colors: int) -> np.ndarray:
+    """
+    Sample a continuous colormap at bin centers.
+
+    Using centers instead of endpoints avoids repeated-looking adjacent colors and
+    behaves better for categorical assignment.
+    """
+    if n_colors <= 0:
+        return np.empty((0, 4), dtype=float)
+
+    values = (np.arange(n_colors, dtype=float) + 0.5) / n_colors
+    return _rgba_array(cmap.map(values))
+
+
+def build_color_cycle(n_colors: int, colormap: str | None = "viridis") -> np.ndarray:
+    """
+    Build a robust RGBA color cycle.
+
+    Policy
+    ------
+    1) If `colormap` is a listed matplotlib palette (e.g. Set3, tab10, tab20,
+       Dark2...), use its listed colors directly.
+    2) Otherwise, resolve via napari and sample at bin centers.
+    """
+    if n_colors <= 0:
+        return np.empty((0, 4), dtype=float)
+
+    # Prefer discrete/listed matplotlib palettes directly.
+    listed = _try_matplotlib_listed_colors(colormap)
+    if listed is not None and len(listed) > 0:
+        return _repeat_or_trim(listed, n_colors)
+
+    # Fall back to napari colormap resolution.
+    cmap = colormaps.ensure_colormap(colormap)
+
+    # If napari resolved something that itself behaves like a listed palette,
+    # prefer those colors directly as well.
+    try:
+        cmap_colors = getattr(cmap, "colors", None)
+        if cmap_colors is not None:
+            cmap_colors = _rgba_array(cmap_colors)
+            interp = str(getattr(cmap, "interpolation", "")).lower()
+            if len(cmap_colors) > 0 and interp == "zero":
+                return _repeat_or_trim(cmap_colors, n_colors)
+    except Exception:
+        logger.debug("Failed to inspect napari colormap %r for listed colors", colormap, exc_info=True)
+
+    return _sample_continuous_colormap(cmap, n_colors)
+
+
+def build_color_cycles(header: HeaderLike, colormap: str | None = "viridis"):
+    """
+    Build categorical label/id color mappings from a DLC-style header.
+
+    Notes
+    -----
+    - bodyparts always preserve header order
+    - individuals preserve header order, excluding blank single-animal placeholders
+    """
+    bodyparts = [str(x) for x in header.bodyparts]
+    individuals = [str(x) for x in header.individuals if str(x) != ""]
+
+    label_colors = build_color_cycle(len(bodyparts), colormap)
+    id_colors = build_color_cycle(len(individuals), colormap)
+
+    return {
+        "label": dict(zip(bodyparts, label_colors, strict=False)),
+        "id": dict(zip(individuals, id_colors, strict=False)),
+    }

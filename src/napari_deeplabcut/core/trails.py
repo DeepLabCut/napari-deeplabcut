@@ -111,7 +111,7 @@ def active_trails_color_property(
     return "label", labels, is_multi
 
 
-def _rgba_array(colors: list) -> np.ndarray:
+def _trails_rgba_array(colors: list) -> np.ndarray:
     out = []
     for c in colors:
         c = np.asarray(c, dtype=float)
@@ -168,7 +168,7 @@ def categorical_colormap_from_points_layer(
         palette = plt.get_cmap("tab20").colors
         color_list = [palette[i % len(palette)] for i in range(n_color)]
 
-    colors_rgba = _rgba_array(color_list)
+    colors_rgba = _trails_rgba_array(color_list)
 
     color_index = {u: i for i, u in enumerate(uniq_color)}
     codes = np.array([color_index[str(u)] for u in categories_for_color], dtype=int)

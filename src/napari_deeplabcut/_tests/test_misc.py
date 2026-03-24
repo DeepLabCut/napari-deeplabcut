@@ -9,6 +9,7 @@ from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows, merge_multiple_scorers
 from napari_deeplabcut.core.io import load_config
+from napari_deeplabcut.keypoints import build_color_cycle
 
 
 # ----------------------------
@@ -296,7 +297,7 @@ def test_guarantee_multiindex_rows():
 # ----------------------------
 @pytest.mark.parametrize("n_colors", range(1, 11))
 def test_build_color_cycle(n_colors):
-    color_cycle = misc.build_color_cycle(n_colors)
+    color_cycle = build_color_cycle(n_colors)
     assert color_cycle.shape[0] == n_colors
     # Test whether all colors are different
     assert len(set(map(tuple, color_cycle))) == n_colors
