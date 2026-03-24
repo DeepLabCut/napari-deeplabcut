@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/napari_compat/points_layer.py
 from __future__ import annotations
 
 import logging
@@ -48,12 +49,16 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
 
     # Add colormap selector (guarded)
     try:
-        colormap_selector = dropdown_cls(plt_module.colormaps, point_controls)
+        cmap_source = plt_module.colormaps
+        if callable(cmap_source):
+            cmap_source = cmap_source()
+        colormap_selector = dropdown_cls(cmap_source, point_controls)
         colormap_selector.update_to(layer.metadata.get("colormap_name", "viridis"))
         # caller wires signal to its handler; keep this compat layer minimal
         point_controls.layout().addRow("colormap", colormap_selector)
         return colormap_selector
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to add colormap selector: %r", e, exc_info=True)
         return None
 
 
