@@ -113,6 +113,40 @@ def multi_points_layer():
 
 
 @pytest.fixture
+def three_id_points_layer():
+    data = np.array(
+        [
+            [0, 10, 20],
+            [0, 12, 22],
+            [0, 14, 24],
+            [1, 11, 21],
+            [1, 13, 23],
+            [1, 15, 25],
+        ],
+        dtype=float,
+    )
+    labels = ["nose", "nose", "nose", "nose", "nose", "nose"]
+    ids = ["mouseA", "mouseB", "mouseC", "mouseA", "mouseB", "mouseC"]
+    face_color_cycles = {
+        "label": {
+            "nose": [0.9, 0.1, 0.1, 1.0],
+        },
+        "id": {
+            "mouseA": [1.0, 0.0, 0.0, 1.0],
+            "mouseB": [0.0, 1.0, 0.0, 1.0],
+            "mouseC": [0.0, 0.0, 1.0, 1.0],
+        },
+    }
+    return _make_points(
+        data,
+        labels=labels,
+        ids=ids,
+        face_color_cycles=face_color_cycles,
+        colormap_name="viridis",
+    )
+
+
+@pytest.fixture
 def no_label_points_layer():
     data = np.array([[0, 1, 2], [1, 2, 3]], dtype=float)
     return _make_points(
@@ -324,6 +358,47 @@ def test_categorical_colormap_from_points_layer_single_category_duplicates_color
     )
     np.testing.assert_allclose(np.asarray(cmap.colors), expected_colors)
     np.testing.assert_allclose(np.asarray(cmap.controls), np.array([0.0, 1.0]))
+
+
+def test_categorical_colormap_maps_three_individual_ids_to_three_distinct_colors(three_id_points_layer):
+    categories = np.array(["mouseA", "mouseB", "mouseC"], dtype=object)
+
+    cmap, uniq_color, codes_norm = categorical_colormap_from_points_layer(
+        three_id_points_layer,
+        "id",
+        categories,
+    )
+
+    assert uniq_color == ["mouseA", "mouseB", "mouseC"]
+
+    mapped = np.asarray(cmap.map(codes_norm))
+    unique_rows = np.unique(np.round(mapped, decimals=8), axis=0)
+
+    # Regression guard: every category must map to a distinct RGBA color
+    assert unique_rows.shape[0] == 3
+
+    expected = np.array(
+        [
+            [1.0, 0.0, 0.0, 1.0],  # mouseA
+            [0.0, 1.0, 0.0, 1.0],  # mouseB
+            [0.0, 0.0, 1.0, 1.0],  # mouseC
+        ],
+        dtype=float,
+    )
+    np.testing.assert_allclose(mapped, expected)
+
+
+def test_build_trails_payload_three_individuals_maps_to_distinct_colors(three_id_points_layer):
+    payload = build_trails_payload(three_id_points_layer, keypoints.ColorMode.INDIVIDUAL)
+
+    assert payload.color_by == "id_codes"
+    cmap = payload.colormaps_dict["id_codes"]
+    codes = payload.properties["id_codes"]
+
+    mapped = np.asarray(cmap.map(codes[:3]))
+    unique_rows = np.unique(np.round(mapped, decimals=8), axis=0)
+
+    assert unique_rows.shape[0] == 3
 
 
 def test_categorical_colormap_from_points_layer_falls_back_to_tab20(monkeypatch, multi_points_layer):
