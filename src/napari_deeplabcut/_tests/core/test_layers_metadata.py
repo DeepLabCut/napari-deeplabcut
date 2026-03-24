@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.core import keypoints
 from napari_deeplabcut.core.layers import is_machine_layer, populate_keypoint_layer_properties
 
 
@@ -23,7 +24,6 @@ class HeaderStub:
 @pytest.fixture
 def patch_color_cycles(monkeypatch):
     """Make build_color_cycles deterministic and independent of colormap internals."""
-    import napari_deeplabcut.core.layers as layers_mod
 
     def fake_build_color_cycles(header, colormap):
         # Must return cycles for both candidate face_color properties.
@@ -32,7 +32,7 @@ def patch_color_cycles(monkeypatch):
             "id": {"": "gray", "animal1": "green"},
         }
 
-    monkeypatch.setattr(layers_mod.misc, "build_color_cycles", fake_build_color_cycles)
+    monkeypatch.setattr(keypoints, "build_color_cycles", fake_build_color_cycles)
 
 
 # -----------------------------------------------------------------------------

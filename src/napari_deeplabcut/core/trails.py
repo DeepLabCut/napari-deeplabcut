@@ -9,8 +9,8 @@ import numpy as np
 from napari.layers import Points, Tracks
 from napari.utils.colormaps import Colormap
 
-from napari_deeplabcut import keypoints
 from napari_deeplabcut.config.models import TrailsDisplayConfig
+from napari_deeplabcut.core import keypoints
 
 
 @dataclass(frozen=True)

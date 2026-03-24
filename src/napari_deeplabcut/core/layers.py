@@ -13,7 +13,7 @@ except Exception:  # pragma: no cover
     Image = Points = Shapes = Tracks = Layer = object  # type: ignore
 
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
-from napari_deeplabcut.keypoints import build_color_cycles
+from napari_deeplabcut.core.keypoints import build_color_cycles
 
 T = TypeVar("T")
 

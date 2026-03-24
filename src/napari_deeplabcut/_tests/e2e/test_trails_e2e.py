@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 from napari.layers import Tracks
 
-from napari_deeplabcut import keypoints
 from napari_deeplabcut._widgets import KeypointControls
+from napari_deeplabcut.core import keypoints
 
 
 def _open_multianimal_points(viewer, tmp_path: Path, *, n_animals: int = 3, n_kpts: int = 2, n_frames: int = 4):

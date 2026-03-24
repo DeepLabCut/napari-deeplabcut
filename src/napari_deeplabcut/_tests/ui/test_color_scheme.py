@@ -4,12 +4,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from napari_deeplabcut import keypoints
 from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.config.settings import (
     DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP,
     DEFAULT_SINGLE_ANIMAL_CMAP,
 )
+from napari_deeplabcut.core import keypoints
 from napari_deeplabcut.ui.color_scheme_display import (
     ColorSchemeDisplay,
     ColorSchemePanel,

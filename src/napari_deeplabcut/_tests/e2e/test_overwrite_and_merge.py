@@ -27,8 +27,8 @@ def test_config_first_hazard_regression_no_silent_deletion(make_napari_viewer, q
     assert np.isnan(_get_coord_from_df(pre, "bodypart2", "x"))
 
     viewer = make_napari_viewer()
-    from napari_deeplabcut import keypoints
     from napari_deeplabcut._widgets import KeypointControls
+    from napari_deeplabcut.core import keypoints
 
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")

@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 from napari.layers import Points, Tracks
 
-from napari_deeplabcut import keypoints
 from napari_deeplabcut.config.models import TrailsDisplayConfig
+from napari_deeplabcut.core import keypoints
 from napari_deeplabcut.core.trails import (
     _trails_rgba_array,
     active_trails_color_property,

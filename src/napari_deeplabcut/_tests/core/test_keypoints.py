@@ -1,6 +1,6 @@
 import numpy as np
 
-from napari_deeplabcut import keypoints
+from napari_deeplabcut.core import keypoints
 
 
 def test_store_advance_step(store):

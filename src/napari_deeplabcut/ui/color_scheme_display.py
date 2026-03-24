@@ -18,10 +18,11 @@ from qtpy.QtWidgets import (
 )
 
 import napari_deeplabcut.core.io as io
-from napari_deeplabcut import keypoints, misc
+from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.config.settings import DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP, DEFAULT_SINGLE_ANIMAL_CMAP
-from napari_deeplabcut.keypoints import build_color_cycles
+from napari_deeplabcut.core import keypoints
+from napari_deeplabcut.core.keypoints import build_color_cycles
 from napari_deeplabcut.ui.labels_and_dropdown import LabelPair
 
 logger = logging.getLogger(__name__)

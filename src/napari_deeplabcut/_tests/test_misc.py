@@ -9,7 +9,7 @@ from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows, merge_multiple_scorers
 from napari_deeplabcut.core.io import load_config
-from napari_deeplabcut.keypoints import build_color_cycle
+from napari_deeplabcut.core.keypoints import build_color_cycle
 
 
 # ----------------------------

@@ -15,7 +15,7 @@ from napari_deeplabcut.config.settings import (
     DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP,
     DEFAULT_SINGLE_ANIMAL_CMAP,
 )
-from napari_deeplabcut.keypoints import build_color_cycles
+from napari_deeplabcut.core.keypoints import build_color_cycles
 from napari_deeplabcut.ui.color_scheme_display import _to_hex
 
 
@@ -288,7 +288,7 @@ def _set_or_add_bodypart_xy(points_layer: Points, store, bodypart: str, *, x: fl
         points_layer.data = data
         return
 
-    from napari_deeplabcut import keypoints
+    from napari_deeplabcut.core import keypoints
 
     store.current_keypoint = keypoints.Keypoint(bodypart, "")
     points_layer.add(np.array([float(frame), float(y), float(x)], dtype=float))

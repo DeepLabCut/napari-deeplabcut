@@ -10,8 +10,8 @@ from napari.layers import Image
 from qtpy.QtSvgWidgets import QSvgWidget
 from vispy import keys
 
-from napari_deeplabcut import _widgets, keypoints
-from napari_deeplabcut.core import io
+from napari_deeplabcut import _widgets
+from napari_deeplabcut.core import io, keypoints
 from napari_deeplabcut.core.io import populate_keypoint_layer_properties
 from napari_deeplabcut.ui.color_scheme_display import ColorSchemeDisplay
 from napari_deeplabcut.ui.labels_and_dropdown import KeypointsDropdownMenu, LabelPair

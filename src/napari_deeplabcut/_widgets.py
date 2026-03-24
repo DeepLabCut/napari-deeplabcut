@@ -39,10 +39,11 @@ from qtpy.QtWidgets import (
 )
 
 import napari_deeplabcut.core.io as io
-from napari_deeplabcut import keypoints, misc
+from napari_deeplabcut import misc
 from napari_deeplabcut._writer import _write_image
 from napari_deeplabcut.config import settings
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
+from napari_deeplabcut.core import keypoints
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.layers import (
     find_last_layer,
