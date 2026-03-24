@@ -67,6 +67,7 @@ from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.core.sidecar import get_default_scorer, set_default_scorer
 from napari_deeplabcut.core.trails import (
     build_trails_payload,
+    trails_geometry_signature,
     trails_signature,
 )
 from napari_deeplabcut.napari_compat import (
@@ -239,8 +240,9 @@ class KeypointControls(QWidget):
         self._trail_cb.setEnabled(False)
         self._trail_cb.stateChanged.connect(self._show_trails)
         self._trails = None
+        self._trails_geom_sig = None
+        self._trails_style_sig = None
         self._refreshing_trails = False
-        self._trails_sig = None
 
         self._mpl_docked = False
         self._matplotlib_canvas = KeypointMatplotlibCanvas(self.viewer)
@@ -830,6 +832,78 @@ class KeypointControls(QWidget):
         show = self._view_scheme_cb.isChecked()
         self._color_scheme_display.setVisible(show)
 
+    def _snapshot_selection(self):
+        selected = [layer for layer in self.viewer.layers.selection if layer in self.viewer.layers]
+        active = self.viewer.layers.selection.active
+        return selected, active
+
+    def _restore_selection(self, selected, active):
+        try:
+            self.viewer.layers.selection.clear()
+            for layer in selected:
+                if layer in self.viewer.layers:
+                    self.viewer.layers.selection.add(layer)
+            if active in self.viewer.layers:
+                self.viewer.layers.selection.active = active
+        except Exception:
+            pass
+
+    def _resolved_trails_cycle(self, layer: Points) -> dict:
+        """
+        Return the resolved category->color mapping used by the points layer,
+        so trails match the exact displayed colors.
+        """
+        resolver = self._color_scheme_panel._resolver
+        cycles = resolver.get_face_color_cycles(layer) or {}
+
+        prop = resolver.get_active_color_property(layer)
+        props = getattr(layer, "properties", {}) or {}
+        values = props.get(prop)
+
+        if prop == "id":
+            try:
+                vals = np.asarray(values, dtype=object).ravel() if values is not None else np.array([], dtype=object)
+                if len(vals) == 0 or all(v in ("", None) or misc._is_nan_value(v) for v in vals):
+                    prop = "label"
+            except Exception:
+                prop = "label"
+
+        cycle = cycles.get(prop, {}) or {}
+        return {str(k): np.asarray(v, dtype=float) for k, v in cycle.items()}
+
+    def _update_trails_style(self) -> None:
+        """Update trails color mapping in-place without rebuilding geometry."""
+        if self._trails is None:
+            return
+
+        pts_layer = self._get_trails_source_layer()
+        if pts_layer is None:
+            return
+
+        try:
+            payload = build_trails_payload(
+                pts_layer,
+                self._color_mode,
+                cycle_override=self._resolved_trails_cycle(pts_layer),
+            )
+        except ValueError:
+            return
+
+        try:
+            self._trails.properties = payload.properties
+            self._trails.color_by = payload.color_by
+
+            if hasattr(self._trails, "colormaps_dict"):
+                self._trails.colormaps_dict = payload.colormaps_dict
+            elif payload.color_by in payload.colormaps_dict:
+                self._trails.colormap = payload.colormaps_dict[payload.color_by]
+
+            self._trails.visible = True
+            self._trails_style_sig = payload.signature
+        except Exception:
+            # Fallback to full rebuild if in-place update is not supported
+            self._refresh_trails()
+
     def _remove_trails_layer(self) -> None:
         """Remove trails without triggering checkbox side effects."""
         if self._trails is None:
@@ -842,16 +916,20 @@ class KeypointControls(QWidget):
             pass
         finally:
             self._trails = None
-            self._trails_sig = None
+            self._trails_geom_sig = None
+            self._trails_style_sig = None
             self._refreshing_trails = False
 
     def _refresh_trails(self) -> None:
-        """Rebuild trails if the checkbox is enabled."""
         if not self._trail_cb.isChecked():
             return
 
-        self._remove_trails_layer()
-        self._create_trails()
+        selected, active = self._snapshot_selection()
+        try:
+            self._remove_trails_layer()
+            self._create_trails()
+        finally:
+            self._restore_selection(selected, active)
 
     def _show_trails(self, state):
         checked = Qt.CheckState(state) == Qt.CheckState.Checked
@@ -864,18 +942,23 @@ class KeypointControls(QWidget):
         if not self._stores:
             return
 
-        store = list(self._stores.values())[0]
-        pts_layer = store.layer
+        pts_layer = self._get_trails_source_layer()
         if pts_layer is None:
             return
+
+        geom_sig = trails_geometry_signature(pts_layer)
+        style_sig = trails_signature(pts_layer, self._color_mode)
 
         if self._trails is None:
             self._create_trails()
             return
 
-        sig = trails_signature(pts_layer, self._color_mode)
-        if self._trails_sig != sig:
+        if self._trails_geom_sig != geom_sig:
             self._refresh_trails()
+            return
+
+        if self._trails_style_sig != style_sig:
+            self._update_trails_style()
             return
 
         self._trails.visible = True
@@ -884,28 +967,51 @@ class KeypointControls(QWidget):
         if self._trails is not None or not self._stores:
             return
 
-        store = list(self._stores.values())[0]
-        pts_layer = store.layer
+        pts_layer = self._get_trails_source_layer()
         if pts_layer is None:
             return
 
+        selected, active = self._snapshot_selection()
         try:
-            payload = build_trails_payload(pts_layer, self._color_mode)
+            payload = build_trails_payload(
+                pts_layer,
+                self._color_mode,
+                cycle_override=self._resolved_trails_cycle(pts_layer),
+            )
         except ValueError:
             return
 
-        self._trails = self.viewer.add_tracks(
-            payload.tracks_data,
-            properties=payload.properties,
-            color_by=payload.color_by,
-            colormaps_dict=payload.colormaps_dict,
-            tail_length=50,
-            head_length=50,
-            tail_width=6,
-            name="trails",
-        )
-        self._trails.visible = True
-        self._trails_sig = payload.signature
+        try:
+            self._trails = self.viewer.add_tracks(
+                payload.tracks_data,
+                properties=payload.properties,
+                color_by=payload.color_by,
+                colormaps_dict=payload.colormaps_dict,
+                tail_length=50,
+                head_length=50,
+                tail_width=6,
+                name="trails",
+                metadata={"_source_points_layer_id": id(pts_layer)},
+            )
+            self._trails.visible = True
+            self._trails_geom_sig = payload.geometry_signature
+            self._trails_style_sig = payload.signature
+        finally:
+            self._restore_selection(selected, active)
+
+    def _get_trails_source_layer(self) -> Points | None:
+        active = self.viewer.layers.selection.active
+        if isinstance(active, Points) and active in self._stores:
+            return active
+
+        if self._trails is not None:
+            src_id = (self._trails.metadata or {}).get("_source_points_layer_id")
+            if src_id is not None:
+                for layer in self._stores:
+                    if id(layer) == src_id:
+                        return layer
+
+        return next(iter(self._stores.keys()), None)
 
     def _form_video_action_menu(self):
         group_box = QGroupBox("Video")
@@ -1236,13 +1342,15 @@ class KeypointControls(QWidget):
         elif isinstance(layer, Tracks):
             if getattr(self, "_refreshing_trails", False):
                 self._trails = None
-                self._trails_sig = None
+                self._trails_geom_sig = None
+                self._trails_style_sig = None
                 return
 
             self._trail_cb.setChecked(False)
             self._show_traj_plot_cb.setChecked(False)
             self._trails = None
-            self._trails_sig = None
+            self._trails_geom_sig = None
+            self._trails_style_sig = None
 
     def _ensure_promotion_save_target(self, layer: Points) -> bool:
         """Ensure a prediction/machine source layer has a GT save_target set.
@@ -1469,7 +1577,7 @@ class KeypointControls(QWidget):
             self._apply_points_coloring_from_metadata(layer)
 
         self._update_color_scheme()
-        if self._trail_cb.isChecked():
+        if self._trail_cb.isChecked() and self._trails is not None:
             self._refresh_trails()
 
     @register_points_action("Change labeling mode")
@@ -1519,7 +1627,7 @@ class KeypointControls(QWidget):
                 break
 
         self._update_color_scheme()
-        if self._trail_cb.isChecked():
+        if self._trail_cb.isChecked() and self._trails is not None:
             self._refresh_trails()
 
     def _is_multianimal(self, layer) -> bool:

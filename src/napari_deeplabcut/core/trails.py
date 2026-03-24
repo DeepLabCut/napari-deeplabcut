@@ -1,4 +1,5 @@
-# src/napari_deeplabcut/core/trails.py
+"""Helper functions for building trails layers from points layers."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -18,25 +19,55 @@ class TrailsPayload:
     color_by: str
     colormaps_dict: dict[str, Colormap]
     signature: tuple
+    geometry_signature: tuple
 
 
 def trails_signature(layer: Points, color_mode: str | keypoints.ColorMode) -> tuple:
-    """Small signature used to decide whether trails need rebuilding."""
+    """
+    Full signature used to decide whether trails style needs refreshing.
+
+    Includes:
+    - source layer identity
+    - active color mode
+    - configured colormap name
+    - number of vertices
+    - label/id contents
+    """
     props = getattr(layer, "properties", {}) or {}
-    labels = props.get("label")
-    ids = props.get("id")
+    labels = tuple(map(str, props.get("label", [])))
+    ids = tuple(map(str, props.get("id", [])))
 
     n_vertices = int(getattr(layer.data, "shape", [0])[0]) if layer.data is not None else 0
-    n_labels = len(labels) if labels is not None else 0
-    n_ids = len(ids) if ids is not None else 0
 
     return (
         id(layer),
         str(color_mode),
-        layer.metadata.get("colormap_name"),
+        (layer.metadata or {}).get("colormap_name"),
         n_vertices,
-        n_labels,
-        n_ids,
+        labels,
+        ids,
+    )
+
+
+def trails_geometry_signature(layer: Points) -> tuple:
+    """
+    Signature used to decide whether trails geometry must be rebuilt.
+
+    Includes:
+    - source layer identity
+    - raw data shape
+    - label/id contents (because they define grouping)
+    """
+    props = getattr(layer, "properties", {}) or {}
+    labels = tuple(map(str, props.get("label", [])))
+    ids = tuple(map(str, props.get("id", [])))
+    data_shape = tuple(np.asarray(layer.data).shape) if layer.data is not None else (0,)
+
+    return (
+        id(layer),
+        data_shape,
+        labels,
+        ids,
     )
 
 
@@ -95,15 +126,22 @@ def categorical_colormap_from_points_layer(
     layer: Points,
     color_prop: str,
     categories_for_color: np.ndarray,
+    *,
+    cycle_override: dict | None = None,
 ) -> tuple[Colormap, list[str], np.ndarray]:
     """
     Build a categorical zero-interpolation napari Colormap matching the points layer cycles.
 
-    Returns
-    -------
-    cmap
-    uniq_color
-    codes_norm
+    Parameters
+    ----------
+    layer
+        Source points layer.
+    color_prop
+        'id' or 'label'.
+    categories_for_color
+        Property values used for color coding.
+    cycle_override
+        Optional resolved category->color mapping to use instead of raw metadata.
     """
     uniq_color = list(dict.fromkeys(map(str, categories_for_color)))
     n_color = len(uniq_color)
@@ -111,8 +149,11 @@ def categorical_colormap_from_points_layer(
     if n_color == 0:
         raise ValueError("No categories found for trails coloring.")
 
-    face_cycles = (layer.metadata or {}).get("face_color_cycles", {})
-    cycle_dict = face_cycles.get(color_prop, {}) or {}
+    if cycle_override is not None:
+        cycle_dict = {str(k): np.asarray(v, dtype=float) for k, v in cycle_override.items()}
+    else:
+        face_cycles = (layer.metadata or {}).get("face_color_cycles", {})
+        cycle_dict = {str(k): np.asarray(v, dtype=float) for k, v in (face_cycles.get(color_prop, {}) or {}).items()}
 
     color_list = []
     for u in uniq_color:
@@ -174,9 +215,16 @@ def trails_track_ids(layer: Points, *, is_multi: bool) -> np.ndarray:
 def build_trails_payload(
     layer: Points,
     color_mode: str | keypoints.ColorMode,
+    *,
+    cycle_override: dict | None = None,
 ) -> TrailsPayload:
     color_prop, categories_for_color, is_multi = active_trails_color_property(layer, color_mode)
-    cmap, _, codes_norm = categorical_colormap_from_points_layer(layer, color_prop, categories_for_color)
+    cmap, _, codes_norm = categorical_colormap_from_points_layer(
+        layer,
+        color_prop,
+        categories_for_color,
+        cycle_override=cycle_override,
+    )
     track_ids = trails_track_ids(layer, is_multi=is_multi)
 
     tracks_data = np.c_[track_ids, layer.data]
@@ -188,4 +236,5 @@ def build_trails_payload(
         color_by=color_key,
         colormaps_dict={color_key: cmap},
         signature=trails_signature(layer, color_mode),
+        geometry_signature=trails_geometry_signature(layer),
     )
