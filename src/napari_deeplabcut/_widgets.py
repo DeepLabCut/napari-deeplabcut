@@ -1578,7 +1578,7 @@ class KeypointControls(QWidget):
 
         self._update_color_scheme()
         if self._trail_cb.isChecked() and self._trails is not None:
-            self._refresh_trails()
+            self._update_trails_style()
 
     @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):
@@ -1628,7 +1628,7 @@ class KeypointControls(QWidget):
 
         self._update_color_scheme()
         if self._trail_cb.isChecked() and self._trails is not None:
-            self._refresh_trails()
+            self._update_trails_style()
 
     def _is_multianimal(self, layer) -> bool:
         if layer is None or not isinstance(layer, Points):
