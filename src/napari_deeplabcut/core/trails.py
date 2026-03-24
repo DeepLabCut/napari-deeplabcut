@@ -170,11 +170,17 @@ def categorical_colormap_from_points_layer(
 
     colors_rgba = _rgba_array(color_list)
 
+    color_index = {u: i for i, u in enumerate(uniq_color)}
+    codes = np.array([color_index[str(u)] for u in categories_for_color], dtype=int)
+
     if n_color == 1:
-        controls = np.array([0.0, 1.0], dtype=float)
+        # zero-interpolation colormap still expects len(controls) == len(colors) + 1
         colors_rgba = np.vstack([colors_rgba[0], colors_rgba[0]])
+        controls = np.array([0.0, 0.5, 1.0], dtype=float)
+        codes_norm = np.full(len(categories_for_color), 0.5, dtype=float)
     else:
         controls = np.linspace(0.0, 1.0, n_color + 1, dtype=float)
+        codes_norm = ((codes + 0.5) / n_color).astype(float)
 
     cmap = Colormap(
         colors=colors_rgba,
@@ -182,10 +188,6 @@ def categorical_colormap_from_points_layer(
         name=f"{color_prop}_categorical",
         interpolation="zero",
     )
-
-    color_index = {u: i for i, u in enumerate(uniq_color)}
-    codes = np.array([color_index[str(u)] for u in categories_for_color], dtype=int)
-    codes_norm = (codes / float(max(n_color - 1, 1))).astype(float)
 
     return cmap, uniq_color, codes_norm
 

@@ -980,7 +980,14 @@ class KeypointControls(QWidget):
             return
 
         try:
-            self._trails.properties = payload.properties
+            new_props = dict(getattr(self._trails, "properties", {}) or {})
+            new_props.update(payload.properties)
+            self._trails.properties = new_props
+
+            new_cmaps = dict(getattr(self._trails, "colormaps_dict", {}) or {})
+            new_cmaps.update(payload.colormaps_dict)
+            self._trails.colormaps_dict = new_cmaps
+
             self._trails.color_by = payload.color_by
 
             if hasattr(self._trails, "colormaps_dict"):
