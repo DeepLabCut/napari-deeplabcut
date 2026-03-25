@@ -6,6 +6,7 @@ from napari.layers import Points, Tracks
 
 from napari_deeplabcut.config.models import TrailsDisplayConfig
 from napari_deeplabcut.core import keypoints
+from napari_deeplabcut.core.layer_versioning import layer_change_generations
 from napari_deeplabcut.core.trails import (
     _trails_rgba_array,
     active_trails_color_property,
@@ -182,22 +183,21 @@ def tracks_layer():
 
 def test_trails_signature_contains_expected_fields(single_points_layer):
     sig = trails_signature(single_points_layer, keypoints.ColorMode.BODYPART)
+    generations = layer_change_generations(single_points_layer)
 
     assert sig[0] == id(single_points_layer)
     assert sig[1] == str(keypoints.ColorMode.BODYPART)
     assert sig[2] == "magma"
-    assert sig[3] == 4
-    assert sig[4] == ("nose", "tail", "nose", "tail")
-    assert sig[5] == ("", "", "", "")
+    assert sig[3] == generations.content
+    assert sig[4] == generations.presentation
 
 
 def test_trails_geometry_signature_contains_shape_and_properties(single_points_layer):
     sig = trails_geometry_signature(single_points_layer)
+    generations = layer_change_generations(single_points_layer)
 
     assert sig[0] == id(single_points_layer)
-    assert sig[1] == (4, 3)
-    assert sig[2] == ("nose", "tail", "nose", "tail")
-    assert sig[3] == ("", "", "", "")
+    assert sig[1] == generations.content
 
 
 @pytest.mark.parametrize(
