@@ -45,6 +45,7 @@ from napari_deeplabcut.config import settings
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core import keypoints
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
+from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
 from napari_deeplabcut.core.layers import (
     find_last_layer,
     get_first_points_layer,
@@ -405,6 +406,7 @@ class KeypointControls(QWidget):
             )
             _layer.metadata["face_color_cycles"] = new_metadata["face_color_cycles"]
             _layer.metadata["colormap_name"] = new_metadata.get("colormap_name", _layer.metadata.get("colormap_name"))
+            mark_layer_presentation_changed(_layer)
             self._apply_points_coloring_from_metadata(_layer)
             store.layer = _layer
 
@@ -1410,6 +1412,8 @@ class KeypointControls(QWidget):
 
             if res.accept_paths_update:
                 layer.metadata["paths"] = list(new_paths)
+                if isinstance(layer, Points):
+                    mark_layer_presentation_changed(layer)
 
             # Final debug logging
             if res.depth_used is None:
@@ -1727,6 +1731,7 @@ class KeypointControls(QWidget):
                 continue
 
             layer.metadata["config_colormap"] = colormap_name
+            mark_layer_presentation_changed(layer)
             self._apply_points_coloring_from_metadata(layer)
 
         self._update_color_scheme()

@@ -11,6 +11,7 @@ from napari.utils.colormaps import Colormap
 
 from napari_deeplabcut.config.models import TrailsDisplayConfig
 from napari_deeplabcut.core import keypoints
+from napari_deeplabcut.core.layer_versioning import layer_change_generations
 
 
 @dataclass(frozen=True)
@@ -31,22 +32,16 @@ def trails_signature(layer: Points, color_mode: str | keypoints.ColorMode) -> tu
     - source layer identity
     - active color mode
     - configured colormap name
-    - number of vertices
-    - label/id contents
+    - content/presentation change generations
     """
-    props = getattr(layer, "properties", {}) or {}
-    labels = tuple(map(str, props.get("label", [])))
-    ids = tuple(map(str, props.get("id", [])))
-
-    n_vertices = int(getattr(layer.data, "shape", [0])[0]) if layer.data is not None else 0
+    generations = layer_change_generations(layer)
 
     return (
         id(layer),
         str(color_mode),
         (layer.metadata or {}).get("colormap_name"),
-        n_vertices,
-        labels,
-        ids,
+        generations.content,
+        generations.presentation,
     )
 
 
@@ -56,19 +51,13 @@ def trails_geometry_signature(layer: Points) -> tuple:
 
     Includes:
     - source layer identity
-    - raw data shape
-    - label/id contents (because they define grouping)
+    - content change generation
     """
-    props = getattr(layer, "properties", {}) or {}
-    labels = tuple(map(str, props.get("label", [])))
-    ids = tuple(map(str, props.get("id", [])))
-    data_shape = tuple(np.asarray(layer.data).shape) if layer.data is not None else (0,)
+    generations = layer_change_generations(layer)
 
     return (
         id(layer),
-        data_shape,
-        labels,
-        ids,
+        generations.content,
     )
 
 
