@@ -1035,6 +1035,24 @@ class KeypointControls(QWidget):
         if not checked:
             if self._trails is not None:
                 self._trails.visible = False
+                # Persist `visible=False` to the trails display config
+                try:
+                    pts_layer = self._get_trails_source_layer()
+                    if pts_layer is not None:
+                        anchor = self._get_trails_anchor(pts_layer)
+                        if anchor:
+                            cfg = get_trails_config(anchor)
+                            if cfg is None and self._trails is not None:
+                                cfg = display_config_from_tracks_layer(self._trails)
+                            if cfg is not None:
+                                cfg = cfg.model_copy(update={"visible": False})
+                                set_trails_config(anchor, cfg)
+                except Exception:
+                    # Do not break UI behavior if persistence fails
+                    logger.debug(
+                        "Failed to persist trails visibility state on hide.",
+                        exc_info=True,
+                    )
             return
 
         if not self._stores:
