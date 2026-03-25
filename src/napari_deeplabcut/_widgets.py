@@ -16,9 +16,10 @@ from types import MethodType
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from napari.layers import Image, Points, Shapes, Tracks
+from napari.layers import Image, Points, Tracks
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
+from napari.utils.notifications import show_warning
 from pydantic import ValidationError
 from qtpy.QtCore import QSettings, Qt, QTimer
 from qtpy.QtGui import QAction
@@ -61,10 +62,7 @@ from napari_deeplabcut.core.metadata import (
     sync_points_from_image,
     write_points_meta,
 )
-from napari_deeplabcut.core.project_paths import (
-    PathMatchPolicy,
-    canonicalize_path,
-)
+from napari_deeplabcut.core.project_paths import PathMatchPolicy, canonicalize_path, infer_dlc_project_from_image_layer
 from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.core.sidecar import (
     get_default_scorer,
@@ -88,6 +86,10 @@ from napari_deeplabcut.napari_compat import (
 )
 from napari_deeplabcut.napari_compat.points_layer import make_paste_data
 from napari_deeplabcut.ui.color_scheme_display import ColorSchemePanel
+from napari_deeplabcut.ui.cropping import (
+    build_video_action_menu,
+    store_crop_coordinates,
+)
 from napari_deeplabcut.ui.dialogs import Shortcuts, Tutorial
 from napari_deeplabcut.ui.labels_and_dropdown import (
     DropdownMenu,
@@ -224,7 +226,10 @@ class KeypointControls(QWidget):
         self._layer_to_menu = {}
         self.viewer.layers.selection.events.active.connect(self.on_active_layer_change)
 
-        self._video_group = self._form_video_action_menu()
+        self._video_group = build_video_action_menu(
+            on_extract_frame=self._extract_single_frame,
+            on_store_crop=self._store_crop_coordinates,
+        )
         self.video_widget = self.viewer.window.add_dock_widget(self._video_group, name="video", area="right")
         self.video_widget.setVisible(False)
 
@@ -361,6 +366,20 @@ class KeypointControls(QWidget):
             self.video_widget.setVisible(True)
 
         self._update_image_meta_from_layer(layer)
+
+        if not self._project_path:
+            self._cache_project_path_from_image_layer(layer)
+            if self._project_path is not None:
+                try:
+                    layer.metadata = dict(layer.metadata or {})
+                    layer.metadata.setdefault("project", self._project_path)
+                except Exception:
+                    logger.debug(
+                        "Failed to set project path metadata on image layer %r",
+                        getattr(layer, "name", layer),
+                        exc_info=True,
+                    )
+
         self._sync_points_layers_from_image_meta()
 
         if reorder and index is not None:
@@ -1143,18 +1162,6 @@ class KeypointControls(QWidget):
 
         return next(iter(self._stores.keys()), None)
 
-    def _form_video_action_menu(self):
-        group_box = QGroupBox("Video")
-        layout = QVBoxLayout()
-        extract_button = QPushButton("Extract frame")
-        extract_button.clicked.connect(self._extract_single_frame)
-        layout.addWidget(extract_button)
-        crop_button = QPushButton("Store crop coordinates")
-        crop_button.clicked.connect(self._store_crop_coordinates)
-        layout.addWidget(crop_button)
-        group_box.setLayout(layout)
-        return group_box
-
     def _form_help_buttons(self):
         layout = QVBoxLayout()
         help_buttons_layout = QHBoxLayout()
@@ -1204,30 +1211,56 @@ class KeypointControls(QWidget):
                     df = df[~df.index.duplicated(keep="first")]
                 df.to_hdf(filepath, key="df_with_missing")
 
-    def _store_crop_coordinates(self, *args):
-        if not (project_path := self._project_path):
+    def _cache_project_path_from_image_layer(self, layer: Image) -> None:
+        """Best-effort cache of project path from an image/video layer."""
+        try:
+            ctx = infer_dlc_project_from_image_layer(layer, prefer_project_root=True)
+        except Exception:
+            logger.debug(
+                "Failed to infer DLC project context from image layer %r",
+                getattr(layer, "name", layer),
+                exc_info=True,
+            )
             return
-        for layer in self.viewer.layers:
-            if isinstance(layer, Shapes):
-                try:
-                    ind = layer.shape_type.index("rectangle")
-                except ValueError:
-                    return
-                bbox = layer.data[ind][:, 1:]
-                h = self.viewer.dims.range[2][1]
-                bbox[:, 0] = h - bbox[:, 0]
-                bbox = np.clip(bbox, 0, a_max=None).astype(int)
-                y1, x1 = bbox.min(axis=0)
-                y2, x2 = bbox.max(axis=0)
-                temp = {"crop": ", ".join(map(str, [x1, x2, y1, y2]))}
-                config_path = os.path.join(project_path, "config.yaml")
-                cfg = io.load_config(config_path)
-                video_name = self._image_meta.name
-                if not video_name:
-                    return
-                cfg["video_sets"][os.path.join(project_path, "videos", video_name)] = temp
-                io.write_config(config_path, cfg)
-                break
+
+        project_path = ctx.project_root or ctx.root_anchor
+        if project_path is None:
+            return
+
+        self._project_path = str(project_path)
+        try:
+            layer.metadata = dict(layer.metadata or {})
+            layer.metadata.setdefault("project", self._project_path)
+        except Exception:
+            logger.debug(
+                "Failed to set project path metadata on image layer %r",
+                getattr(layer, "name", layer),
+                exc_info=True,
+            )
+
+    def _store_crop_coordinates(self, *args):
+        image_layer = find_last_layer(self.viewer, Image)
+        if image_layer is None:
+            self.viewer.status = "No image/video layer available for crop export."
+            return
+
+        # Recover best-effort project context if we do not already have one cached.
+        if not self._project_path:
+            self._cache_project_path_from_image_layer(image_layer)
+
+        ok = store_crop_coordinates(
+            self.viewer,
+            image_layer=image_layer,
+            explicit_project_path=self._project_path,
+            fallback_video_name=self._image_meta.name,
+        )
+
+        if ok:
+            self.viewer.status = "Crop coordinates written to config.yaml"
+        else:
+            msg = "Could not determine project/config to write crop coordinates, or crop rectangle was not valid."
+            show_warning(msg)
+            self.viewer.status = msg
 
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)

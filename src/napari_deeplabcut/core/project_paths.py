@@ -23,7 +23,7 @@ from collections.abc import Iterable
 from enum import Enum
 from pathlib import Path
 
-from napari_deeplabcut.config.models import DLCProjectContext
+from napari_deeplabcut.config.models import DLCProjectContext, PointsMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +201,41 @@ def should_force_dlc_reader(paths: str | Path | Iterable[str | Path]) -> bool:
 # -----------------------------------------------------------------------------
 # Root-anchor inference utilities
 # -----------------------------------------------------------------------------
+def _collect_anchor_candidates(
+    *values: str | Path | None,
+) -> list[Path]:
+    anchors: list[Path] = []
+    for value in values:
+        anchor = normalize_anchor_candidate(value)
+        if anchor is not None and anchor not in anchors:
+            anchors.append(anchor)
+    return anchors
+
+
+def _is_labeled_data_dataset_folder(path: Path | None) -> bool:
+    if path is None:
+        return False
+    lowered = [part.lower() for part in path.parts]
+    return "labeled-data" in lowered and path.name.lower() != "labeled-data"
+
+
+def _extract_dataset_name_from_paths(paths: Iterable[str | Path]) -> str | None:
+    for value in paths:
+        try:
+            text = str(value).replace("\\", "/")
+        except Exception:
+            continue
+        parts = [p for p in text.split("/") if p]
+        lowered = [p.lower() for p in parts]
+        try:
+            idx = lowered.index("labeled-data")
+        except ValueError:
+            continue
+        if idx + 1 < len(parts):
+            return parts[idx + 1]
+    return None
+
+
 def normalize_anchor_candidate(value: str | Path | None) -> Path | None:
     """Return a normalized directory anchor from a file/folder candidate."""
     if value is None:
@@ -243,17 +278,7 @@ def infer_dlc_project(
         If True, root_anchor prefers the folder containing config.yaml.
         Otherwise it prefers the first valid anchor candidate.
     """
-    anchors: list[Path] = []
-
-    if explicit_root is not None:
-        a = normalize_anchor_candidate(explicit_root)
-        if a is not None:
-            anchors.append(a)
-
-    for cand in anchor_candidates:
-        a = normalize_anchor_candidate(cand)
-        if a is not None and a not in anchors:
-            anchors.append(a)
+    anchors = _collect_anchor_candidates(explicit_root, *anchor_candidates)
 
     dataset_folder = None
     for cand in dataset_candidates:
@@ -262,7 +287,6 @@ def infer_dlc_project(
             dataset_folder = d
             break
 
-    # First try to find config from anchors
     for anchor in anchors:
         cfg = find_nearest_config(anchor, max_levels=max_levels)
         if cfg is not None:
@@ -275,10 +299,8 @@ def infer_dlc_project(
                 dataset_folder=dataset_folder,
             )
 
-    # No config found: still return best-effort context
-    root_anchor = anchors[0] if anchors else dataset_folder
     return DLCProjectContext(
-        root_anchor=root_anchor,
+        root_anchor=anchors[0] if anchors else dataset_folder,
         project_root=None,
         config_path=None,
         dataset_folder=dataset_folder,
@@ -286,106 +308,27 @@ def infer_dlc_project(
 
 
 def infer_labeled_data_folder_from_paths(
-    paths: list[str | Path] | tuple[str | Path, ...],
+    paths: Iterable[str | Path],
     *,
     project_root: str | Path | None = None,
     fallback_root: str | Path | None = None,
 ) -> Path | None:
     """
     Infer a DLC labeled-data/<dataset> folder from path hints.
-
-    Accepts canonicalized or partially relative paths such as:
-      labeled-data/test/img000.png
     """
-    # If fallback_root already looks like a labeled-data dataset folder, use it
-    for root_like in (fallback_root,):
-        anchor = normalize_anchor_candidate(root_like)
-        if anchor is not None:
-            lowered = [part.lower() for part in anchor.parts]
-            if "labeled-data" in lowered and anchor.name.lower() != "labeled-data":
-                return anchor
+    fallback = normalize_anchor_candidate(fallback_root)
+    if _is_labeled_data_dataset_folder(fallback):
+        return fallback
 
-    dataset_name = None
-    for s in paths:
-        try:
-            text = str(s).replace("\\", "/")
-        except Exception:
-            continue
-        parts = [p for p in text.split("/") if p]
-        lowered = [p.lower() for p in parts]
-        try:
-            idx = lowered.index("labeled-data")
-        except ValueError:
-            continue
-        if idx + 1 < len(parts):
-            dataset_name = parts[idx + 1]
-            break
-
+    dataset_name = _extract_dataset_name_from_paths(paths)
     if not dataset_name:
         return None
 
     proj = normalize_anchor_candidate(project_root)
-    if proj is not None:
-        return proj / "labeled-data" / dataset_name
-
-    return None
-
-
-def infer_dlc_project_from_opened(
-    opened: str | Path,
-    *,
-    explicit_root: str | Path | None = None,
-    prefer_project_root: bool = True,
-    max_levels: int = 5,
-) -> DLCProjectContext:
-    return infer_dlc_project(
-        anchor_candidates=[opened],
-        dataset_candidates=[],
-        explicit_root=explicit_root,
-        prefer_project_root=prefer_project_root,
-        max_levels=max_levels,
-    )
-
-
-def infer_root_anchor(
-    opened: str | Path,
-    *,
-    explicit_root: str | Path | None = None,
-) -> str | None:
-    """Infer a best-effort root anchor given a user-opened path.
-
-    Parameters
-    ----------
-    opened:
-        Path that the user opened (file or directory).
-    explicit_root:
-        If provided, this wins and is returned as-is.
-
-    Returns
-    -------
-    str | None
-        A directory path to use as anchor, or None if inference fails.
-
-    Notes
-    -----
-    This is intentionally conservative and does not search globally.
-    """
-    if explicit_root:
-        return str(Path(explicit_root))
-
-    try:
-        p = Path(opened)
-    except Exception:
+    if proj is None:
         return None
 
-    if p.is_dir():
-        return str(p)
-
-    if p.is_file():
-        return str(p.parent)
-
-    # If path does not exist (e.g., virtual/remote), give up.
-    return None
+    return proj / "labeled-data" / dataset_name
 
 
 def find_nearest_config(
@@ -412,68 +355,104 @@ def find_nearest_config(
     return None
 
 
-def find_nearest_project_root(
-    start: str | Path,
-    *,
-    max_levels: int = 5,
-) -> str | None:
-    """Walk parents upwards to find a folder containing config.yaml.
-
-    This is used as an *optional* enhancement. The result should be treated as
-    a candidate anchor, not as a required project root.
-
-    Parameters
-    ----------
-    start:
-        Starting file or directory.
-    max_levels:
-        Maximum number of parent levels to inspect.
-
-    Returns
-    -------
-    str | None
-        Directory containing config.yaml if found, else None.
-    """
-    cfg = find_nearest_config(start, max_levels=max_levels)
-    return str(cfg.parent) if cfg else None
-
-
-def choose_anchor_candidate(
-    *,
+# -----------------------------------------------------------------------------
+# Source-specific adapters
+# -----------------------------------------------------------------------------
+def infer_dlc_project_from_opened(
     opened: str | Path,
+    *,
     explicit_root: str | Path | None = None,
-    prefer_project_root: bool = False,
-) -> str | None:
-    """Choose a root anchor candidate.
+    prefer_project_root: bool = True,
+    max_levels: int = 5,
+) -> DLCProjectContext:
+    return infer_dlc_project(
+        anchor_candidates=[opened],
+        explicit_root=explicit_root,
+        prefer_project_root=prefer_project_root,
+        max_levels=max_levels,
+    )
 
-    Strategy
-    --------
-    1) If explicit_root provided -> use it.
-    2) Infer anchor from opened path (file parent or directory).
-    3) If prefer_project_root is True and a nearby config.yaml exists ->
-       return the nearest project root.
 
-    This does *not* validate existence of expected DLC files; callers may.
+def infer_dlc_project_from_points_meta(
+    pts_meta: PointsMetadata,
+    *,
+    prefer_project_root: bool = True,
+    max_levels: int = 5,
+) -> DLCProjectContext:
     """
-    if explicit_root:
-        return str(Path(explicit_root))
+    Infer DLC dataset folder (…/labeled-data/<dataset>) from PointsMetadata.
 
-    anchor = infer_root_anchor(opened)
-    if not anchor:
-        return None
+    Uses:
+      - pts_meta.project (config parent) as project root
+      - pts_meta.paths (canonicalized relpaths like labeled-data/test/img000.png)
+      - pts_meta.root as a fallback hint
 
-    if prefer_project_root:
-        pr = find_nearest_project_root(anchor)
-        if pr:
-            return pr
-
-    return anchor
+    Args:
+        pts_meta: PointsMetadata object containing project-related metadata.
+        prefer_project_root: If True, root_anchor prefers the folder containing config.yaml.
+        max_levels: Maximum number of levels to search upward for config.yaml.
 
 
-def anchor_contains_dlc_artifacts(anchor: str | Path) -> bool:
-    """Return True if the anchor folder appears to contain DLC artifacts."""
+    Returns a DLCProjectContext object representing the inferred project context.
+    """
+    project = getattr(pts_meta, "project", None)
+    root = getattr(pts_meta, "root", None)
+    paths = getattr(pts_meta, "paths", None) or []
+
+    dataset_folder = infer_labeled_data_folder_from_paths(
+        paths,
+        project_root=project,
+        fallback_root=root,
+    )
+
+    return infer_dlc_project(
+        anchor_candidates=[project, root, dataset_folder],
+        dataset_candidates=[dataset_folder],
+        explicit_root=None,
+        prefer_project_root=prefer_project_root,
+        max_levels=max_levels,
+    )
+
+
+def infer_dlc_project_from_image_layer(
+    layer,
+    *,
+    prefer_project_root: bool = True,
+    max_levels: int = 5,
+) -> DLCProjectContext:
+    """Best-effort inference of the DLC project context from an Image/video layer using its source metadata.
+
+    Uses:
+      - layer.metadata.project as project root
+      - layer.metadata.root as a fallback hint
+      - layer.source.path as a fallback hint
+
+    Returns a DLCProjectContext object representing the inferred project context.
+    """
+    md = getattr(layer, "metadata", {}) or {}
+
+    candidates: list[str | Path] = []
+
+    project = md.get("project")
+    if isinstance(project, str) and project:
+        candidates.append(project)
+
+    root = md.get("root")
+    if isinstance(root, str) and root:
+        candidates.append(root)
+
     try:
-        return has_dlc_datafiles(anchor)
+        src = getattr(getattr(layer, "source", None), "path", None)
     except Exception:
-        logger.debug("Failed to check DLC artifacts for %r", anchor, exc_info=True)
-        return False
+        src = None
+
+    if src:
+        candidates.append(src)
+
+    return infer_dlc_project(
+        anchor_candidates=candidates,
+        dataset_candidates=[],
+        explicit_root=None,
+        prefer_project_root=prefer_project_root,
+        max_levels=max_levels,
+    )

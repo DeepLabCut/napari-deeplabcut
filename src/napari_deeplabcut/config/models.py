@@ -30,8 +30,6 @@ class MetadataKind(str, Enum):
 # -----------------------------------------------------------------------------
 # Project structure models
 # -----------------------------------------------------------------------------
-
-
 class DLCProjectContext(BaseModel):
     """
     Best-effort DLC project/location context inferred from available hints.
@@ -87,14 +85,11 @@ class DLCProjectContext(BaseModel):
         if root_anchor is None:
             root_anchor = project_root or dataset_folder
 
-        return self.model_copy(
-            update={
-                "root_anchor": root_anchor,
-                "project_root": project_root,
-                "config_path": config_path,
-                "dataset_folder": dataset_folder,
-            }
-        )
+        object.__setattr__(self, "root_anchor", root_anchor)
+        object.__setattr__(self, "project_root", project_root)
+        object.__setattr__(self, "config_path", config_path)
+        object.__setattr__(self, "dataset_folder", dataset_folder)
+        return self
 
 
 # -----------------------------------------------------------------------------

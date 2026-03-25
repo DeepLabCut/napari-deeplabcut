@@ -10,6 +10,7 @@ import napari_deeplabcut.core.conflicts as conflicts_mod
 import napari_deeplabcut.core.dataframes as dataframes_mod
 from napari_deeplabcut.config.models import AnnotationKind
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
+from napari_deeplabcut.core.project_paths import DLCProjectContext
 
 
 def _make_points_meta(
@@ -138,8 +139,11 @@ def test_compute_overwrite_report_raises_when_gt_fallback_is_ambiguous(monkeypat
     )
     monkeypatch.setattr(
         conflicts_mod,
-        "infer_dataset_folder_from_points_meta",
-        lambda meta: tmp_path,
+        "infer_dlc_project_from_points_meta",
+        lambda *args, **kwargs: DLCProjectContext(
+            root_anchor=tmp_path,
+            dataset_folder=tmp_path,
+        ),
     )
 
     (tmp_path / "CollectedData_a.h5").touch()
@@ -348,8 +352,8 @@ def test_compute_overwrite_report_raises_when_gt_fallback_has_no_root_and_no_dat
     )
     monkeypatch.setattr(
         conflicts_mod,
-        "infer_dataset_folder_from_points_meta",
-        lambda meta: None,
+        "infer_dlc_project_from_points_meta",
+        lambda *args, **kwargs: DLCProjectContext(),
     )
 
     with pytest.raises(MissingProvenanceError, match="GT fallback requires root"):

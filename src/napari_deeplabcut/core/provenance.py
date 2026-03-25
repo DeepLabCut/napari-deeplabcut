@@ -6,91 +6,11 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import ValidationError
 
-from napari_deeplabcut.config.models import AnnotationKind, DLCProjectContext, IOProvenance, PointsMetadata
+from napari_deeplabcut.config.models import AnnotationKind, IOProvenance
 from napari_deeplabcut.core.errors import MissingProvenanceError, UnresolvablePathError
 from napari_deeplabcut.core.metadata import parse_points_metadata
-from napari_deeplabcut.core.project_paths import infer_dlc_project, infer_labeled_data_folder_from_paths
 
 logger = logging.getLogger(__name__)
-
-
-def infer_dlc_project_from_points_meta(
-    pts_meta: PointsMetadata,
-    *,
-    prefer_project_root: bool = True,
-    max_levels: int = 5,
-) -> DLCProjectContext:
-    """
-    Infer DLC dataset folder (…/labeled-data/<dataset>) from PointsMetadata.
-
-    Uses:
-      - pts_meta.project (config parent) as project root
-      - pts_meta.paths (canonicalized relpaths like labeled-data/test/img000.png)
-      - pts_meta.root as a fallback hint
-
-    Returns a DLCProjectContext object representing the inferred project context.
-    """
-    project = getattr(pts_meta, "project", None)
-    root = getattr(pts_meta, "root", None)
-    paths = getattr(pts_meta, "paths", None) or []
-
-    dataset_folder = infer_labeled_data_folder_from_paths(
-        paths,
-        project_root=project,
-        fallback_root=root,
-    )
-
-    return infer_dlc_project(
-        anchor_candidates=[project, root, dataset_folder],
-        dataset_candidates=[dataset_folder],
-        explicit_root=None,
-        prefer_project_root=prefer_project_root,
-        max_levels=max_levels,
-    )
-
-
-def infer_dlc_project_from_image_layer(
-    layer,
-    *,
-    prefer_project_root: bool = True,
-    max_levels: int = 5,
-) -> DLCProjectContext:
-    """Best-effort inference of the DLC project context from an Image/video layer using its source metadata.
-
-    Uses:
-      - layer.metadata.project as project root
-      - layer.metadata.root as a fallback hint
-      - layer.source.path as a fallback hint
-
-    Returns a DLCProjectContext object representing the inferred project context.
-    """
-    md = getattr(layer, "metadata", {}) or {}
-
-    candidates: list[str | Path] = []
-
-    project = md.get("project")
-    if isinstance(project, str) and project:
-        candidates.append(project)
-
-    root = md.get("root")
-    if isinstance(root, str) and root:
-        candidates.append(root)
-
-    try:
-        src = getattr(getattr(layer, "source", None), "path", None)
-    except Exception:
-        src = None
-
-    if src:
-        candidates.append(src)
-
-    return infer_dlc_project(
-        anchor_candidates=candidates,
-        dataset_candidates=[],
-        explicit_root=None,
-        prefer_project_root=prefer_project_root,
-        max_levels=max_levels,
-    )
 
 
 def resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str | None, AnnotationKind | None]:

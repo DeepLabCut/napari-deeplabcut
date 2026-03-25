@@ -10,8 +10,8 @@ from napari_deeplabcut.core import schemas as dlc_schemas
 from napari_deeplabcut.core.dataframes import set_df_scorer
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.metadata import parse_points_metadata
+from napari_deeplabcut.core.project_paths import infer_dlc_project_from_points_meta
 from napari_deeplabcut.core.provenance import (
-    infer_dataset_folder_from_points_meta,
     resolve_output_path_from_metadata,
 )
 
@@ -99,7 +99,8 @@ def compute_overwrite_report_for_points_save(
 
     # Same GT fallback logic as write_hdf(...)
     if not out_path:
-        dataset_dir = infer_dataset_folder_from_points_meta(pts_meta)
+        project_ctx = infer_dlc_project_from_points_meta(pts_meta, prefer_project_root=False)
+        dataset_dir = project_ctx.dataset_folder or project_ctx.root_anchor
 
         if dataset_dir is not None:
             dataset_dir.mkdir(parents=True, exist_ok=True)
