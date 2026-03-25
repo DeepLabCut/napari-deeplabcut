@@ -907,15 +907,7 @@ class KeypointControls(QWidget):
         crop = find_crop_rectangle(self.viewer, prefer_selected=True)
         crop_text = f"Selected crop: {crop}" if crop is not None else "Selected crop: none"
 
-        export_labels = "on" if self._video_group.export_labels_cb.isChecked() else "off"
-        apply_crop = "on" if self._video_group.apply_crop_cb.isChecked() else "off"
-
-        self._video_group.set_context_text(
-            f"{frame_text}\n"
-            f"Output folder: {root_text}\n"
-            f"Export labels: {export_labels} • Apply rectangle crop: {apply_crop}\n"
-            f"{crop_text}"
-        )
+        self._video_group.set_context_text(f"{frame_text}\nOutput folder: {root_text}\n{crop_text}")
 
     def _get_trails_anchor(self, layer: Points | None = None) -> str | None:
         """
