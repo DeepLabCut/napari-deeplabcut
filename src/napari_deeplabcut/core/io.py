@@ -45,7 +45,7 @@ from napari_deeplabcut.core.dataframes import (
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
 from napari_deeplabcut.core.metadata import attach_source_and_io, parse_points_metadata
-from napari_deeplabcut.core.paths import canonicalize_path
+from napari_deeplabcut.core.project_paths import canonicalize_path
 from napari_deeplabcut.core.provenance import infer_dataset_folder_from_points_meta, resolve_output_path_from_metadata
 
 logger = logging.getLogger(__name__)

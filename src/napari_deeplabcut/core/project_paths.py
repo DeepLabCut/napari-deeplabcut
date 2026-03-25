@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
@@ -203,6 +204,21 @@ def should_force_dlc_reader(paths: str | Path | Iterable[str | Path]) -> bool:
 # -----------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class DLCPathContext:
+    """
+    Best-effort DLC location context inferred from user-opened content.
+
+    Fields are optional because users may open partial project fragments
+    (e.g. only a video, only a labeled-data folder, or only annotations).
+    """
+
+    root_anchor: Path | None = None
+    project_root: Path | None = None
+    config_path: Path | None = None
+    dataset_folder: Path | None = None
+
+
 def infer_root_anchor(
     opened: str | Path,
     *,
@@ -244,6 +260,35 @@ def infer_root_anchor(
     return None
 
 
+def find_nearest_config(
+    start: str | Path,
+    *,
+    max_levels: int = 5,
+) -> Path | None:
+    """Walk upward from start to find the nearest config.yaml."""
+    try:
+        p = Path(start)
+    except Exception:
+        return None
+
+    if p.is_file():
+        p = p.parent
+
+    cur = p
+    for _ in range(max_levels + 1):
+        cfg = cur / "config.yaml"
+        if is_config_yaml(cfg):
+            try:
+                return cfg.expanduser().resolve()
+            except Exception:
+                return cfg
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+
+    return None
+
+
 def find_nearest_project_root(
     start: str | Path,
     *,
@@ -266,24 +311,8 @@ def find_nearest_project_root(
     str | None
         Directory containing config.yaml if found, else None.
     """
-    try:
-        p = Path(start)
-    except Exception:
-        return None
-
-    if p.is_file():
-        p = p.parent
-
-    cur = p
-    for _ in range(max_levels + 1):
-        cfg = cur / "config.yaml"
-        if is_config_yaml(cfg):
-            return str(cur)
-        if cur.parent == cur:
-            break
-        cur = cur.parent
-
-    return None
+    cfg = find_nearest_config(start, max_levels=max_levels)
+    return str(cfg.parent) if cfg else None
 
 
 def choose_anchor_candidate(

@@ -2,7 +2,7 @@ import logging
 
 import numpy as np
 
-from napari_deeplabcut.core.paths import PathMatchPolicy
+from napari_deeplabcut.core.project_paths import PathMatchPolicy
 from napari_deeplabcut.core.remap import (
     build_frame_index_map,
     remap_layer_data_by_paths,

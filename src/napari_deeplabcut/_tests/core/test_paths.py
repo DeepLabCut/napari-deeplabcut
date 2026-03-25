@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import napari_deeplabcut.core.paths as paths_mod
+import napari_deeplabcut.core.project_paths as paths_mod
 
 
 # -----------------------------------------------------------------------------

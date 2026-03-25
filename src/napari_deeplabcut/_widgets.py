@@ -61,7 +61,7 @@ from napari_deeplabcut.core.metadata import (
     sync_points_from_image,
     write_points_meta,
 )
-from napari_deeplabcut.core.paths import (
+from napari_deeplabcut.core.project_paths import (
     PathMatchPolicy,
     canonicalize_path,
 )
