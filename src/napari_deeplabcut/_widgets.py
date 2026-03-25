@@ -5,21 +5,18 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 from copy import deepcopy
 from datetime import datetime
 from functools import cached_property, partial
-from math import ceil, log10
 from pathlib import Path
 from types import MethodType
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 from napari.layers import Image, Points, Tracks
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from napari.utils.notifications import show_warning
+from napari.utils.notifications import show_info, show_warning
 from pydantic import ValidationError
 from qtpy.QtCore import QSettings, Qt, QTimer
 from qtpy.QtGui import QAction
@@ -41,11 +38,9 @@ from qtpy.QtWidgets import (
 
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut import misc
-from napari_deeplabcut._writer import _write_image
 from napari_deeplabcut.config import settings
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core import keypoints
-from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
 from napari_deeplabcut.core.layers import (
     find_last_layer,
@@ -62,7 +57,7 @@ from napari_deeplabcut.core.metadata import (
     sync_points_from_image,
     write_points_meta,
 )
-from napari_deeplabcut.core.project_paths import PathMatchPolicy, canonicalize_path, infer_dlc_project_from_image_layer
+from napari_deeplabcut.core.project_paths import PathMatchPolicy, infer_dlc_project_from_image_layer
 from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.core.sidecar import (
     get_default_scorer,
@@ -88,6 +83,9 @@ from napari_deeplabcut.napari_compat.points_layer import make_paste_data
 from napari_deeplabcut.ui.color_scheme_display import ColorSchemePanel
 from napari_deeplabcut.ui.cropping import (
     build_video_action_menu,
+    execute_frame_extraction,
+    find_crop_rectangle,
+    plan_frame_extraction,
     store_crop_coordinates,
 )
 from napari_deeplabcut.ui.dialogs import Shortcuts, Tutorial
@@ -232,6 +230,9 @@ class KeypointControls(QWidget):
         )
         self.video_widget = self.viewer.window.add_dock_widget(self._video_group, name="video", area="right")
         self.video_widget.setVisible(False)
+        self._video_group.export_labels_cb.toggled.connect(lambda _checked: self._refresh_video_panel_context())
+        self._video_group.apply_crop_cb.toggled.connect(lambda _checked: self._refresh_video_panel_context())
+        self.viewer.dims.events.current_step.connect(lambda event: self._refresh_video_panel_context())
 
         # form helper display
         self._keypoint_mapping_button = None
@@ -381,6 +382,7 @@ class KeypointControls(QWidget):
                     )
 
         self._sync_points_layers_from_image_meta()
+        self._refresh_video_panel_context()
 
         if reorder and index is not None:
             QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, index))
@@ -877,6 +879,44 @@ class KeypointControls(QWidget):
         except Exception:
             pass
 
+    def _get_active_or_last_layer(self, layer_type):
+        active = self.viewer.layers.selection.active
+        if isinstance(active, layer_type):
+            return active
+        return find_last_layer(self.viewer, layer_type)
+
+    def _refresh_video_panel_context(self) -> None:
+        if not hasattr(self, "_video_group") or self._video_group is None:
+            return
+
+        image_layer = self._get_active_or_last_layer(Image)
+        if image_layer is None:
+            self._video_group.set_context_text("Load a video/image layer to enable extraction and crop tools.")
+            return
+
+        try:
+            n_frames = int(image_layer.data.shape[0])
+            frame_index = int(self.viewer.dims.current_step[0])
+            frame_text = f"Frame {frame_index + 1}/{n_frames}"
+        except Exception:
+            frame_text = "Frame ?/?"
+
+        root_value = (image_layer.metadata or {}).get("root")
+        root_text = str(root_value) if root_value else "unresolved"
+
+        crop = find_crop_rectangle(self.viewer, prefer_selected=True)
+        crop_text = f"Selected crop: {crop}" if crop is not None else "Selected crop: none"
+
+        export_labels = "on" if self._video_group.export_labels_cb.isChecked() else "off"
+        apply_crop = "on" if self._video_group.apply_crop_cb.isChecked() else "off"
+
+        self._video_group.set_context_text(
+            f"{frame_text}\n"
+            f"Output folder: {root_text}\n"
+            f"Export labels: {export_labels} • Apply rectangle crop: {apply_crop}\n"
+            f"{crop_text}"
+        )
+
     def _get_trails_anchor(self, layer: Points | None = None) -> str | None:
         """
         Resolve the folder-scoped sidecar anchor for the trails source layer.
@@ -1181,35 +1221,60 @@ class KeypointControls(QWidget):
         return layout
 
     def _extract_single_frame(self, *args):
-        image_layer = None
-        points_layer = None
-        image_layer = find_last_layer(self.viewer, Image)
-        points_layer = find_last_layer(self.viewer, Points)
-        if image_layer is not None:
-            ind = self.viewer.dims.current_step[0]
-            frame = image_layer.data[ind]
-            n_frames = image_layer.data.shape[0]
-            name = f"img{str(ind).zfill(int(ceil(log10(n_frames))))}.png"
-            output_path = os.path.join(image_layer.metadata["root"], name)
-            _write_image(frame, str(output_path))
+        image_layer = self._get_active_or_last_layer(Image)
+        export_labels = bool(self._video_group.export_labels_cb.isChecked())
+        apply_crop = bool(self._video_group.apply_crop_cb.isChecked())
 
-            # If annotations were loaded, they should be written to a machinefile.h5 file
-            if points_layer is not None:
-                df = io.form_df(
-                    points_layer.data,
-                    layer_metadata=points_layer.metadata,
-                    layer_properties=points_layer.properties,
-                )
-                df = df.iloc[ind : ind + 1]
-                canon = canonicalize_path(output_path, 3)
-                df.index = pd.MultiIndex.from_tuples([tuple(canon.split("/"))])
-                filepath = os.path.join(image_layer.metadata["root"], "machinelabels-iter0.h5")
-                if Path(filepath).is_file():
-                    df_prev = pd.read_hdf(filepath)
-                    guarantee_multiindex_rows(df_prev)
-                    df = pd.concat([df_prev, df])
-                    df = df[~df.index.duplicated(keep="first")]
-                df.to_hdf(filepath, key="df_with_missing")
+        points_layer = self._get_active_or_last_layer(Points) if export_labels else None
+
+        if export_labels and points_layer is not None and not self._validate_header(points_layer):
+            msg = "The selected Points layer is not a valid DLC keypoints layer for label export."
+            show_warning(msg)
+            self.viewer.status = msg
+            return
+
+        plan, error = plan_frame_extraction(
+            self.viewer,
+            image_layer=image_layer,
+            points_layer=points_layer,
+            explicit_output_root=(image_layer.metadata or {}).get("root") if image_layer is not None else None,
+            export_labels=export_labels,
+            apply_crop=apply_crop,
+        )
+
+        if plan is None:
+            msg = error or "Could not plan frame extraction."
+            show_warning(msg)
+            self.viewer.status = msg
+            self._refresh_video_panel_context()
+            return
+
+        if plan.output_path.exists():
+            answer = QMessageBox.question(
+                self,
+                "Overwrite extracted frame?",
+                f"The extracted frame already exists:\n\n{plan.output_path}\n\nDo you want to overwrite it?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                self.viewer.status = "Frame extraction cancelled."
+                return
+
+        written_paths, note = execute_frame_extraction(plan)
+
+        msg = f"Extracted frame {plan.frame_index} to {plan.output_path}"
+        if len(written_paths) > 1:
+            msg += f" and updated {written_paths[-1].name}"
+
+        if note:
+            show_warning(note)
+            msg = f"{msg} ({note})"
+        else:
+            show_info(msg)
+
+        self.viewer.status = msg
+        self._refresh_video_panel_context()
 
     def _cache_project_path_from_image_layer(self, layer: Image) -> None:
         """Best-effort cache of project path from an image/video layer."""
@@ -1237,18 +1302,21 @@ class KeypointControls(QWidget):
                 getattr(layer, "name", layer),
                 exc_info=True,
             )
+        self._refresh_video_panel_context()
 
     def _store_crop_coordinates(self, *args):
-        image_layer = find_last_layer(self.viewer, Image)
+        image_layer = self._get_active_or_last_layer(Image)
         if image_layer is None:
-            self.viewer.status = "No image/video layer available for crop export."
+            msg = "No image/video layer is active."
+            show_warning(msg)
+            self.viewer.status = msg
             return
 
         # Recover best-effort project context if we do not already have one cached.
         if not self._project_path:
             self._cache_project_path_from_image_layer(image_layer)
 
-        ok = store_crop_coordinates(
+        ok, msg = store_crop_coordinates(
             self.viewer,
             image_layer=image_layer,
             explicit_project_path=self._project_path,
@@ -1256,11 +1324,13 @@ class KeypointControls(QWidget):
         )
 
         if ok:
-            self.viewer.status = "Crop coordinates written to config.yaml"
+            show_info(msg)
+            self.viewer.status = msg
         else:
-            msg = "Could not determine project/config to write crop coordinates, or crop rectangle was not valid."
             show_warning(msg)
             self.viewer.status = msg
+
+        self._refresh_video_panel_context()
 
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)
@@ -1475,6 +1545,7 @@ class KeypointControls(QWidget):
         for layer_ in self.viewer.layers:
             if not isinstance(layer_, Image):
                 self._remap_frame_indices(layer_)
+        self._refresh_video_panel_context()
 
     def on_remove(self, event):
         layer = event.value
@@ -1520,6 +1591,8 @@ class KeypointControls(QWidget):
             self._trails = None
             self._trails_geom_sig = None
             self._trails_style_sig = None
+
+        self._refresh_video_panel_context()
 
     def _ensure_promotion_save_target(self, layer: Points) -> bool:
         """Ensure a prediction/machine source layer has a GT save_target set.
@@ -1757,6 +1830,8 @@ class KeypointControls(QWidget):
                 menu.setHidden(False)
             else:
                 menu.setHidden(True)
+
+        self._refresh_video_panel_context()
 
     def _update_colormap(self, colormap_name: str):
         for layer in self.viewer.layers.selection:
