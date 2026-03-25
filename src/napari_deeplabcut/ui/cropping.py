@@ -8,7 +8,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from napari.layers import Image, Points, Shapes
-from qtpy.QtWidgets import QCheckBox, QGroupBox, QLabel, QPushButton, QVBoxLayout
+from napari.utils.notifications import show_info, show_warning
+from qtpy.QtWidgets import QCheckBox, QGroupBox, QLabel, QMessageBox, QPushButton, QVBoxLayout
 
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut._writer import _write_image
@@ -423,3 +424,162 @@ def store_crop_coordinates(
 
     msg = execute_crop_save(plan)
     return True, msg
+
+
+# ---------------------------------
+# UI helpers
+# ---------------------------------
+def get_active_or_last_layer(viewer, layer_type):
+    """Prefer the active layer when it matches `layer_type`, else fall back to the last layer of that type."""
+    active = viewer.layers.selection.active
+    if isinstance(active, layer_type):
+        return active
+
+    for layer in reversed(viewer.layers):
+        if isinstance(layer, layer_type):
+            return layer
+    return None
+
+
+def resolve_project_path_from_image_layer(layer: Image) -> str | None:
+    """Best-effort project path string from DLC project context."""
+    try:
+        ctx = infer_dlc_project_from_image_layer(layer, prefer_project_root=True)
+    except Exception:
+        return None
+
+    project_path = ctx.project_root or ctx.root_anchor
+    return str(project_path) if project_path is not None else None
+
+
+def update_video_panel_context(viewer, panel) -> None:
+    """Refresh lightweight user-facing context shown in the video action panel."""
+    if panel is None:
+        return
+
+    image_layer = get_active_or_last_layer(viewer, Image)
+    if image_layer is None:
+        panel.set_context_text("Load a video/image layer to enable extraction and crop tools.")
+        return
+
+    try:
+        n_frames = int(image_layer.data.shape[0])
+        frame_index = int(viewer.dims.current_step[0])
+        frame_text = f"Frame {frame_index + 1}/{n_frames}"
+    except Exception:
+        frame_text = "Frame ?/?"
+
+    root_value = (image_layer.metadata or {}).get("root")
+    root_text = str(root_value) if root_value else "unresolved"
+
+    crop = find_crop_rectangle(viewer, prefer_selected=True)
+    crop_text = f"Selected crop: {crop}" if crop is not None else "Selected crop: none"
+
+    panel.set_context_text(f"{frame_text}\nOutput folder: {root_text}\n{crop_text}")
+
+
+def run_extract_current_frame(
+    viewer,
+    panel,
+    *,
+    validate_points_layer=None,
+) -> tuple[bool, str]:
+    """
+    End-to-end frame extraction workflow for the video panel.
+
+    Returns
+    -------
+    (ok, message)
+        ok: whether the extraction completed
+        message: user-facing status text
+    """
+    image_layer = get_active_or_last_layer(viewer, Image)
+    export_labels = bool(getattr(panel, "export_labels_cb", None) and panel.export_labels_cb.isChecked())
+    apply_crop = bool(getattr(panel, "apply_crop_cb", None) and panel.apply_crop_cb.isChecked())
+
+    points_layer = get_active_or_last_layer(viewer, Points) if export_labels else None
+
+    if export_labels and points_layer is not None and callable(validate_points_layer):
+        if not validate_points_layer(points_layer):
+            msg = "The selected Points layer is not a valid DLC keypoints layer for label export."
+            show_warning(msg)
+            return False, msg
+
+    plan, error = plan_frame_extraction(
+        viewer,
+        image_layer=image_layer,
+        points_layer=points_layer,
+        explicit_output_root=(image_layer.metadata or {}).get("root") if image_layer is not None else None,
+        export_labels=export_labels,
+        apply_crop=apply_crop,
+    )
+
+    if plan is None:
+        msg = error or "Could not plan frame extraction."
+        show_warning(msg)
+        return False, msg
+
+    if plan.output_path.exists():
+        answer = QMessageBox.question(
+            panel,
+            "Overwrite extracted frame?",
+            f"The extracted frame already exists:\n\n{plan.output_path}\n\nDo you want to overwrite it?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return False, "Frame extraction cancelled."
+
+    written_paths, note = execute_frame_extraction(plan)
+
+    msg = f"Extracted frame {plan.frame_index} to {plan.output_path}"
+    if len(written_paths) > 1:
+        msg += f" and updated {written_paths[-1].name}"
+
+    if note:
+        show_warning(note)
+        msg = f"{msg} ({note})"
+    else:
+        show_info(msg)
+
+    return True, msg
+
+
+def run_store_crop_coordinates(
+    viewer,
+    panel,
+    *,
+    explicit_project_path: str | None = None,
+    fallback_video_name: str | None = None,
+) -> tuple[bool, str, str | None]:
+    """
+    End-to-end crop-save workflow for the video panel.
+
+    Returns
+    -------
+    (ok, message, project_path)
+        ok: whether crop save succeeded
+        message: user-facing status text
+        project_path: resolved best-effort project path (if any)
+    """
+    image_layer = get_active_or_last_layer(viewer, Image)
+    if image_layer is None:
+        msg = "No image/video layer is active."
+        show_warning(msg)
+        return False, msg, explicit_project_path
+
+    resolved_project_path = explicit_project_path or resolve_project_path_from_image_layer(image_layer)
+
+    ok, msg = store_crop_coordinates(
+        viewer,
+        image_layer=image_layer,
+        explicit_project_path=resolved_project_path,
+        fallback_video_name=fallback_video_name,
+    )
+
+    if ok:
+        show_info(msg)
+    else:
+        show_warning(msg)
+
+    return ok, msg, resolved_project_path

@@ -16,7 +16,6 @@ import numpy as np
 from napari.layers import Image, Points, Tracks
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
-from napari.utils.notifications import show_info, show_warning
 from pydantic import ValidationError
 from qtpy.QtCore import QSettings, Qt, QTimer
 from qtpy.QtGui import QAction
@@ -43,7 +42,6 @@ from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, Imag
 from napari_deeplabcut.core import keypoints
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
 from napari_deeplabcut.core.layers import (
-    find_last_layer,
     get_first_points_layer,
     get_points_layer_with_tables,
     is_machine_layer,
@@ -57,7 +55,7 @@ from napari_deeplabcut.core.metadata import (
     sync_points_from_image,
     write_points_meta,
 )
-from napari_deeplabcut.core.project_paths import PathMatchPolicy, infer_dlc_project_from_image_layer
+from napari_deeplabcut.core.project_paths import PathMatchPolicy
 from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.core.sidecar import (
     get_default_scorer,
@@ -83,10 +81,10 @@ from napari_deeplabcut.napari_compat.points_layer import make_paste_data
 from napari_deeplabcut.ui.color_scheme_display import ColorSchemePanel
 from napari_deeplabcut.ui.cropping import (
     build_video_action_menu,
-    execute_frame_extraction,
-    find_crop_rectangle,
-    plan_frame_extraction,
-    store_crop_coordinates,
+    resolve_project_path_from_image_layer,
+    run_extract_current_frame,
+    run_store_crop_coordinates,
+    update_video_panel_context,
 )
 from napari_deeplabcut.ui.dialogs import Shortcuts, Tutorial
 from napari_deeplabcut.ui.labels_and_dropdown import (
@@ -879,36 +877,6 @@ class KeypointControls(QWidget):
         except Exception:
             pass
 
-    def _get_active_or_last_layer(self, layer_type):
-        active = self.viewer.layers.selection.active
-        if isinstance(active, layer_type):
-            return active
-        return find_last_layer(self.viewer, layer_type)
-
-    def _refresh_video_panel_context(self) -> None:
-        if not hasattr(self, "_video_group") or self._video_group is None:
-            return
-
-        image_layer = self._get_active_or_last_layer(Image)
-        if image_layer is None:
-            self._video_group.set_context_text("Load a video/image layer to enable extraction and crop tools.")
-            return
-
-        try:
-            n_frames = int(image_layer.data.shape[0])
-            frame_index = int(self.viewer.dims.current_step[0])
-            frame_text = f"Frame {frame_index + 1}/{n_frames}"
-        except Exception:
-            frame_text = "Frame ?/?"
-
-        root_value = (image_layer.metadata or {}).get("root")
-        root_text = str(root_value) if root_value else "unresolved"
-
-        crop = find_crop_rectangle(self.viewer, prefer_selected=True)
-        crop_text = f"Selected crop: {crop}" if crop is not None else "Selected crop: none"
-
-        self._video_group.set_context_text(f"{frame_text}\nOutput folder: {root_text}\n{crop_text}")
-
     def _get_trails_anchor(self, layer: Points | None = None) -> str | None:
         """
         Resolve the folder-scoped sidecar anchor for the trails source layer.
@@ -1212,79 +1180,16 @@ class KeypointControls(QWidget):
         layout.addWidget(self._keypoint_mapping_button)
         return layout
 
-    def _extract_single_frame(self, *args):
-        image_layer = self._get_active_or_last_layer(Image)
-        export_labels = bool(self._video_group.export_labels_cb.isChecked())
-        apply_crop = bool(self._video_group.apply_crop_cb.isChecked())
-
-        points_layer = self._get_active_or_last_layer(Points) if export_labels else None
-
-        if export_labels and points_layer is not None and not self._validate_header(points_layer):
-            msg = "The selected Points layer is not a valid DLC keypoints layer for label export."
-            show_warning(msg)
-            self.viewer.status = msg
-            return
-
-        plan, error = plan_frame_extraction(
-            self.viewer,
-            image_layer=image_layer,
-            points_layer=points_layer,
-            explicit_output_root=(image_layer.metadata or {}).get("root") if image_layer is not None else None,
-            export_labels=export_labels,
-            apply_crop=apply_crop,
-        )
-
-        if plan is None:
-            msg = error or "Could not plan frame extraction."
-            show_warning(msg)
-            self.viewer.status = msg
-            self._refresh_video_panel_context()
-            return
-
-        if plan.output_path.exists():
-            answer = QMessageBox.question(
-                self,
-                "Overwrite extracted frame?",
-                f"The extracted frame already exists:\n\n{plan.output_path}\n\nDo you want to overwrite it?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer != QMessageBox.Yes:
-                self.viewer.status = "Frame extraction cancelled."
-                return
-
-        written_paths, note = execute_frame_extraction(plan)
-
-        msg = f"Extracted frame {plan.frame_index} to {plan.output_path}"
-        if len(written_paths) > 1:
-            msg += f" and updated {written_paths[-1].name}"
-
-        if note:
-            show_warning(note)
-            msg = f"{msg} ({note})"
-        else:
-            show_info(msg)
-
-        self.viewer.status = msg
-        self._refresh_video_panel_context()
+    def _refresh_video_panel_context(self) -> None:
+        update_video_panel_context(self.viewer, self._video_group)
 
     def _cache_project_path_from_image_layer(self, layer: Image) -> None:
         """Best-effort cache of project path from an image/video layer."""
-        try:
-            ctx = infer_dlc_project_from_image_layer(layer, prefer_project_root=True)
-        except Exception:
-            logger.debug(
-                "Failed to infer DLC project context from image layer %r",
-                getattr(layer, "name", layer),
-                exc_info=True,
-            )
-            return
-
-        project_path = ctx.project_root or ctx.root_anchor
+        project_path = resolve_project_path_from_image_layer(layer)
         if project_path is None:
             return
 
-        self._project_path = str(project_path)
+        self._project_path = project_path
         try:
             layer.metadata = dict(layer.metadata or {})
             layer.metadata.setdefault("project", self._project_path)
@@ -1294,34 +1199,28 @@ class KeypointControls(QWidget):
                 getattr(layer, "name", layer),
                 exc_info=True,
             )
+
+        self._refresh_video_panel_context()
+
+    def _extract_single_frame(self, *args):
+        ok, msg = run_extract_current_frame(
+            self.viewer,
+            self._video_group,
+            validate_points_layer=self._validate_header,
+        )
+        self.viewer.status = msg
         self._refresh_video_panel_context()
 
     def _store_crop_coordinates(self, *args):
-        image_layer = self._get_active_or_last_layer(Image)
-        if image_layer is None:
-            msg = "No image/video layer is active."
-            show_warning(msg)
-            self.viewer.status = msg
-            return
-
-        # Recover best-effort project context if we do not already have one cached.
-        if not self._project_path:
-            self._cache_project_path_from_image_layer(image_layer)
-
-        ok, msg = store_crop_coordinates(
+        ok, msg, project_path = run_store_crop_coordinates(
             self.viewer,
-            image_layer=image_layer,
+            self._video_group,
             explicit_project_path=self._project_path,
             fallback_video_name=self._image_meta.name,
         )
-
-        if ok:
-            show_info(msg)
-            self.viewer.status = msg
-        else:
-            show_warning(msg)
-            self.viewer.status = msg
-
+        if project_path is not None:
+            self._project_path = project_path
+        self.viewer.status = msg
         self._refresh_video_panel_context()
 
     def _form_dropdown_menus(self, store):
