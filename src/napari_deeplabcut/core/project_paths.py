@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+
+from napari_deeplabcut.config.models import DLCProjectContext
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,6 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # Canonicalization
 # -----------------------------------------------------------------------------
-
-
 def canonicalize_path(p: str | Path, n: int = 3) -> str:
     """
     Return canonical POSIX path built from the last n path components.
@@ -202,21 +201,150 @@ def should_force_dlc_reader(paths: str | Path | Iterable[str | Path]) -> bool:
 # -----------------------------------------------------------------------------
 # Root-anchor inference utilities
 # -----------------------------------------------------------------------------
+def normalize_anchor_candidate(value: str | Path | None) -> Path | None:
+    """Return a normalized directory anchor from a file/folder candidate."""
+    if value is None:
+        return None
+
+    try:
+        p = Path(value).expanduser().resolve()
+    except Exception:
+        try:
+            p = Path(value)
+        except Exception:
+            return None
+
+    if p.is_file():
+        return p.parent
+    return p
 
 
-@dataclass(frozen=True)
-class DLCPathContext:
+def infer_dlc_project(
+    *,
+    anchor_candidates: list[str | Path] | tuple[str | Path, ...] = (),
+    dataset_candidates: list[str | Path] | tuple[str | Path, ...] = (),
+    explicit_root: str | Path | None = None,
+    prefer_project_root: bool = True,
+    max_levels: int = 5,
+) -> DLCProjectContext:
     """
-    Best-effort DLC location context inferred from user-opened content.
+    Infer a best-effort DLC project context from generic path-like hints.
 
-    Fields are optional because users may open partial project fragments
-    (e.g. only a video, only a labeled-data folder, or only annotations).
+    Parameters
+    ----------
+    anchor_candidates:
+        Ordered candidates that may indicate a project anchor, project root,
+        file parent, source directory, etc.
+    dataset_candidates:
+        Ordered candidates that may already point at a labeled-data dataset folder.
+    explicit_root:
+        Strongest hint. If provided, used first.
+    prefer_project_root:
+        If True, root_anchor prefers the folder containing config.yaml.
+        Otherwise it prefers the first valid anchor candidate.
     """
+    anchors: list[Path] = []
 
-    root_anchor: Path | None = None
-    project_root: Path | None = None
-    config_path: Path | None = None
-    dataset_folder: Path | None = None
+    if explicit_root is not None:
+        a = normalize_anchor_candidate(explicit_root)
+        if a is not None:
+            anchors.append(a)
+
+    for cand in anchor_candidates:
+        a = normalize_anchor_candidate(cand)
+        if a is not None and a not in anchors:
+            anchors.append(a)
+
+    dataset_folder = None
+    for cand in dataset_candidates:
+        d = normalize_anchor_candidate(cand)
+        if d is not None:
+            dataset_folder = d
+            break
+
+    # First try to find config from anchors
+    for anchor in anchors:
+        cfg = find_nearest_config(anchor, max_levels=max_levels)
+        if cfg is not None:
+            project_root = cfg.parent
+            root_anchor = project_root if prefer_project_root else anchor
+            return DLCProjectContext(
+                root_anchor=root_anchor,
+                project_root=project_root,
+                config_path=cfg,
+                dataset_folder=dataset_folder,
+            )
+
+    # No config found: still return best-effort context
+    root_anchor = anchors[0] if anchors else dataset_folder
+    return DLCProjectContext(
+        root_anchor=root_anchor,
+        project_root=None,
+        config_path=None,
+        dataset_folder=dataset_folder,
+    )
+
+
+def infer_labeled_data_folder_from_paths(
+    paths: list[str | Path] | tuple[str | Path, ...],
+    *,
+    project_root: str | Path | None = None,
+    fallback_root: str | Path | None = None,
+) -> Path | None:
+    """
+    Infer a DLC labeled-data/<dataset> folder from path hints.
+
+    Accepts canonicalized or partially relative paths such as:
+      labeled-data/test/img000.png
+    """
+    # If fallback_root already looks like a labeled-data dataset folder, use it
+    for root_like in (fallback_root,):
+        anchor = normalize_anchor_candidate(root_like)
+        if anchor is not None:
+            lowered = [part.lower() for part in anchor.parts]
+            if "labeled-data" in lowered and anchor.name.lower() != "labeled-data":
+                return anchor
+
+    dataset_name = None
+    for s in paths:
+        try:
+            text = str(s).replace("\\", "/")
+        except Exception:
+            continue
+        parts = [p for p in text.split("/") if p]
+        lowered = [p.lower() for p in parts]
+        try:
+            idx = lowered.index("labeled-data")
+        except ValueError:
+            continue
+        if idx + 1 < len(parts):
+            dataset_name = parts[idx + 1]
+            break
+
+    if not dataset_name:
+        return None
+
+    proj = normalize_anchor_candidate(project_root)
+    if proj is not None:
+        return proj / "labeled-data" / dataset_name
+
+    return None
+
+
+def infer_dlc_project_from_opened(
+    opened: str | Path,
+    *,
+    explicit_root: str | Path | None = None,
+    prefer_project_root: bool = True,
+    max_levels: int = 5,
+) -> DLCProjectContext:
+    return infer_dlc_project(
+        anchor_candidates=[opened],
+        dataset_candidates=[],
+        explicit_root=explicit_root,
+        prefer_project_root=prefer_project_root,
+        max_levels=max_levels,
+    )
 
 
 def infer_root_anchor(
@@ -261,27 +389,22 @@ def infer_root_anchor(
 
 
 def find_nearest_config(
-    start: str | Path,
+    start: str | Path | None,
     *,
     max_levels: int = 5,
 ) -> Path | None:
-    """Walk upward from start to find the nearest config.yaml."""
-    try:
-        p = Path(start)
-    except Exception:
+    """
+    Walk upward from start to find the nearest config.yaml.
+    """
+    anchor = normalize_anchor_candidate(start)
+    if anchor is None:
         return None
 
-    if p.is_file():
-        p = p.parent
-
-    cur = p
+    cur = anchor
     for _ in range(max_levels + 1):
         cfg = cur / "config.yaml"
-        if is_config_yaml(cfg):
-            try:
-                return cfg.expanduser().resolve()
-            except Exception:
-                return cfg
+        if cfg.is_file() and cfg.name.lower() == "config.yaml":
+            return cfg
         if cur.parent == cur:
             break
         cur = cur.parent
