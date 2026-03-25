@@ -539,7 +539,7 @@ def test_extract_single_frame_warns_without_image_layer(viewer, qtbot, monkeypat
     seen = {}
 
     monkeypatch.setattr(
-        "napari_deeplabcut._widgets.show_warning",
+        "napari_deeplabcut.ui.cropping.show_warning",
         lambda msg: seen.setdefault("warning", msg),
     )
 
