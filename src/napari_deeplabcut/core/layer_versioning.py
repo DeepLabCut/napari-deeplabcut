@@ -106,10 +106,16 @@ class LayerChangeRegistry:
             return _callback
 
         def _on_content_change(target: Layer) -> None:
-            self._states[target].generations.bump_content()
+            state = self._states.get(target)
+            if state is None:
+                return
+            state.generations.bump_content()
 
         def _on_presentation_change(target: Layer) -> None:
-            self._states[target].generations.bump_presentation()
+            state = self._states.get(target)
+            if state is None:
+                return
+            state.generations.bump_presentation()
 
         for emitter in self._content_emitters(layer):
             callback = _with_layer(_on_content_change)
