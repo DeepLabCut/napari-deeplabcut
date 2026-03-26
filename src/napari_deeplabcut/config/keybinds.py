@@ -22,11 +22,11 @@ class BindingContext:
 @dataclass(frozen=True)
 class ShortcutSpec:
     keys: tuple[str, ...]
-    action: ShortcutAction | None = None  # optional enum for programmatic reference
-    get_callback: Callable[[BindingContext], Callable] | None = None
     description: str
     group: str
     scope: str
+    action: ShortcutAction | None = None  # optional enum for programmatic reference
+    get_callback: Callable[[BindingContext], Callable] | None = None
     overwrite: bool = False
     when: str | None = None  # optional UI note, e.g. "Multi-animal layers only"
 
@@ -151,7 +151,9 @@ def install_global_points_keybindings() -> None:
     if _global_points_bindings_installed:
         return
 
-    for key in ("E",):
-        Points.bind_key(key)(toggle_edge_color)
+    for spec in SHORTCUTS:
+        if spec.scope == "global-points" and spec.action == ShortcutAction.TOGGLE_EDGE_COLOR:
+            for key in spec.keys:
+                Points.bind_key(key)(toggle_edge_color)
 
     _global_points_bindings_installed = True
