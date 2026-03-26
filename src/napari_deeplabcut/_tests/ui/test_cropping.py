@@ -232,8 +232,9 @@ def test_find_crop_rectangle_ignores_non_rectangles(monkeypatch):
 # -----------------------------------------------------------------------------
 
 
-def test_plan_frame_extraction_uses_viewer_crop(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(cropping_mod, "Image", FakeImage)
+def test_plan_frame_extraction_uses_viewer_crop(tmp_path: Path, monkeypatch):
+    from napari.layers import Image
+
     monkeypatch.setattr(
         cropping_mod,
         "find_crop_rectangle",
@@ -243,11 +244,12 @@ def test_plan_frame_extraction_uses_viewer_crop(monkeypatch, tmp_path: Path):
         ),
     )
 
-    image = FakeImage(
-        data=np.zeros((10, 20, 30), dtype=np.uint8),
-        metadata={"root": str(tmp_path)},
+    image = Image(
+        np.zeros((10, 20, 30), dtype=np.uint8),
         name="demo.mp4",
+        metadata={"root": str(tmp_path)},
     )
+
     viewer = SimpleNamespace(
         dims=SimpleNamespace(current_step=(4,), range=[(0, 10, 1), (0, 20, 1), (0, 100, 1)]),
     )
@@ -379,7 +381,7 @@ def test_store_crop_coordinates_saves_legacy_config_coords(monkeypatch, tmp_path
 # -----------------------------------------------------------------------------
 
 
-def test_update_video_panel_context_renders_compact_summary(monkeypatch, tmp_path: Path):
+def test_update_video_panel_context_renders_current_summary(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(cropping_mod, "Image", FakeImage)
     monkeypatch.setattr(cropping_mod, "sync_crop_layer_autorefresh", lambda viewer, panel, refresh_callback: None)
     monkeypatch.setattr(
@@ -409,6 +411,5 @@ def test_update_video_panel_context_renders_compact_summary(monkeypatch, tmp_pat
     cropping_mod.update_video_panel_context(viewer, panel)
 
     assert "Frame 3/5" in panel.text
+    assert f"Output folder: {tmp_path / 'dataset'}" in panel.text
     assert "Crop source: DLC crop layer" in panel.text
-    assert "Viewer: (1, 10, 2, 20)" in panel.text
-    assert "Config: (1, 10, 80, 98)" in panel.text
