@@ -88,7 +88,7 @@ class ShortcutKeysWidget(QWidget):
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(3)
+        layout.setSpacing(2)
 
         for i, seq in enumerate(keys):
             if i > 0:
@@ -123,52 +123,38 @@ class ShortcutRow(QFrame):
 
         self.keys_widget = ShortcutKeysWidget(spec.keys)
         self.keys_widget.setFixedWidth(self.KEY_COL_WIDTH)
-        self.keys_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
-
-        text_col = QVBoxLayout()
-        text_col.setContentsMargins(0, 0, 0, 0)
-        text_col.setSpacing(0)
+        self.keys_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         self.title_label = QLabel(spec.description)
         self.title_label.setStyleSheet("font-weight: 600;")
-        self.title_label.setWordWrap(True)
+        self.title_label.setWordWrap(False)
+        self.title_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        subtitle_parts = [_scope_label(spec.scope)]
-        if getattr(spec, "when", None):
-            subtitle_parts.append(spec.when)
-
-        self.subtitle_label = QLabel(" • ".join(subtitle_parts))
-        self.subtitle_label.setStyleSheet("color: palette(mid); font-size: 11px;")
-        self.subtitle_label.setWordWrap(True)
-        self.subtitle_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-
-        self.state_label = QLabel("")
-        self.state_label.setStyleSheet("color: palette(mid); font-size: 11px;")
-        self.state_label.setWordWrap(True)
-        self.state_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self.state_label.hide()
-
-        text_col.addWidget(self.title_label)
-        text_col.addWidget(self.subtitle_label)
-        text_col.addWidget(self.state_label)
-
-        layout.addWidget(self.keys_widget, 0, Qt.AlignLeft | Qt.AlignTop)
-        layout.addLayout(text_col, 1)
+        layout.addWidget(self.keys_widget, 0, Qt.AlignRight | Qt.AlignVCenter)
+        layout.addWidget(self.title_label, 1, Qt.AlignLeft | Qt.AlignVCenter)
 
         self._opacity_effect = QGraphicsOpacityEffect(self)
         self._opacity_effect.setOpacity(1.0)
         self.setGraphicsEffect(self._opacity_effect)
 
-    def set_available(self, available: bool, reason: str | None = None, *, show_reason: bool = True) -> None:
-        """Dim row and show an explanatory note when unavailable."""
+    def set_available(self, available: bool, reason: str | None = None) -> None:
+        """Dim row when unavailable and expose context via tooltip only."""
         self._opacity_effect.setOpacity(1.0 if available else 0.45)
 
-        if available or not show_reason or not reason:
-            self.state_label.hide()
-            self.state_label.setText("")
-        else:
-            self.state_label.setText(reason or "Currently unavailable in this context.")
-            self.state_label.show()
+        tooltip_parts = [self.spec.description, _scope_label(self.spec.scope)]
+
+        if getattr(self.spec, "when", None):
+            tooltip_parts.append(self.spec.when)
+
+        if not available and reason:
+            tooltip_parts.append(reason)
+
+        tooltip = "\n".join(tooltip_parts)
+
+        self.setToolTip(tooltip)
+        self.title_label.setToolTip(tooltip)
+        self.keys_widget.setToolTip(tooltip)
 
 
 class Shortcuts(QDialog):
@@ -182,7 +168,7 @@ class Shortcuts(QDialog):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(10)
+        root.setSpacing(6)
 
         intro = QLabel("These shortcuts are generated from the napari-deeplabcut keybinding registry.")
         intro.setWordWrap(True)
@@ -234,7 +220,8 @@ class Shortcuts(QDialog):
         for group_name in sorted(grouped):
             box = QGroupBox(group_name)
             box_layout = QVBoxLayout(box)
-            box_layout.setSpacing(4)
+            box_layout.setContentsMargins(6, 14, 6, 4)
+            box_layout.setSpacing(1)
 
             for spec in grouped[group_name]:
                 row = ShortcutRow(spec)
@@ -278,26 +265,18 @@ class Shortcuts(QDialog):
             self.context_banner.setText(
                 "Showing all known shortcuts. Availability cannot be determined without a viewer context."
             )
-            suppress_generic_row_reason = False
         elif active_is_points:
             layer_name = getattr(active, "name", "active layer")
             self.context_banner.setText(
                 f"Active Points layer: <b>{layer_name}</b>. "
                 "Shortcuts specific to Points layers are currently available."
             )
-            suppress_generic_row_reason = False
         else:
             self.context_banner.setText("No active <b>Points</b> layer — some shortcuts are currently unavailable.")
-            suppress_generic_row_reason = True
 
         for row in self._rows:
             available, reason = self._availability_for_spec(row.spec)
-
-            show_reason = True
-            if suppress_generic_row_reason and reason == "No active Points layer.":
-                show_reason = False
-
-            row.set_available(available, reason, show_reason=show_reason)
+            row.set_available(available, reason)
 
 
 # --------------------------------------------------------------------------------------
