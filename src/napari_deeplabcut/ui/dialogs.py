@@ -1,6 +1,7 @@
 # src/napari_deeplabcut/ui/dialogs.py
 from __future__ import annotations
 
+import html
 from collections import defaultdict, namedtuple
 
 from napari.layers import Points
@@ -160,6 +161,7 @@ class ShortcutRow(QFrame):
 class Shortcuts(QDialog):
     def __init__(self, parent=None, *, viewer=None):
         super().__init__(parent=parent)
+        self.setAttribute(Qt.WA_DeleteOnClose)
         self.viewer = viewer
         self._rows: list[ShortcutRow] = []
 
@@ -176,6 +178,7 @@ class Shortcuts(QDialog):
         root.addWidget(intro)
 
         self.context_banner = QLabel("")
+        self.context_banner.setTextFormat(Qt.RichText)
         self.context_banner.setWordWrap(True)
         self.context_banner.setStyleSheet(
             """
@@ -207,10 +210,17 @@ class Shortcuts(QDialog):
 
         # Live updates as the active layer changes
         if self.viewer is not None:
+            self._active_event_emitter = self.viewer.layers.selection.events.active
+            self._active_event_emitter.connect(self._refresh_availability)
+
+    def closeEvent(self, event):
+        if self._active_event_emitter is not None:
             try:
-                self.viewer.layers.selection.events.active.connect(self._refresh_availability)
-            except Exception:
+                self._active_event_emitter.disconnect(self._refresh_availability)
+            except (TypeError, RuntimeError):
                 pass
+            self._active_event_emitter = None
+        super().closeEvent(event)
 
     def _build_rows(self) -> None:
         grouped = defaultdict(list)
@@ -266,7 +276,7 @@ class Shortcuts(QDialog):
                 "Showing all known shortcuts. Availability cannot be determined without a viewer context."
             )
         elif active_is_points:
-            layer_name = getattr(active, "name", "active layer")
+            layer_name = html.escape(getattr(active, "name", "active layer"))
             self.context_banner.setText(
                 f"Active Points layer: <b>{layer_name}</b>. "
                 "Shortcuts specific to Points layers are currently available."
