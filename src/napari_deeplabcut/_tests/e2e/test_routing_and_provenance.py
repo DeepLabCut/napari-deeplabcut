@@ -188,8 +188,8 @@ def test_ambiguous_placeholder_save_aborts_when_multiple_gt_exist(
     before = {p: _snapshot_coords(p) for p in gt_paths}
 
     viewer = make_napari_viewer()
-    from napari_deeplabcut import keypoints
     from napari_deeplabcut._widgets import KeypointControls
+    from napari_deeplabcut.core import keypoints
 
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")

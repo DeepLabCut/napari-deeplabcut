@@ -5,6 +5,8 @@ import logging
 from copy import deepcopy
 from types import MethodType
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -100,18 +102,15 @@ def make_paste_data(controls, *, store):
     """
     Build a paste handler that mimics the previous KeypointControls._paste_data behavior,
     but lives in compat.
-
-    NOTE: This still touches private napari internals; that's the point of isolating it.
     """
 
     def _paste_data(layer_self, _store=store):
-        # This is the old body of KeypointControls._paste_data with minimal changes:
         features = layer_self._clipboard.pop("features", None)
         if features is None:
             return
 
         unannotated = [
-            controls.keypoints.Keypoint(label, id_) not in _store.annotated_keypoints  # relies on store
+            controls.keypoints.Keypoint(label, id_) not in _store.annotated_keypoints
             for label, id_ in zip(features["label"], features["id"], strict=False)
         ]
         if not any(unannotated):
@@ -119,10 +118,11 @@ def make_paste_data(controls, *, store):
 
         new_features = features.iloc[unannotated]
         indices_ = layer_self._clipboard.pop("indices")
-        text_ = layer_self._clipboard.pop("text")
+        text_ = layer_self._clipboard.pop("text", None)  # <- guard missing key
         layer_self._clipboard = {k: v[unannotated] for k, v in layer_self._clipboard.items()}
         layer_self._clipboard["features"] = new_features
         layer_self._clipboard["indices"] = indices_
+
         if text_ is not None:
             new_text = {
                 "string": text_["string"][unannotated],
@@ -137,18 +137,19 @@ def make_paste_data(controls, *, store):
             not_disp = layer_self._slice_input.not_displayed
             data = deepcopy(layer_self._clipboard["data"])
             offset = [layer_self._slice_indices[i] - layer_self._clipboard["indices"][i] for i in not_disp]
-            data[:, not_disp] = data[:, not_disp] + controls.np.array(offset)
-            layer_self._data = controls.np.append(layer_self.data, data, axis=0)
-            layer_self._shown = controls.np.append(layer_self.shown, deepcopy(layer_self._clipboard["shown"]), axis=0)
-            layer_self._size = controls.np.append(layer_self.size, deepcopy(layer_self._clipboard["size"]), axis=0)
-            layer_self._symbol = controls.np.append(
-                layer_self.symbol, deepcopy(layer_self._clipboard["symbol"]), axis=0
-            )
+            data[:, not_disp] = data[:, not_disp] + np.array(offset)
+            layer_self._data = np.append(layer_self.data, data, axis=0)
+            layer_self._shown = np.append(layer_self.shown, deepcopy(layer_self._clipboard["shown"]), axis=0)
+            layer_self._size = np.append(layer_self.size, deepcopy(layer_self._clipboard["size"]), axis=0)
+            layer_self._symbol = np.append(layer_self.symbol, deepcopy(layer_self._clipboard["symbol"]), axis=0)
 
             layer_self._feature_table.append(layer_self._clipboard["features"])
-            layer_self.text._paste(**layer_self._clipboard["text"])
 
-            layer_self._edge_width = controls.np.append(
+            text_payload = layer_self._clipboard.get("text")
+            if text_payload is not None:  # <- guard missing / None payload
+                layer_self.text._paste(**text_payload)
+
+            layer_self._edge_width = np.append(
                 layer_self.edge_width,
                 deepcopy(layer_self._clipboard["edge_width"]),
                 axis=0,

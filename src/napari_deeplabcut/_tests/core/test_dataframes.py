@@ -134,6 +134,104 @@ def test_align_old_new_works_when_old_is_3level_and_new_is_4level():
     assert old2.index.equals(new2.index)
 
 
+# Overwrite conflict detection uses harmonized index to avoid (Multi)Index mismatches
+def test_align_old_new_handles_basename_index_vs_deep_path_multiindex_regression():
+    """
+    Regression test for overwrite-preflight crash:
+
+    Old on-disk GT files may use basename-like row indices such as:
+        Index(["img00001.png"])
+
+    Newly formed dataframes from runtime points metadata may use deeper
+    path-like row indices that become a 3-level MultiIndex after
+    guarantee_multiindex_rows(), e.g.:
+        MultiIndex([("labeled-data", "test", "img00001.png")])
+
+    align_old_new() must harmonize row indices before reindex/union,
+    otherwise pandas may raise:
+        AssertionError: Length of new_levels (3) must be <= self.nlevels (1)
+    """
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+
+    # Simulate existing on-disk GT dataframe with basename-only row key
+    df_old = pd.DataFrame(
+        [[10.0, 20.0]],
+        columns=cols,
+        index=["img00001.png"],
+    )
+    guarantee_multiindex_rows(df_old)  # -> MultiIndex([("img00001.png",)])
+
+    # Simulate newly formed dataframe from runtime metadata with deep relpath
+    df_new = pd.DataFrame(
+        [[11.0, 22.0]],
+        columns=cols,
+        index=["labeled-data/test/img00001.png"],
+    )
+    guarantee_multiindex_rows(df_new)  # -> MultiIndex([("labeled-data","test","img00001.png")])
+
+    old2, new2 = align_old_new(df_old, df_new)
+
+    # The key regression assertion: no crash, and indices are now aligned
+    assert isinstance(old2.index, pd.MultiIndex)
+    assert isinstance(new2.index, pd.MultiIndex)
+    assert old2.index.equals(new2.index)
+
+    # After harmonization, both should collapse to basename representation
+    assert old2.index.nlevels == 1
+    assert new2.index.nlevels == 1
+    assert old2.index.to_list() == [("img00001.png",)]
+    assert new2.index.to_list() == [("img00001.png",)]
+
+    # Columns should also be aligned
+    assert old2.columns.equals(new2.columns)
+
+    # And values should still be present on the aligned row
+    row = ("img00001.png",)
+    assert old2.loc[row, ("S", "", "nose", "x")] == 10.0
+    assert old2.loc[row, ("S", "", "nose", "y")] == 20.0
+    assert new2.loc[row, ("S", "", "nose", "x")] == 11.0
+    assert new2.loc[row, ("S", "", "nose", "y")] == 22.0
+
+
+def test_keypoint_conflicts_handles_basename_index_vs_deep_path_multiindex_regression():
+    """
+    Regression test for overwrite-conflict preflight:
+    keypoint_conflicts() should handle shallow-vs-deep row indices without crashing.
+    """
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+
+    df_old = pd.DataFrame(
+        [[10.0, 20.0]],
+        columns=cols,
+        index=["img00001.png"],
+    )
+    guarantee_multiindex_rows(df_old)
+
+    df_new = pd.DataFrame(
+        [[11.0, 20.0]],  # x differs -> conflict
+        columns=cols,
+        index=["labeled-data/test/img00001.png"],
+    )
+    guarantee_multiindex_rows(df_new)
+
+    kc = keypoint_conflicts(df_old, df_new)
+
+    assert isinstance(kc.index, pd.MultiIndex)
+    assert kc.index.nlevels == 1
+    assert kc.index.to_list() == [("img00001.png",)]
+    assert kc.loc[("img00001.png",)].any()
+
+
 # -----------------------------------------------------------------------------
 # 4) keypoint_conflicts DLC semantics
 # -----------------------------------------------------------------------------
@@ -152,7 +250,7 @@ def test_keypoint_conflicts_detects_conflict_single_animal_3level():
     )
     kc = keypoint_conflicts(df_old, df_new)
 
-    assert kc.loc["img000.png"].any()
+    assert kc.loc[("img000.png",)].any()
     assert any("bp1" in str(c) for c in kc.columns)
 
 
@@ -169,7 +267,7 @@ def test_keypoint_conflicts_detects_conflict_multi_animal_4level():
     )
     kc = keypoint_conflicts(df_old, df_new)
 
-    assert kc.loc["img000.png"].any()
+    assert kc.loc[("img000.png",)].any()
     assert any(("animal1" in str(c) and "bp1" in str(c)) for c in kc.columns)
 
 

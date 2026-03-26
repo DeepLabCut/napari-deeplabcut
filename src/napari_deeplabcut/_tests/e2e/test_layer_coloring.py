@@ -19,8 +19,8 @@ def test_config_placeholder_points_layer_colors_after_first_keypoint_added(make_
     project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
     viewer = make_napari_viewer()
-    from napari_deeplabcut import keypoints
     from napari_deeplabcut._widgets import KeypointControls
+    from napari_deeplabcut.core import keypoints
 
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
@@ -96,8 +96,8 @@ def test_config_placeholder_multianimal_colors_by_id_after_first_keypoint_added(
     _, config_path = multianimal_config_project
 
     viewer = make_napari_viewer()
-    from napari_deeplabcut import keypoints
     from napari_deeplabcut._widgets import KeypointControls
+    from napari_deeplabcut.core import keypoints
 
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
@@ -175,8 +175,8 @@ def test_color_scheme_panel_toggle_shows_active_then_full_config_bodyparts(
 
     viewer = make_napari_viewer()
 
-    from napari_deeplabcut import keypoints
     from napari_deeplabcut._widgets import KeypointControls
+    from napari_deeplabcut.core import keypoints
 
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
@@ -238,8 +238,8 @@ def test_color_scheme_panel_multianimal_toggle_shows_active_then_full_config_ind
 
     viewer = make_napari_viewer()
 
-    from napari_deeplabcut import keypoints
     from napari_deeplabcut._widgets import KeypointControls
+    from napari_deeplabcut.core import keypoints
 
     controls = KeypointControls(viewer)
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")

@@ -12,8 +12,8 @@ try:
 except Exception:  # pragma: no cover
     Image = Points = Shapes = Tracks = Layer = object  # type: ignore
 
-from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
+from napari_deeplabcut.core.keypoints import build_color_cycles
 
 T = TypeVar("T")
 
@@ -70,7 +70,7 @@ def populate_keypoint_layer_properties(
     first_id = ids_list[0] if len(ids_list) > 0 else ""
     use_id = bool(first_id)
 
-    face_color_cycle_maps = misc.build_color_cycles(header, colormap)
+    face_color_cycle_maps = build_color_cycles(header, colormap)
     face_color_prop = "id" if use_id else "label"
 
     return {

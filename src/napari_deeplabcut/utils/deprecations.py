@@ -193,6 +193,7 @@ class deprecation_mode:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        assert self._token is not None
-        _policy_override.reset(self._token)
-        return False
+        if self._token is not None:
+            _policy_override.reset(self._token)
+            return False
+        raise RuntimeError("Invalid state in deprecation_mode context manager: token not set")

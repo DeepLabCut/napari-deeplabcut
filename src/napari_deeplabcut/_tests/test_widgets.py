@@ -10,8 +10,8 @@ from napari.layers import Image
 from qtpy.QtSvgWidgets import QSvgWidget
 from vispy import keys
 
-from napari_deeplabcut import _widgets, keypoints
-from napari_deeplabcut.core import io
+from napari_deeplabcut import _widgets
+from napari_deeplabcut.core import io, keypoints
 from napari_deeplabcut.core.io import populate_keypoint_layer_properties
 from napari_deeplabcut.ui.color_scheme_display import ColorSchemeDisplay
 from napari_deeplabcut.ui.labels_and_dropdown import KeypointsDropdownMenu, LabelPair
@@ -48,7 +48,8 @@ def test_save_layers(viewer, points):
 @pytest.mark.usefixtures("qtbot")
 def test_show_trails(viewer, store):
     controls = _widgets.KeypointControls(viewer)
-    controls._stores["temp"] = store
+    controls._stores[store.layer] = store
+    viewer.layers.selection.active = store.layer
     controls._is_saved = True
     controls._show_trails(state=2)
 

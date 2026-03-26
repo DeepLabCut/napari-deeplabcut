@@ -11,10 +11,10 @@ import pytest
 from qtpy.QtWidgets import QDockWidget
 from skimage.io import imsave
 
-from napari_deeplabcut import keypoints
 from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.config.settings import set_auto_open_keypoint_controls
 from napari_deeplabcut.core import io as io
+from napari_deeplabcut.core import keypoints
 
 # os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
 

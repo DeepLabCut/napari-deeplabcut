@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
-from napari.utils import colormaps
 from natsort import natsorted
 
 from napari_deeplabcut.core.paths import canonicalize_path
@@ -78,20 +77,6 @@ def encode_categories(categories: Sequence, return_unique: bool = False, is_path
     return inds
 
 
-def build_color_cycle(n_colors: int, colormap: str | None = "viridis") -> np.ndarray:
-    cmap = colormaps.ensure_colormap(colormap)
-    return cmap.map(np.linspace(0, 1, n_colors))
-
-
-def build_color_cycles(header: HeaderLike, colormap: str | None = "viridis"):
-    label_colors = build_color_cycle(len(header.bodyparts), colormap)
-    id_colors = build_color_cycle(len(header.individuals), colormap)
-    return {
-        "label": dict(zip(header.bodyparts, label_colors, strict=False)),
-        "id": dict(zip(header.individuals, id_colors, strict=False)),
-    }
-
-
 def unsorted_unique(array: Sequence) -> np.ndarray:
     """Return the unsorted unique elements of an array."""
     _, inds = np.unique(array, return_index=True)
@@ -134,7 +119,6 @@ def _is_nan_value(x) -> bool:
 def _array_has_nan(arr) -> bool:
     try:
         a = np.asarray(arr)
-        # object arrays: check elementwise
         return any(_is_nan_value(v) for v in a.ravel())
     except Exception:
         return False

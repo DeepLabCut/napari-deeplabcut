@@ -24,7 +24,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from napari_deeplabcut import keypoints
+from napari_deeplabcut.core import keypoints
 
 logger = logging.getLogger(__name__)
 

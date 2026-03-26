@@ -29,7 +29,6 @@ class MetadataKind(str, Enum):
 # -----------------------------------------------------------------------------
 # Header model (authoritative wrapper)
 # -----------------------------------------------------------------------------
-# src/napari_deeplabcut/config/models.py
 class DLCHeaderModel(BaseModel):
     """
     Authoritative, pandas-optional DLC header specification.
@@ -526,3 +525,37 @@ class OverwriteConflictReport:
             lines.append("")
             lines.append(f"… and {self.truncated_entries} more frame/image entries.")
         return "\n".join(lines)
+
+
+# -----------------------------------------------------------------------------
+#  Trails metadata and user settings models
+# -----------------------------------------------------------------------------
+
+
+class TrailsDisplayConfig(BaseModel):
+    tail_length: int = Field(default=50, ge=0)
+    head_length: int = Field(default=50, ge=0)
+    tail_width: float = Field(default=6.0, gt=0)
+    opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+    blending: str = Field(default="translucent")
+    visible: bool = Field(default=True)
+
+    @field_validator("blending")
+    @classmethod
+    def _validate_blending(cls, v: str) -> str:
+        # Keep this list minimal and permissive; extend if needed.
+        allowed = {"translucent", "opaque", "additive", "minimum"}
+        vv = str(v).strip().lower()
+        return vv if vv in allowed else "translucent"
+
+
+class FolderUIState(BaseModel):
+    """
+    Folder-scoped persisted UI state stored in .napari-deeplabcut.json.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: int = Field(default=1, ge=1)
+    default_scorer: str | None = None
+    trails: TrailsDisplayConfig = Field(default_factory=TrailsDisplayConfig)
