@@ -355,8 +355,8 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
         # Prefer dataset folder if inferable (DLC convention)
         project_ctx = infer_dlc_project_from_points_meta(pts_meta, prefer_project_root=False)
         dataset_dir = None
-        if project_ctx is not None:
-            dataset_dir = project_ctx.dataset_folder or project_ctx.root_anchor
+        if project_ctx is not None and project_ctx.dataset_folder is not None:
+            dataset_dir = project_ctx.dataset_folder
 
         # If dataset_dir exists or can be created, use it; else fall back to pts_meta.root
         if dataset_dir is not None:
