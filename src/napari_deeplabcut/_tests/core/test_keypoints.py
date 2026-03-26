@@ -1,6 +1,6 @@
 import numpy as np
 
-from napari_deeplabcut import keypoints
+from napari_deeplabcut.core import keypoints
 
 
 def test_store_advance_step(store):
@@ -61,7 +61,7 @@ def test_point_resize(qtbot, viewer, points):
 
 def test_add_unannotated(store):
     # LOOP mode: after a successful add/move, the viewer advances to the next frame
-    store.layer.metadata["controls"].label_mode = "loop"
+    store._get_label_mode = lambda: keypoints.LabelMode.LOOP
 
     # Make frame 1 unannotated by removing all its rows from the layer data
     ind_to_remove = 1
@@ -92,7 +92,7 @@ def test_add_unannotated(store):
 def test_add_quick(store):
     # QUICK mode: if the keypoint for the current frame already exists, it is MOVED; otherwise, it is ADDED.
     # QUICK does NOT auto-advance the viewer.
-    store.layer.metadata["controls"].label_mode = "quick"
+    store._get_label_mode = lambda: keypoints.LabelMode.QUICK
 
     # Choose a specific keypoint to act on; this determines which (label, id) is added/moved
     store.current_keypoint = store._keypoints[0]
