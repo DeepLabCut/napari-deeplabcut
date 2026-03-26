@@ -127,7 +127,7 @@ class ShortcutRow(QFrame):
 
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
-        text_col.setSpacing(1)
+        text_col.setSpacing(0)
 
         self.title_label = QLabel(spec.description)
         self.title_label.setStyleSheet("font-weight: 600;")
@@ -159,11 +159,11 @@ class ShortcutRow(QFrame):
         self._opacity_effect.setOpacity(1.0)
         self.setGraphicsEffect(self._opacity_effect)
 
-    def set_available(self, available: bool, reason: str | None = None) -> None:
+    def set_available(self, available: bool, reason: str | None = None, *, show_reason: bool = True) -> None:
         """Dim row and show an explanatory note when unavailable."""
         self._opacity_effect.setOpacity(1.0 if available else 0.45)
 
-        if available:
+        if available or not show_reason or not reason:
             self.state_label.hide()
             self.state_label.setText("")
         else:
@@ -278,18 +278,26 @@ class Shortcuts(QDialog):
             self.context_banner.setText(
                 "Showing all known shortcuts. Availability cannot be determined without a viewer context."
             )
+            suppress_generic_row_reason = False
         elif active_is_points:
             layer_name = getattr(active, "name", "active layer")
             self.context_banner.setText(
                 f"Active Points layer: <b>{layer_name}</b>. "
                 "Shortcuts specific to Points layers are currently available."
             )
+            suppress_generic_row_reason = False
         else:
             self.context_banner.setText("No active <b>Points</b> layer — some shortcuts are currently unavailable.")
+            suppress_generic_row_reason = True
 
         for row in self._rows:
             available, reason = self._availability_for_spec(row.spec)
-            row.set_available(available, reason)
+
+            show_reason = True
+            if suppress_generic_row_reason and reason == "No active Points layer.":
+                show_reason = False
+
+            row.set_available(available, reason, show_reason=show_reason)
 
 
 # --------------------------------------------------------------------------------------
