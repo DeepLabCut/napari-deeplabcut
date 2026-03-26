@@ -3,6 +3,7 @@
 # src/napari_deeplabcut/config/keybinds.py
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import numpy as np
@@ -13,93 +14,86 @@ _global_points_bindings_installed = False
 
 @dataclass(frozen=True)
 class ShortcutSpec:
-    key: str
+    keys: tuple[str, ...]
     description: str
-    scope: str  # e.g. "points-layer", "global-points"
+    group: str
+    scope: str
     overwrite: bool = False
+    when: str | None = None  # optional UI note, e.g. "Multi-animal layers only"
 
 
 # ---- Single source of truth for displayed shortcuts ----
-CYCLE_LABEL_MODE = ShortcutSpec(
-    key="M",
-    description="Change labeling mode",
-    scope="points-layer",
+
+SHORTCUTS: tuple[ShortcutSpec, ...] = (
+    ShortcutSpec(
+        keys=("M",),
+        description="Change labeling mode",
+        group="Annotation",
+        scope="points-layer",
+    ),
+    ShortcutSpec(
+        keys=("F",),
+        description="Change color mode",
+        group="Display",
+        scope="points-layer",
+        when="Only cycles beyond bodypart mode for multi-animal layers",
+    ),
+    ShortcutSpec(
+        keys=("Down",),
+        description="Select next keypoint",
+        group="Navigation",
+        scope="points-layer",
+        overwrite=True,
+    ),
+    ShortcutSpec(
+        keys=("Up",),
+        description="Select previous keypoint",
+        group="Navigation",
+        scope="points-layer",
+        overwrite=True,
+    ),
+    ShortcutSpec(
+        keys=("Shift-Right", "Shift-Left"),
+        description="Jump to first unlabeled frame",
+        group="Navigation",
+        scope="points-layer",
+    ),
+    ShortcutSpec(
+        keys=("E",),
+        description="Toggle point edge color",
+        group="Display",
+        scope="global-points",
+    ),
 )
 
-CYCLE_COLOR_MODE = ShortcutSpec(
-    key="F",
-    description="Change color mode",
-    scope="points-layer",
-)
 
-NEXT_KEYPOINT = ShortcutSpec(
-    key="Down",
-    description="Select next keypoint",
-    scope="points-layer",
-    overwrite=True,
-)
+def iter_shortcuts() -> Iterable[ShortcutSpec]:
+    return SHORTCUTS
 
-PREV_KEYPOINT = ShortcutSpec(
-    key="Up",
-    description="Select previous keypoint",
-    scope="points-layer",
-    overwrite=True,
-)
 
-NEXT_UNLABELED_RIGHT = ShortcutSpec(
-    key="Shift-Right",
-    description="Jump to first unlabeled frame",
-    scope="points-layer",
-)
-
-NEXT_UNLABELED_LEFT = ShortcutSpec(
-    key="Shift-Left",
-    description="Jump to first unlabeled frame",
-    scope="points-layer",
-)
-
-TOGGLE_EDGE_COLOR = ShortcutSpec(
-    key="E",
-    description="Toggle point edge color",
-    scope="global-points",
-)
+def _bind_each_key(layer: Points, keys: tuple[str, ...], callback, *, overwrite: bool = False) -> None:
+    for key in keys:
+        layer.bind_key(key, callback, overwrite=overwrite)
 
 
 def install_points_layer_keybindings(layer: Points, controls, store) -> None:
-    """Bind per-layer keybindings for a DLC-managed Points layer."""
-    layer.bind_key(CYCLE_LABEL_MODE.key, controls.cycle_through_label_modes)
-    layer.bind_key(CYCLE_COLOR_MODE.key, controls.cycle_through_color_modes)
-
-    layer.bind_key(NEXT_UNLABELED_RIGHT.key, store._find_first_unlabeled_frame)
-    layer.bind_key(NEXT_UNLABELED_LEFT.key, store._find_first_unlabeled_frame)
-
-    layer.bind_key(NEXT_KEYPOINT.key, store.next_keypoint, overwrite=NEXT_KEYPOINT.overwrite)
-    layer.bind_key(PREV_KEYPOINT.key, store.prev_keypoint, overwrite=PREV_KEYPOINT.overwrite)
+    _bind_each_key(layer, ("M",), controls.cycle_through_label_modes)
+    _bind_each_key(layer, ("F",), controls.cycle_through_color_modes)
+    _bind_each_key(layer, ("Shift-Right", "Shift-Left"), store._find_first_unlabeled_frame)
+    _bind_each_key(layer, ("Down",), store.next_keypoint, overwrite=True)
+    _bind_each_key(layer, ("Up",), store.prev_keypoint, overwrite=True)
 
 
 def toggle_edge_color(layer):
-    """Toggle point border width between 0 and 2."""
     layer.border_width = np.bitwise_xor(layer.border_width, 2)
 
 
 def install_global_points_keybindings() -> None:
-    """Install Points-class-wide keybindings exactly once."""
     global _global_points_bindings_installed
     if _global_points_bindings_installed:
         return
 
-    Points.bind_key(TOGGLE_EDGE_COLOR.key)(toggle_edge_color)
+    for key in ("E",):
+        Points.bind_key(key)(toggle_edge_color)
+
     _global_points_bindings_installed = True
-
-
-def iter_shortcuts():
-    """Return all known shortcuts for help / docs UI."""
-    return [
-        CYCLE_LABEL_MODE,
-        CYCLE_COLOR_MODE,
-        NEXT_KEYPOINT,
-        PREV_KEYPOINT,
-        NEXT_UNLABELED_RIGHT,
-        NEXT_UNLABELED_LEFT,
-        TOGGLE_EDGE_COLOR,
-    ]

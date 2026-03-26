@@ -1,13 +1,24 @@
 # src/napari_deeplabcut/ui/dialogs.py
 from __future__ import annotations
 
-from collections import namedtuple
-from pathlib import Path
+from collections import defaultdict, namedtuple
 
+from napari.layers import Points
 from qtpy.QtCore import QPoint, Qt
-from qtpy.QtSvgWidgets import QSvgWidget
-from qtpy.QtWidgets import QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QSizePolicy, QVBoxLayout
+from qtpy.QtWidgets import (
+    QDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
+from napari_deeplabcut.config.keybinds import iter_shortcuts
 from napari_deeplabcut.config.settings import get_overwrite_confirmation_enabled
 from napari_deeplabcut.core.conflicts import OverwriteConflictReport
 
@@ -16,21 +27,161 @@ from napari_deeplabcut.core.conflicts import OverwriteConflictReport
 Tip = namedtuple("Tip", ["msg", "pos"])
 
 
-class Shortcuts(QDialog):
-    """Opens a window displaying available napari-deeplabcut shortcuts."""
+_KEY_LABELS = {
+    "Shift": "Shift",
+    "Right": "→",
+    "Left": "←",
+    "Up": "↑",
+    "Down": "↓",
+    "Space": "Space",
+    "Enter": "Enter",
+    "Return": "Return",
+}
 
-    def __init__(self, parent):
+
+def _split_key_sequence(seq: str) -> list[str]:
+    # napari keys look like: "Shift-Right", "M", etc.
+    return [_KEY_LABELS.get(part, part) for part in seq.split("-")]
+
+
+class KeycapLabel(QLabel):
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent=parent)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet(
+            """
+            QLabel {
+                border: 1px solid palette(mid);
+                border-radius: 6px;
+                padding: 4px 8px;
+                background: palette(base);
+                font-weight: 600;
+                min-width: 12px;
+            }
+            """
+        )
+
+
+class ShortcutKeysWidget(QWidget):
+    def __init__(self, keys: tuple[str, ...], parent=None):
         super().__init__(parent=parent)
-        self.setParent(parent)
-        self.setWindowTitle("Shortcuts")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
-        image_path = str(Path(__file__).resolve().parents[1] / "assets" / "napari_shortcuts.svg")
+        for i, seq in enumerate(keys):
+            if i > 0:
+                sep = QLabel("/")
+                layout.addWidget(sep)
 
-        vlayout = QVBoxLayout()
-        svg_widget = QSvgWidget(image_path)
-        svg_widget.setStyleSheet("background-color: white;")
-        vlayout.addWidget(svg_widget)
-        self.setLayout(vlayout)
+            parts = _split_key_sequence(seq)
+            for j, part in enumerate(parts):
+                if j > 0:
+                    plus = QLabel("+")
+                    layout.addWidget(plus)
+                layout.addWidget(KeycapLabel(part))
+        layout.addStretch(1)
+
+
+class ShortcutRow(QWidget):
+    def __init__(self, spec, parent=None):
+        super().__init__(parent=parent)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(12)
+
+        keys_widget = ShortcutKeysWidget(spec.keys)
+        keys_widget.setMinimumWidth(180)
+
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setSpacing(2)
+
+        title = QLabel(spec.description)
+        title.setStyleSheet("font-weight: 600;")
+
+        subtitle_parts = []
+        if spec.scope == "points-layer":
+            subtitle_parts.append("Points layer")
+        elif spec.scope == "global-points":
+            subtitle_parts.append("All Points layers")
+
+        if spec.when:
+            subtitle_parts.append(spec.when)
+
+        subtitle = QLabel(" • ".join(subtitle_parts))
+        subtitle.setStyleSheet("color: palette(mid); font-size: 11px;")
+        subtitle.setWordWrap(True)
+
+        text_col.addWidget(title)
+        if subtitle_parts:
+            text_col.addWidget(subtitle)
+
+        layout.addWidget(keys_widget, 0)
+        layout.addLayout(text_col, 1)
+
+
+class Shortcuts(QDialog):
+    def __init__(self, parent=None, *, viewer=None):
+        super().__init__(parent=parent)
+        self.viewer = viewer
+        self.setWindowTitle("Keyboard shortcuts")
+        self.resize(640, 520)
+
+        root = QVBoxLayout(self)
+
+        intro = QLabel("These shortcuts are generated from the active napari-deeplabcut keybinding registry.")
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: palette(mid);")
+        root.addWidget(intro)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        root.addWidget(scroll, 1)
+
+        container = QWidget()
+        scroll.setWidget(container)
+        content = QVBoxLayout(container)
+        content.setContentsMargins(8, 8, 8, 8)
+        content.setSpacing(12)
+
+        grouped = defaultdict(list)
+        for spec in self._visible_shortcuts():
+            grouped[spec.group].append(spec)
+
+        for group_name in sorted(grouped):
+            box = QGroupBox(group_name)
+            box_layout = QVBoxLayout(box)
+            box_layout.setSpacing(6)
+
+            for spec in grouped[group_name]:
+                box_layout.addWidget(ShortcutRow(spec))
+
+            content.addWidget(box)
+
+        content.addStretch(1)
+
+    def _visible_shortcuts(self):
+        specs = list(iter_shortcuts())
+
+        # Optional: context-aware filtering
+        if self.viewer is None:
+            return specs
+
+        active = self.viewer.layers.selection.active
+        active_is_points = isinstance(active, Points)
+
+        visible = []
+        for spec in specs:
+            if spec.scope == "points-layer" and not active_is_points:
+                # Either hide these entirely…
+                continue
+                # …or keep them and annotate them. If you prefer that behavior,
+                # remove this continue and let the subtitle do the work.
+            visible.append(spec)
+
+        return visible
 
 
 class Tutorial(QDialog):

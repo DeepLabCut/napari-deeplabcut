@@ -752,7 +752,7 @@ class KeypointControls(QWidget):
         Tutorial(self.viewer.window._qt_window.current()).show()
 
     def display_shortcuts(self):
-        Shortcuts(self.viewer.window._qt_window.current()).show()
+        Shortcuts(self.viewer.window._qt_window.current(), viewer=self.viewer).show()
 
     def _move_image_layer_to_bottom(self, index):
         if (ind := index) != 0:
