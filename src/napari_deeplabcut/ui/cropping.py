@@ -112,10 +112,6 @@ class CropSavePlan(_CropModel):
         return v
 
 
-def _format_crop(coords: ViewerCropCoords | DLCConfigCropCoords | None) -> str:
-    return str(coords.values) if coords is not None else "none"
-
-
 class VideoActionPanel(QGroupBox):
     """Small video tools panel with lightweight user-facing context."""
 

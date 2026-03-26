@@ -249,8 +249,17 @@ def normalize_anchor_candidate(value: str | Path | None) -> Path | None:
         except Exception:
             return None
 
+    # If this is an existing file, anchor on its parent directory.
     if p.is_file():
         return p.parent
+
+    # For non-existent paths, heuristically treat file-like paths (with a suffix)
+    # as files so that their parent directory is used as the anchor. This avoids
+    # searching for config files under a non-existent "<file>/config.yaml".
+    if not p.exists() and p.suffix:
+        return p.parent
+
+    # Existing directories (or suffix-less paths) are used as-is.
     return p
 
 

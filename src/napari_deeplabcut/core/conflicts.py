@@ -100,7 +100,7 @@ def compute_overwrite_report_for_points_save(
     # Same GT fallback logic as write_hdf(...)
     if not out_path:
         project_ctx = infer_dlc_project_from_points_meta(pts_meta, prefer_project_root=False)
-        dataset_dir = project_ctx.dataset_folder or project_ctx.root_anchor
+        dataset_dir = project_ctx.dataset_folder
 
         if dataset_dir is not None:
             dataset_dir.mkdir(parents=True, exist_ok=True)
