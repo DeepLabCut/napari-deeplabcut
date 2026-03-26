@@ -644,7 +644,7 @@ def execute_frame_extraction(plan: FrameExtractionPlan) -> tuple[list[Path], str
 def plan_crop_save(
     viewer,
     *,
-    image_layer: Image,
+    image_layer: Image | None,
     explicit_project_path: str | None = None,
     fallback_video_name: str | None = None,
 ) -> tuple[CropSavePlan | None, str | None]:
