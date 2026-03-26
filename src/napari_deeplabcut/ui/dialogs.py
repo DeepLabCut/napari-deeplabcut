@@ -7,6 +7,8 @@ from napari.layers import Points
 from qtpy.QtCore import QPoint, Qt
 from qtpy.QtWidgets import (
     QDialog,
+    QFrame,
+    QGraphicsOpacityEffect,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -26,6 +28,9 @@ from napari_deeplabcut.core.conflicts import OverwriteConflictReport
 
 Tip = namedtuple("Tip", ["msg", "pos"])
 
+# --------------------------------------------------------------------------------
+# Keyboard shortcuts dialog, generated from the keybinding registry
+# --------------------------------------------------------------------------------
 
 _KEY_LABELS = {
     "Shift": "Shift",
@@ -35,28 +40,43 @@ _KEY_LABELS = {
     "Down": "↓",
     "Space": "Space",
     "Enter": "Enter",
-    "Return": "Return",
+    "Return": "Enter",
+    "Backspace": "⌫",
+    "Delete": "Del",
+    "Escape": "Esc",
+    "Ctrl": "Ctrl",
+    "Alt": "Alt",
+    "Meta": "Meta",
 }
 
 
 def _split_key_sequence(seq: str) -> list[str]:
-    # napari keys look like: "Shift-Right", "M", etc.
+    """Convert a napari key sequence like 'Shift-Right' into display parts."""
     return [_KEY_LABELS.get(part, part) for part in seq.split("-")]
+
+
+def _scope_label(scope: str) -> str:
+    if scope == "points-layer":
+        return "Points layer"
+    if scope == "global-points":
+        return "All Points layers"
+    return scope
 
 
 class KeycapLabel(QLabel):
     def __init__(self, text: str, parent=None):
         super().__init__(text, parent=parent)
         self.setAlignment(Qt.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.setStyleSheet(
             """
             QLabel {
                 border: 1px solid palette(mid);
-                border-radius: 6px;
-                padding: 4px 8px;
+                border-radius: 4px;
+                padding: 1px 5px;
                 background: palette(base);
                 font-weight: 600;
-                min-width: 12px;
+                min-width: 16px;
             }
             """
         )
@@ -65,9 +85,10 @@ class KeycapLabel(QLabel):
 class ShortcutKeysWidget(QWidget):
     def __init__(self, keys: tuple[str, ...], parent=None):
         super().__init__(parent=parent)
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(3)
 
         for i, seq in enumerate(keys):
             if i > 0:
@@ -79,109 +100,201 @@ class ShortcutKeysWidget(QWidget):
                 if j > 0:
                     plus = QLabel("+")
                     layout.addWidget(plus)
+
                 layout.addWidget(KeycapLabel(part))
+
         layout.addStretch(1)
 
 
-class ShortcutRow(QWidget):
+class ShortcutRow(QFrame):
+    """One shortcut row that can be enabled/dimmed based on availability."""
+
+    KEY_COL_WIDTH = 200
+
     def __init__(self, spec, parent=None):
         super().__init__(parent=parent)
+        self.spec = spec
+
+        self.setFrameShape(QFrame.NoFrame)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 4, 0, 4)
-        layout.setSpacing(12)
+        layout.setContentsMargins(2, 4, 2, 4)
+        layout.setSpacing(10)
 
-        keys_widget = ShortcutKeysWidget(spec.keys)
-        keys_widget.setMinimumWidth(180)
+        self.keys_widget = ShortcutKeysWidget(spec.keys)
+        self.keys_widget.setFixedWidth(self.KEY_COL_WIDTH)
+        self.keys_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
 
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
-        text_col.setSpacing(2)
+        text_col.setSpacing(1)
 
-        title = QLabel(spec.description)
-        title.setStyleSheet("font-weight: 600;")
+        self.title_label = QLabel(spec.description)
+        self.title_label.setStyleSheet("font-weight: 600;")
+        self.title_label.setWordWrap(True)
 
-        subtitle_parts = []
-        if spec.scope == "points-layer":
-            subtitle_parts.append("Points layer")
-        elif spec.scope == "global-points":
-            subtitle_parts.append("All Points layers")
-
-        if spec.when:
+        subtitle_parts = [_scope_label(spec.scope)]
+        if getattr(spec, "when", None):
             subtitle_parts.append(spec.when)
 
-        subtitle = QLabel(" • ".join(subtitle_parts))
-        subtitle.setStyleSheet("color: palette(mid); font-size: 11px;")
-        subtitle.setWordWrap(True)
+        self.subtitle_label = QLabel(" • ".join(subtitle_parts))
+        self.subtitle_label.setStyleSheet("color: palette(mid); font-size: 11px;")
+        self.subtitle_label.setWordWrap(True)
+        self.subtitle_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
 
-        text_col.addWidget(title)
-        if subtitle_parts:
-            text_col.addWidget(subtitle)
+        self.state_label = QLabel("")
+        self.state_label.setStyleSheet("color: palette(mid); font-size: 11px;")
+        self.state_label.setWordWrap(True)
+        self.state_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.state_label.hide()
 
-        layout.addWidget(keys_widget, 0)
+        text_col.addWidget(self.title_label)
+        text_col.addWidget(self.subtitle_label)
+        text_col.addWidget(self.state_label)
+
+        layout.addWidget(self.keys_widget, 0, Qt.AlignLeft | Qt.AlignTop)
         layout.addLayout(text_col, 1)
+
+        self._opacity_effect = QGraphicsOpacityEffect(self)
+        self._opacity_effect.setOpacity(1.0)
+        self.setGraphicsEffect(self._opacity_effect)
+
+    def set_available(self, available: bool, reason: str | None = None) -> None:
+        """Dim row and show an explanatory note when unavailable."""
+        self._opacity_effect.setOpacity(1.0 if available else 0.45)
+
+        if available:
+            self.state_label.hide()
+            self.state_label.setText("")
+        else:
+            self.state_label.setText(reason or "Currently unavailable in this context.")
+            self.state_label.show()
 
 
 class Shortcuts(QDialog):
     def __init__(self, parent=None, *, viewer=None):
         super().__init__(parent=parent)
         self.viewer = viewer
+        self._rows: list[ShortcutRow] = []
+
         self.setWindowTitle("Keyboard shortcuts")
-        self.resize(640, 520)
+        self.resize(720, 560)
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(10)
 
-        intro = QLabel("These shortcuts are generated from the active napari-deeplabcut keybinding registry.")
+        intro = QLabel("These shortcuts are generated from the napari-deeplabcut keybinding registry.")
         intro.setWordWrap(True)
         intro.setStyleSheet("color: palette(mid);")
         root.addWidget(intro)
 
+        self.context_banner = QLabel("")
+        self.context_banner.setWordWrap(True)
+        self.context_banner.setStyleSheet(
+            """
+            QLabel {
+                border: 1px solid palette(mid);
+                border-radius: 8px;
+                padding: 8px;
+                background: palette(alternate-base);
+            }
+            """
+        )
+        root.addWidget(self.context_banner)
+
+        # Scroll area for future scalability
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
         root.addWidget(scroll, 1)
 
-        container = QWidget()
-        scroll.setWidget(container)
-        content = QVBoxLayout(container)
-        content.setContentsMargins(8, 8, 8, 8)
-        content.setSpacing(12)
+        self._scroll_container = QWidget()
+        scroll.setWidget(self._scroll_container)
 
+        self._content_layout = QVBoxLayout(self._scroll_container)
+        self._content_layout.setContentsMargins(2, 2, 2, 2)
+        self._content_layout.setSpacing(12)
+
+        self._build_rows()
+        self._refresh_availability()
+
+        # Live updates as the active layer changes
+        if self.viewer is not None:
+            try:
+                self.viewer.layers.selection.events.active.connect(self._refresh_availability)
+            except Exception:
+                pass
+
+    def _build_rows(self) -> None:
         grouped = defaultdict(list)
-        for spec in self._visible_shortcuts():
+        for spec in iter_shortcuts():
             grouped[spec.group].append(spec)
 
         for group_name in sorted(grouped):
             box = QGroupBox(group_name)
             box_layout = QVBoxLayout(box)
-            box_layout.setSpacing(6)
+            box_layout.setSpacing(4)
 
             for spec in grouped[group_name]:
-                box_layout.addWidget(ShortcutRow(spec))
+                row = ShortcutRow(spec)
+                self._rows.append(row)
+                box_layout.addWidget(row)
 
-            content.addWidget(box)
+            self._content_layout.addWidget(box)
 
-        content.addStretch(1)
+        self._content_layout.addStretch(1)
 
-    def _visible_shortcuts(self):
-        specs = list(iter_shortcuts())
-
-        # Optional: context-aware filtering
+    def _active_layer(self):
         if self.viewer is None:
-            return specs
+            return None
+        try:
+            return self.viewer.layers.selection.active
+        except Exception:
+            return None
 
-        active = self.viewer.layers.selection.active
+    def _availability_for_spec(self, spec) -> tuple[bool, str | None]:
+        """
+        Return (available, reason) for a shortcut in the current viewer context.
+        """
+        active = self._active_layer()
         active_is_points = isinstance(active, Points)
 
-        visible = []
-        for spec in specs:
-            if spec.scope == "points-layer" and not active_is_points:
-                # Either hide these entirely…
-                continue
-                # …or keep them and annotate them. If you prefer that behavior,
-                # remove this continue and let the subtitle do the work.
-            visible.append(spec)
+        if spec.scope == "points-layer" and not active_is_points:
+            return False, "No active Points layer."
 
-        return visible
+        # Optional: support extra conditions later, e.g. multi-animal-only
+        # if getattr(spec, "requires_multianimal", False):
+        #     if not active_is_points or not self._is_multianimal(active):
+        #         return False, "Only available for multi-animal Points layers."
+
+        return True, None
+
+    def _refresh_availability(self, event=None) -> None:
+        active = self._active_layer()
+        active_is_points = isinstance(active, Points)
+
+        if self.viewer is None:
+            self.context_banner.setText(
+                "Showing all known shortcuts. Availability cannot be determined without a viewer context."
+            )
+        elif active_is_points:
+            layer_name = getattr(active, "name", "active layer")
+            self.context_banner.setText(
+                f"Active Points layer: <b>{layer_name}</b>. "
+                "Shortcuts specific to Points layers are currently available."
+            )
+        else:
+            self.context_banner.setText("No active <b>Points</b> layer — some shortcuts are currently unavailable.")
+
+        for row in self._rows:
+            available, reason = self._availability_for_spec(row.spec)
+            row.set_available(available, reason)
+
+
+# --------------------------------------------------------------------------------------
+# Tutorial dialog with a small set of tips for new users
+# --------------------------------------------------------------------------------------
 
 
 class Tutorial(QDialog):
