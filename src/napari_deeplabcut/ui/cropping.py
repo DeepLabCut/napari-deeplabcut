@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from math import ceil, floor
 from pathlib import Path
 
@@ -10,6 +9,7 @@ import numpy as np
 import pandas as pd
 from napari.layers import Image, Points, Shapes
 from napari.utils.notifications import show_info, show_warning
+from pydantic import BaseModel, ConfigDict, field_validator
 from qtpy.QtCore import QTimer
 from qtpy.QtWidgets import QCheckBox, QGroupBox, QLabel, QMessageBox, QPushButton, QVBoxLayout
 
@@ -26,8 +26,49 @@ DLC_CROP_LAYER_NAME = "DLC crop"
 DLC_CROP_LAYER_META_KEY = "_dlc_crop_layer"
 
 
-@dataclass(frozen=True)
-class FrameExtractionPlan:
+class _CropModel(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+
+class ViewerCropCoords(_CropModel):
+    """
+    Rectangle coordinates in napari/image-data space.
+    Used only for numpy slicing during extraction.
+    """
+
+    values: tuple[int, int, int, int]
+
+    @field_validator("values")
+    @classmethod
+    def _validate_values(cls, v: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        if len(v) != 4:
+            raise ValueError(f"ViewerCropCoords must be a 4-tuple (x1, x2, y1, y2). Got: {v!r}")
+        x1, x2, y1, y2 = v
+        if x2 <= x1 or y2 <= y1:
+            raise ValueError(f"ViewerCropCoords must satisfy x2>x1 and y2>y1. Got: {v!r}")
+        return v
+
+
+class DLCConfigCropCoords(_CropModel):
+    """
+    Rectangle coordinates in the legacy DLC-compatible config.yaml convention.
+    Used only for writing cfg['video_sets'][...]['crop'].
+    """
+
+    values: tuple[int, int, int, int]
+
+    @field_validator("values")
+    @classmethod
+    def _validate_values(cls, v: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        if len(v) != 4:
+            raise ValueError(f"DLCConfigCropCoords must be a 4-tuple (x1, x2, y1, y2). Got: {v!r}")
+        x1, x2, y1, y2 = v
+        if x2 <= x1 or y2 <= y1:
+            raise ValueError(f"DLCConfigCropCoords must satisfy x2>x1 and y2>y1. Got: {v!r}")
+        return v
+
+
+class FrameExtractionPlan(_CropModel):
     image_layer: Image
     points_layer: Points | None
     frame_index: int
@@ -35,15 +76,44 @@ class FrameExtractionPlan:
     output_path: Path
     labels_path: Path | None
     export_labels: bool
-    crop: tuple[int, int, int, int] | None
+    viewer_crop: ViewerCropCoords | None = None
+
+    @field_validator("frame_index")
+    @classmethod
+    def _validate_frame_index(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"frame_index must be >= 0. Got: {v}")
+        return v
 
 
-@dataclass(frozen=True)
-class CropSavePlan:
+class CropRectangleSpec(_CropModel):
+    """
+    A single resolved rectangle with two explicit coordinate conventions.
+    """
+
+    viewer_crop: ViewerCropCoords
+    config_crop: DLCConfigCropCoords
+
+
+class CropSavePlan(_CropModel):
     config_path: Path
     project_root: Path
     video_key: str
-    crop: tuple[int, int, int, int]
+    config_crop: DLCConfigCropCoords
+
+    @field_validator("config_crop", mode="before")
+    @classmethod
+    def _reject_viewer_coords_for_config(cls, v):
+        if isinstance(v, ViewerCropCoords):
+            raise ValueError(
+                "Refusing to write napari/viewer crop coordinates to DLC config.yaml. "
+                "Use CropRectangleSpec.config_crop or plan_crop_save(...), not viewer_crop."
+            )
+        return v
+
+
+def _format_crop(coords: ViewerCropCoords | DLCConfigCropCoords | None) -> str:
+    return str(coords.values) if coords is not None else "none"
 
 
 class VideoActionPanel(QGroupBox):
@@ -66,9 +136,8 @@ class VideoActionPanel(QGroupBox):
 
         self.apply_crop_cb = QCheckBox("Crop to rectangle")
         self.apply_crop_cb.setToolTip(
-            "When enabled, you can draw a rectangle to specify a crop region for frame extraction. "
-            "The dedicated 'DLC crop' layer is preferred, "
-            "but any rectangle from a Shapes layer will be considered."
+            "Use a rectangle crop for extraction. Viewer coords are used for extraction; "
+            "DLC config coords are saved separately."
         )
         layout.addWidget(self.apply_crop_cb)
 
@@ -76,17 +145,9 @@ class VideoActionPanel(QGroupBox):
         self.crop_button.clicked.connect(on_store_crop)
         layout.addWidget(self.crop_button)
 
-        self.help_label = QLabel(
-            "Extract the current frame from the active video/image layer. "
-            "Optionally export labels and/or apply a rectangle crop. "
-            "When crop is enabled, the dedicated 'DLC crop' layer is preferred, "
-            "but any rectangle from a Shapes layer will be considered."
-        )
-        self.help_label.setWordWrap(True)
-        layout.addWidget(self.help_label)
-
         self.context_label = QLabel("")
         self.context_label.setWordWrap(True)
+        self.context_label.setStyleSheet("color: palette(mid);")
         layout.addWidget(self.context_label)
 
     def set_context_text(self, text: str) -> None:
@@ -291,12 +352,14 @@ def _selected_rectangle_indices(layer: Shapes) -> list[int]:
     return [idx for idx in selected if _is_rectangle_shape(layer, idx)]
 
 
-def _rectangle_bounds(layer: Shapes, rect_index: int) -> tuple[int, int, int, int] | None:
+def _rectangle_spec(viewer, layer: Shapes, rect_index: int) -> CropRectangleSpec | None:
     """
-    Return raw rectangle bounds as (x1, x2, y1, y2) in image/data coordinates.
+    Resolve both coordinate conventions from the same rectangle:
 
-    For video rectangles, napari Shapes data is expected to contain [t, y, x] per vertex.
-    We therefore use the last two columns as [y, x] consistently.
+    - viewer_crop:
+        raw napari/image-data coordinates used for extraction
+    - config_crop:
+        legacy backwards-compatible coordinates written to config.yaml
     """
     try:
         data = np.asarray(layer.data[rect_index], dtype=float)
@@ -306,7 +369,7 @@ def _rectangle_bounds(layer: Shapes, rect_index: int) -> tuple[int, int, int, in
     if data.ndim != 2 or data.shape[1] < 2:
         return None
 
-    # Use the last two coordinate columns as [y, x] so this works for both 2D and 3D shapes.
+    # Use the last two columns consistently as [y, x]
     yx = data[:, -2:]
     if yx.ndim != 2 or yx.shape[1] != 2:
         return None
@@ -317,24 +380,53 @@ def _rectangle_bounds(layer: Shapes, rect_index: int) -> tuple[int, int, int, in
     if len(x_vals) == 0 or len(y_vals) == 0:
         return None
 
-    x1 = max(0, int(floor(np.min(x_vals))))
-    x2 = max(0, int(ceil(np.max(x_vals))))
-    y1 = max(0, int(floor(np.min(y_vals))))
-    y2 = max(0, int(ceil(np.max(y_vals))))
+    # ----------------------------
+    # 1) napari/image-data coords
+    # ----------------------------
+    vx1 = max(0, int(floor(np.min(x_vals))))
+    vx2 = max(0, int(ceil(np.max(x_vals))))
+    vy1 = max(0, int(floor(np.min(y_vals))))
+    vy2 = max(0, int(ceil(np.max(y_vals))))
 
-    if x2 <= x1 or y2 <= y1:
+    if vx2 <= vx1 or vy2 <= vy1:
         return None
 
-    return x1, x2, y1, y2
+    viewer_crop = ViewerCropCoords(values=(vx1, vx2, vy1, vy2))
+
+    # -----------------------------------------
+    # 2) legacy DLC-compatible config.yaml crop
+    # -----------------------------------------
+    try:
+        h = viewer.dims.range[2][1]
+    except Exception:
+        return None
+
+    legacy_y = h - y_vals
+    legacy = np.column_stack([legacy_y, x_vals])
+    legacy = np.clip(legacy, 0, a_max=None).astype(int)
+
+    y1_cfg, x1_cfg = legacy.min(axis=0)
+    y2_cfg, x2_cfg = legacy.max(axis=0)
+
+    if x2_cfg <= x1_cfg or y2_cfg <= y1_cfg:
+        return None
+
+    config_crop = DLCConfigCropCoords(values=(int(x1_cfg), int(x2_cfg), int(y1_cfg), int(y2_cfg)))
+
+    return CropRectangleSpec(
+        viewer_crop=viewer_crop,
+        config_crop=config_crop,
+    )
 
 
 def _find_rectangle_in_layer(
+    viewer,
     layer: Shapes,
     *,
     prefer_selected: bool = True,
-) -> tuple[int, int, int, int] | None:
+) -> CropRectangleSpec | None:
     """
-    Resolve a rectangle from a specific Shapes layer.
+    Resolve a rectangle spec from a specific Shapes layer.
 
     Preference:
     1) selected rectangle(s)
@@ -342,71 +434,75 @@ def _find_rectangle_in_layer(
     """
     if prefer_selected:
         for idx in _selected_rectangle_indices(layer):
-            rect = _rectangle_bounds(layer, idx)
-            if rect is not None:
-                return rect
+            spec = _rectangle_spec(viewer, layer, idx)
+            if spec is not None:
+                return spec
 
     for idx in reversed(_rectangle_indices(layer)):
-        rect = _rectangle_bounds(layer, idx)
-        if rect is not None:
-            return rect
+        spec = _rectangle_spec(viewer, layer, idx)
+        if spec is not None:
+            return spec
 
     return None
 
 
-def find_crop_rectangle(viewer, *, prefer_selected: bool = True) -> tuple[int, int, int, int] | None:
+def find_crop_rectangle(viewer, *, prefer_selected: bool = True) -> CropRectangleSpec | None:
     """
-    Resolve the crop rectangle in a deterministic order:
+    Resolve the crop rectangle spec in a deterministic order:
 
     1) dedicated DLC crop layer (source of truth) if it exists and contains a rectangle
     2) active Shapes layer
     3) next available Shapes layer(s)
+
+    Returns
+    -------
+    CropRectangleSpec | None
+        Contains both:
+        - viewer_crop: for extraction
+        - config_crop: for config.yaml saving
     """
     crop_layer = get_dlc_crop_layer(viewer)
     if crop_layer is not None:
-        rect = _find_rectangle_in_layer(crop_layer, prefer_selected=prefer_selected)
-        if rect is not None:
-            return rect
+        spec = _find_rectangle_in_layer(viewer, crop_layer, prefer_selected=prefer_selected)
+        if spec is not None:
+            return spec
 
     active = viewer.layers.selection.active
     if isinstance(active, Shapes) and not is_dlc_crop_layer(active):
-        rect = _find_rectangle_in_layer(active, prefer_selected=prefer_selected)
-        if rect is not None:
-            return rect
+        spec = _find_rectangle_in_layer(viewer, active, prefer_selected=prefer_selected)
+        if spec is not None:
+            return spec
 
     for layer in viewer.layers:
         if isinstance(layer, Shapes) and not is_dlc_crop_layer(layer):
-            rect = _find_rectangle_in_layer(layer, prefer_selected=prefer_selected)
-            if rect is not None:
-                return rect
+            spec = _find_rectangle_in_layer(viewer, layer, prefer_selected=prefer_selected)
+            if spec is not None:
+                return spec
 
     return None
 
 
-def get_crop_source_summary(viewer) -> tuple[str, tuple[int, int, int, int] | None]:
+def get_crop_source_summary(viewer) -> tuple[str, CropRectangleSpec | None]:
     """
-    Return a human-friendly crop source label plus the resolved crop tuple.
-
-    The coordinates returned are the actual raw rectangle bounds:
-    (x1, x2, y1, y2)
+    Return a human-friendly crop source label plus the resolved rectangle spec.
     """
     crop_layer = get_dlc_crop_layer(viewer)
     if crop_layer is not None:
-        rect = _find_rectangle_in_layer(crop_layer, prefer_selected=True)
-        if rect is not None:
-            return f"{DLC_CROP_LAYER_NAME} layer", rect
+        spec = _find_rectangle_in_layer(viewer, crop_layer, prefer_selected=True)
+        if spec is not None:
+            return f"{DLC_CROP_LAYER_NAME} layer", spec
 
     active = viewer.layers.selection.active
     if isinstance(active, Shapes) and not is_dlc_crop_layer(active):
-        rect = _find_rectangle_in_layer(active, prefer_selected=True)
-        if rect is not None:
-            return f"active Shapes layer ({active.name})", rect
+        spec = _find_rectangle_in_layer(viewer, active, prefer_selected=True)
+        if spec is not None:
+            return f"active Shapes layer ({active.name})", spec
 
     for layer in viewer.layers:
         if isinstance(layer, Shapes) and not is_dlc_crop_layer(layer):
-            rect = _find_rectangle_in_layer(layer, prefer_selected=True)
-            if rect is not None:
-                return f"Shapes layer ({layer.name})", rect
+            spec = _find_rectangle_in_layer(viewer, layer, prefer_selected=True)
+            if spec is not None:
+                return f"Shapes layer ({layer.name})", spec
 
     return "none", None
 
@@ -454,12 +550,13 @@ def plan_frame_extraction(
 
     crop = None
     if apply_crop:
-        crop = find_crop_rectangle(viewer, prefer_selected=True)
-        if crop is None:
+        crop_spec = find_crop_rectangle(viewer, prefer_selected=True)
+        if crop_spec is None:
             return None, (
-                "Apply selected rectangle is enabled, but no valid rectangle was found. "
+                "Crop to rectangle is enabled, but no valid rectangle was found. "
                 "Use the dedicated DLC crop layer or select a rectangle in a Shapes layer."
             )
+        crop = crop_spec.viewer_crop
 
     frame_name = f"img{str(frame_index).zfill(_frame_digits(n_frames))}.png"
     output_path = output_root / frame_name
@@ -479,7 +576,7 @@ def plan_frame_extraction(
             output_path=output_path,
             labels_path=labels_path,
             export_labels=export_labels,
-            crop=crop,
+            viewer_crop=crop,
         ),
         None,
     )
@@ -497,8 +594,8 @@ def execute_frame_extraction(plan: FrameExtractionPlan) -> tuple[list[Path], str
     """
     frame = np.asarray(plan.image_layer.data[plan.frame_index])
 
-    if plan.crop is not None:
-        x1, x2, y1, y2 = plan.crop
+    if plan.viewer_crop is not None:
+        x1, x2, y1, y2 = plan.viewer_crop.values
         frame = frame[y1:y2, x1:x2]
 
     plan.output_root.mkdir(parents=True, exist_ok=True)
@@ -569,12 +666,13 @@ def plan_crop_save(
     if config_path is None or project_root is None:
         return None, "Could not determine a DLC config.yaml for this video."
 
-    crop = find_crop_rectangle(viewer, prefer_selected=True)
-    if crop is None:
+    crop_spec = find_crop_rectangle(viewer, prefer_selected=True)
+    if crop_spec is None:
         return None, (
             "No valid rectangle was found for crop saving. "
             "Use the dedicated DLC crop layer or select a rectangle in a Shapes layer."
         )
+    crop = crop_spec.config_crop
 
     video_key = _resolve_video_key(image_layer, str(project_root), fallback_video_name=fallback_video_name)
     if not video_key:
@@ -585,7 +683,7 @@ def plan_crop_save(
             config_path=Path(config_path),
             project_root=Path(project_root),
             video_key=video_key,
-            crop=crop,
+            config_crop=crop,
         ),
         None,
     )
@@ -603,11 +701,11 @@ def execute_crop_save(plan: CropSavePlan) -> str:
     cfg = io.load_config(str(plan.config_path))
     video_sets = cfg.setdefault("video_sets", {})
     existing = dict(video_sets.get(plan.video_key, {}))
-    existing["crop"] = ", ".join(map(str, plan.crop))
+    existing["crop"] = ", ".join(map(str, plan.config_crop.values))
     video_sets[plan.video_key] = existing
     io.write_config(str(plan.config_path), cfg)
 
-    return f"Saved crop {plan.crop} to {plan.config_path.name} for video key {plan.video_key}"
+    return f"Saved crop {plan.config_crop.values} to {plan.config_path.name} for video key {plan.video_key}"
 
 
 def store_crop_coordinates(
@@ -685,11 +783,20 @@ def update_video_panel_context(viewer, panel) -> None:
     root_value = (image_layer.metadata or {}).get("root")
     root_text = str(root_value) if root_value else "unresolved"
 
-    crop_source, crop = get_crop_source_summary(viewer)
-    crop_text = f"{crop}" if crop is not None else "none"
+    crop_source, crop_spec = get_crop_source_summary(viewer)
+
+    viewer_crop_text = "none"
+    config_crop_text = "none"
+    if crop_spec is not None:
+        viewer_crop_text = str(crop_spec.viewer_crop.values)
+        config_crop_text = str(crop_spec.config_crop.values)
 
     panel.set_context_text(
-        f"{frame_text}\nOutput folder: {root_text}\nCrop source: {crop_source}\nCrop (x1, x2, y1, y2): {crop_text}"
+        f"{frame_text}\n"
+        f"Output folder: {root_text}\n"
+        f"Crop source: {crop_source}\n"
+        f"napari/viewer crop (used for extraction): {viewer_crop_text}\n"
+        f"DLC config crop (saved to config.yaml): {config_crop_text}"
     )
 
 

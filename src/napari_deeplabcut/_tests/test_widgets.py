@@ -526,7 +526,7 @@ def test_video_panel_has_extraction_options(viewer, qtbot):
     assert panel.extract_button.text() == "Extract current frame"
     assert panel.crop_button.text() == "Save crop to config"
     assert panel.export_labels_cb.text() == "Also export labels"
-    assert panel.apply_crop_cb.text() == "Apply selected rectangle"
+    assert panel.apply_crop_cb.text() == "Crop to rectangle"
 
 
 @pytest.mark.usefixtures("qtbot")
