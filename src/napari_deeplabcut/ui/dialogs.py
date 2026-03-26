@@ -164,6 +164,7 @@ class Shortcuts(QDialog):
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.viewer = viewer
         self._rows: list[ShortcutRow] = []
+        self._active_event_emitter = None
 
         self.setWindowTitle("Keyboard shortcuts")
         self.resize(720, 560)
@@ -214,12 +215,14 @@ class Shortcuts(QDialog):
             self._active_event_emitter.connect(self._refresh_availability)
 
     def closeEvent(self, event):
-        if self._active_event_emitter is not None:
+        emitter = getattr(self, "_active_event_emitter", None)
+        if emitter is not None:
             try:
-                self._active_event_emitter.disconnect(self._refresh_availability)
+                emitter.disconnect(self._refresh_availability)
             except (TypeError, RuntimeError):
                 pass
             self._active_event_emitter = None
+
         super().closeEvent(event)
 
     def _build_rows(self) -> None:
