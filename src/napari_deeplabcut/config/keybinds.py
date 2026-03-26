@@ -1,4 +1,4 @@
-"""Future file for centralizing keybinds."""
+"""Central registry and installers for napari-deeplabcut keybindings (source of truth)."""
 
 # src/napari_deeplabcut/config/keybinds.py
 from __future__ import annotations
