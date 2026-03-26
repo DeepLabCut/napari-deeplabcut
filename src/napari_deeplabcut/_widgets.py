@@ -81,6 +81,7 @@ from napari_deeplabcut.napari_compat.points_layer import make_paste_data
 from napari_deeplabcut.ui.color_scheme_display import ColorSchemePanel
 from napari_deeplabcut.ui.cropping import (
     build_video_action_menu,
+    handle_apply_crop_toggled,
     resolve_project_path_from_image_layer,
     run_extract_current_frame,
     run_store_crop_coordinates,
@@ -229,8 +230,9 @@ class KeypointControls(QWidget):
         self.video_widget = self.viewer.window.add_dock_widget(self._video_group, name="video", area="right")
         self.video_widget.setVisible(False)
         self._video_group.export_labels_cb.toggled.connect(lambda _checked: self._refresh_video_panel_context())
-        self._video_group.apply_crop_cb.toggled.connect(lambda _checked: self._refresh_video_panel_context())
+        self._video_group.apply_crop_cb.toggled.connect(self._on_apply_crop_toggled)
         self.viewer.dims.events.current_step.connect(lambda event: self._refresh_video_panel_context())
+        self.viewer.layers.selection.events.active.connect(lambda event: self._refresh_video_panel_context())
 
         # form helper display
         self._keypoint_mapping_button = None
@@ -1209,6 +1211,10 @@ class KeypointControls(QWidget):
             validate_points_layer=self._validate_header,
         )
         self.viewer.status = msg
+        self._refresh_video_panel_context()
+
+    def _on_apply_crop_toggled(self, checked) -> None:
+        handle_apply_crop_toggled(self.viewer, self._video_group, bool(checked))
         self._refresh_video_panel_context()
 
     def _store_crop_coordinates(self, *args):

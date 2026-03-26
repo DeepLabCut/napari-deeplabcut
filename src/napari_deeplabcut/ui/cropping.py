@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from math import ceil, floor
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from napari.layers import Image, Points, Shapes
 from napari.utils.notifications import show_info, show_warning
+from qtpy.QtCore import QTimer
 from qtpy.QtWidgets import QCheckBox, QGroupBox, QLabel, QMessageBox, QPushButton, QVBoxLayout
 
 import napari_deeplabcut.core.io as io
@@ -19,6 +21,9 @@ from napari_deeplabcut.core.project_paths import (
     infer_dlc_project,
     infer_dlc_project_from_image_layer,
 )
+
+DLC_CROP_LAYER_NAME = "DLC crop"
+DLC_CROP_LAYER_META_KEY = "_dlc_crop_layer"
 
 
 @dataclass(frozen=True)
@@ -59,8 +64,12 @@ class VideoActionPanel(QGroupBox):
         )
         layout.addWidget(self.export_labels_cb)
 
-        self.apply_crop_cb = QCheckBox("Apply selected rectangle")
-        self.apply_crop_cb.setToolTip("Crop the extracted frame to the selected rectangle before writing it.")
+        self.apply_crop_cb = QCheckBox("Crop to rectangle")
+        self.apply_crop_cb.setToolTip(
+            "When enabled, you can draw a rectangle to specify a crop region for frame extraction. "
+            "The dedicated 'DLC crop' layer is preferred, "
+            "but any rectangle from a Shapes layer will be considered."
+        )
         layout.addWidget(self.apply_crop_cb)
 
         self.crop_button = QPushButton("Save crop to config")
@@ -69,7 +78,9 @@ class VideoActionPanel(QGroupBox):
 
         self.help_label = QLabel(
             "Extract the current frame from the active video/image layer. "
-            "Optionally export labels and/or apply the selected crop rectangle."
+            "Optionally export labels and/or apply a rectangle crop. "
+            "When crop is enabled, the dedicated 'DLC crop' layer is preferred, "
+            "but any rectangle from a Shapes layer will be considered."
         )
         self.help_label.setWordWrap(True)
         layout.addWidget(self.help_label)
@@ -87,6 +98,149 @@ def build_video_action_menu(*, on_extract_frame, on_store_crop) -> VideoActionPa
         on_extract_frame=on_extract_frame,
         on_store_crop=on_store_crop,
     )
+
+
+def is_dlc_crop_layer(layer) -> bool:
+    return isinstance(layer, Shapes) and bool((layer.metadata or {}).get(DLC_CROP_LAYER_META_KEY, False))
+
+
+def get_dlc_crop_layer(viewer) -> Shapes | None:
+    for layer in viewer.layers:
+        if is_dlc_crop_layer(layer):
+            return layer
+    return None
+
+
+def ensure_dlc_crop_layer(viewer) -> Shapes:
+    """
+    Ensure a dedicated crop Shapes layer exists and is ready for rectangle drawing.
+    """
+    existing = get_dlc_crop_layer(viewer)
+    if existing is not None:
+        existing.visible = True
+        try:
+            viewer.layers.selection.active = existing
+        except Exception:
+            pass
+        try:
+            existing.mode = "add_rectangle"
+        except Exception:
+            pass
+        return existing
+
+    layer = viewer.add_shapes(
+        name=DLC_CROP_LAYER_NAME,
+        metadata={DLC_CROP_LAYER_META_KEY: True},
+    )
+    try:
+        layer.mode = "add_rectangle"
+    except Exception:
+        pass
+
+    try:
+        viewer.layers.selection.active = layer
+    except Exception:
+        pass
+
+    return layer
+
+
+def handle_apply_crop_toggled(viewer, panel, checked: bool) -> None:
+    """
+    When crop application is enabled, create/select the dedicated crop layer and
+    make it the preferred source of truth for crop rectangles.
+
+    Auto-refresh wiring is synchronized by update_video_panel_context(...),
+    so this function only needs to ensure the layer exists when enabled.
+    """
+    if checked:
+        ensure_dlc_crop_layer(viewer)
+
+    update_video_panel_context(viewer, panel)
+
+
+# ---------------------------------
+# Dedicated crop-layer auto-refresh
+# ---------------------------------
+
+
+def _ensure_crop_refresh_timer(panel, refresh_callback) -> QTimer:
+    """
+    Create (once) a lightweight debounce timer stored on the panel.
+
+    We debounce crop refreshes because Shapes data can emit repeatedly while
+    the user drags/resizes a rectangle.
+    """
+    timer = getattr(panel, "_dlc_crop_refresh_timer", None)
+    if timer is not None:
+        return timer
+
+    timer = QTimer(panel)
+    timer.setSingleShot(True)
+    timer.setInterval(30)  # small debounce; coalesces drag/resize bursts
+    timer.timeout.connect(refresh_callback)
+    panel._dlc_crop_refresh_timer = timer
+    return timer
+
+
+def _schedule_crop_refresh(panel, refresh_callback) -> None:
+    timer = _ensure_crop_refresh_timer(panel, refresh_callback)
+    timer.start()
+
+
+def sync_crop_layer_autorefresh(viewer, panel, refresh_callback) -> None:
+    """
+    Keep a debounced data-change listener attached only to the dedicated DLC crop layer.
+
+    This is intentionally a no-op in all other contexts:
+    - no dedicated crop layer -> nothing connected
+    - same layer already connected -> nothing changes
+    - crop layer removed/replaced -> disconnect old, connect new
+    """
+    current_layer = get_dlc_crop_layer(viewer)
+
+    prev_layer = getattr(panel, "_dlc_crop_refresh_layer", None)
+    prev_handler = getattr(panel, "_dlc_crop_refresh_handler", None)
+
+    # Fast no-op path: already synced to the current dedicated crop layer
+    if current_layer is not None and prev_layer is current_layer and prev_handler is not None:
+        return
+
+    # Disconnect previous listener if present
+    if prev_layer is not None and prev_handler is not None:
+        try:
+            prev_layer.events.data.disconnect(prev_handler)
+        except Exception:
+            pass
+
+    panel._dlc_crop_refresh_layer = None
+    panel._dlc_crop_refresh_handler = None
+
+    timer = getattr(panel, "_dlc_crop_refresh_timer", None)
+    if current_layer is None and timer is not None:
+        try:
+            timer.stop()
+        except Exception:
+            pass
+
+    if current_layer is None:
+        return
+
+    def _on_crop_layer_change(event=None):
+        _schedule_crop_refresh(panel, refresh_callback)
+
+    try:
+        current_layer.events.data.connect(_on_crop_layer_change)
+    except Exception:
+        return
+
+    try:
+        current_layer.events.selected_data.connect(_on_crop_layer_change)
+    except Exception:
+        pass
+
+    panel._dlc_crop_refresh_layer = current_layer
+    panel._dlc_crop_refresh_handler = _on_crop_layer_change
 
 
 def _resolve_video_key(image_layer: Image, project_path: str, fallback_video_name: str | None = None) -> str | None:
@@ -114,31 +268,18 @@ def _resolve_video_key(image_layer: Image, project_path: str, fallback_video_nam
     return os.path.join(project_path, "videos", video_name)
 
 
-def _rectangle_to_crop_tuple(viewer, layer: Shapes, rect_index: int) -> tuple[int, int, int, int] | None:
+def _is_rectangle_shape(layer: Shapes, index: int) -> bool:
     try:
-        bbox = np.asarray(layer.data[rect_index])[:, 1:].copy()
+        return layer.shape_type[index] == "rectangle"
     except Exception:
-        return None
+        return False
 
-    if bbox.ndim != 2 or bbox.shape[1] != 2:
-        return None
 
+def _rectangle_indices(layer: Shapes) -> list[int]:
     try:
-        # Preserve the existing convention from _widgets.py
-        h = viewer.dims.range[2][1]
+        return [i for i, _shape in enumerate(layer.shape_type) if _is_rectangle_shape(layer, i)]
     except Exception:
-        return None
-
-    bbox[:, 0] = h - bbox[:, 0]
-    bbox = np.clip(bbox, 0, a_max=None).astype(int)
-
-    y1, x1 = bbox.min(axis=0)
-    y2, x2 = bbox.max(axis=0)
-
-    if x2 <= x1 or y2 <= y1:
-        return None
-
-    return int(x1), int(x2), int(y1), int(y2)
+        return []
 
 
 def _selected_rectangle_indices(layer: Shapes) -> list[int]:
@@ -147,69 +288,127 @@ def _selected_rectangle_indices(layer: Shapes) -> list[int]:
     except Exception:
         return []
 
-    out: list[int] = []
-    for idx in selected:
-        try:
-            if layer.shape_type[idx] == "rectangle":
-                out.append(idx)
-        except Exception:
-            continue
-    return out
+    return [idx for idx in selected if _is_rectangle_shape(layer, idx)]
+
+
+def _rectangle_bounds(layer: Shapes, rect_index: int) -> tuple[int, int, int, int] | None:
+    """
+    Return raw rectangle bounds as (x1, x2, y1, y2) in image/data coordinates.
+
+    For video rectangles, napari Shapes data is expected to contain [t, y, x] per vertex.
+    We therefore use the last two columns as [y, x] consistently.
+    """
+    try:
+        data = np.asarray(layer.data[rect_index], dtype=float)
+    except Exception:
+        return None
+
+    if data.ndim != 2 or data.shape[1] < 2:
+        return None
+
+    # Use the last two coordinate columns as [y, x] so this works for both 2D and 3D shapes.
+    yx = data[:, -2:]
+    if yx.ndim != 2 or yx.shape[1] != 2:
+        return None
+
+    y_vals = yx[:, 0]
+    x_vals = yx[:, 1]
+
+    if len(x_vals) == 0 or len(y_vals) == 0:
+        return None
+
+    x1 = max(0, int(floor(np.min(x_vals))))
+    x2 = max(0, int(ceil(np.max(x_vals))))
+    y1 = max(0, int(floor(np.min(y_vals))))
+    y2 = max(0, int(ceil(np.max(y_vals))))
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    return x1, x2, y1, y2
+
+
+def _find_rectangle_in_layer(
+    layer: Shapes,
+    *,
+    prefer_selected: bool = True,
+) -> tuple[int, int, int, int] | None:
+    """
+    Resolve a rectangle from a specific Shapes layer.
+
+    Preference:
+    1) selected rectangle(s)
+    2) latest rectangle in that layer
+    """
+    if prefer_selected:
+        for idx in _selected_rectangle_indices(layer):
+            rect = _rectangle_bounds(layer, idx)
+            if rect is not None:
+                return rect
+
+    for idx in reversed(_rectangle_indices(layer)):
+        rect = _rectangle_bounds(layer, idx)
+        if rect is not None:
+            return rect
+
+    return None
 
 
 def find_crop_rectangle(viewer, *, prefer_selected: bool = True) -> tuple[int, int, int, int] | None:
     """
     Resolve the crop rectangle in a deterministic order:
 
-    1) selected rectangle in active Shapes layer
-    2) selected rectangle in any Shapes layer
-    3) latest rectangle in active Shapes layer
-    4) latest rectangle globally
+    1) dedicated DLC crop layer (source of truth) if it exists and contains a rectangle
+    2) active Shapes layer
+    3) next available Shapes layer(s)
     """
-    shape_layers = [layer for layer in viewer.layers if isinstance(layer, Shapes)]
-    if not shape_layers:
-        return None
+    crop_layer = get_dlc_crop_layer(viewer)
+    if crop_layer is not None:
+        rect = _find_rectangle_in_layer(crop_layer, prefer_selected=prefer_selected)
+        if rect is not None:
+            return rect
 
     active = viewer.layers.selection.active
+    if isinstance(active, Shapes) and not is_dlc_crop_layer(active):
+        rect = _find_rectangle_in_layer(active, prefer_selected=prefer_selected)
+        if rect is not None:
+            return rect
 
-    # 1) selected rectangle in active Shapes layer
-    if prefer_selected and isinstance(active, Shapes):
-        for idx in _selected_rectangle_indices(active):
-            crop = _rectangle_to_crop_tuple(viewer, active, idx)
-            if crop is not None:
-                return crop
-
-    # 2) selected rectangle in any Shapes layer
-    if prefer_selected:
-        for layer in shape_layers:
-            for idx in _selected_rectangle_indices(layer):
-                crop = _rectangle_to_crop_tuple(viewer, layer, idx)
-                if crop is not None:
-                    return crop
-
-    # 3) latest rectangle in active Shapes layer
-    if isinstance(active, Shapes):
-        try:
-            rect_indices = [i for i, shape in enumerate(active.shape_type) if shape == "rectangle"]
-        except Exception:
-            rect_indices = []
-        for idx in reversed(rect_indices):
-            crop = _rectangle_to_crop_tuple(viewer, active, idx)
-            if crop is not None:
-                return crop
-
-    # 4) latest rectangle globally
-    for layer in reversed(shape_layers):
-        try:
-            rect_indices = [i for i, shape in enumerate(layer.shape_type) if shape == "rectangle"]
-        except Exception:
-            rect_indices = []
-        for idx in reversed(rect_indices):
-            crop = _rectangle_to_crop_tuple(viewer, layer, idx)
-            if crop is not None:
-                return crop
+    for layer in viewer.layers:
+        if isinstance(layer, Shapes) and not is_dlc_crop_layer(layer):
+            rect = _find_rectangle_in_layer(layer, prefer_selected=prefer_selected)
+            if rect is not None:
+                return rect
 
     return None
+
+
+def get_crop_source_summary(viewer) -> tuple[str, tuple[int, int, int, int] | None]:
+    """
+    Return a human-friendly crop source label plus the resolved crop tuple.
+
+    The coordinates returned are the actual raw rectangle bounds:
+    (x1, x2, y1, y2)
+    """
+    crop_layer = get_dlc_crop_layer(viewer)
+    if crop_layer is not None:
+        rect = _find_rectangle_in_layer(crop_layer, prefer_selected=True)
+        if rect is not None:
+            return f"{DLC_CROP_LAYER_NAME} layer", rect
+
+    active = viewer.layers.selection.active
+    if isinstance(active, Shapes) and not is_dlc_crop_layer(active):
+        rect = _find_rectangle_in_layer(active, prefer_selected=True)
+        if rect is not None:
+            return f"active Shapes layer ({active.name})", rect
+
+    for layer in viewer.layers:
+        if isinstance(layer, Shapes) and not is_dlc_crop_layer(layer):
+            rect = _find_rectangle_in_layer(layer, prefer_selected=True)
+            if rect is not None:
+                return f"Shapes layer ({layer.name})", rect
+
+    return "none", None
 
 
 def _frame_digits(n_frames: int) -> int:
@@ -257,7 +456,10 @@ def plan_frame_extraction(
     if apply_crop:
         crop = find_crop_rectangle(viewer, prefer_selected=True)
         if crop is None:
-            return None, "Apply selected rectangle is enabled, but no valid rectangle is selected."
+            return None, (
+                "Apply selected rectangle is enabled, but no valid rectangle was found. "
+                "Use the dedicated DLC crop layer or select a rectangle in a Shapes layer."
+            )
 
     frame_name = f"img{str(frame_index).zfill(_frame_digits(n_frames))}.png"
     output_path = output_root / frame_name
@@ -313,8 +515,10 @@ def execute_frame_extraction(plan: FrameExtractionPlan) -> tuple[list[Path], str
         )
 
         if plan.frame_index >= len(df):
-            note = "Frame image was extracted, "
-            "but labels were skipped because the points layer did not contain the current frame."
+            note = (
+                "Frame image was extracted, "
+                "but labels were skipped because the points layer did not contain the current frame."
+            )
             return written, note
 
         df = df.iloc[plan.frame_index : plan.frame_index + 1]
@@ -367,7 +571,10 @@ def plan_crop_save(
 
     crop = find_crop_rectangle(viewer, prefer_selected=True)
     if crop is None:
-        return None, "Select or draw a valid rectangle before saving a crop."
+        return None, (
+            "No valid rectangle was found for crop saving. "
+            "Use the dedicated DLC crop layer or select a rectangle in a Shapes layer."
+        )
 
     video_key = _resolve_video_key(image_layer, str(project_root), fallback_video_name=fallback_video_name)
     if not video_key:
@@ -457,6 +664,12 @@ def update_video_panel_context(viewer, panel) -> None:
     if panel is None:
         return
 
+    sync_crop_layer_autorefresh(
+        viewer,
+        panel,
+        refresh_callback=lambda: update_video_panel_context(viewer, panel),
+    )
+
     image_layer = get_active_or_last_layer(viewer, Image)
     if image_layer is None:
         panel.set_context_text("Load a video/image layer to enable extraction and crop tools.")
@@ -472,10 +685,12 @@ def update_video_panel_context(viewer, panel) -> None:
     root_value = (image_layer.metadata or {}).get("root")
     root_text = str(root_value) if root_value else "unresolved"
 
-    crop = find_crop_rectangle(viewer, prefer_selected=True)
-    crop_text = f"Selected crop: {crop}" if crop is not None else "Selected crop: none"
+    crop_source, crop = get_crop_source_summary(viewer)
+    crop_text = f"{crop}" if crop is not None else "none"
 
-    panel.set_context_text(f"{frame_text}\nOutput folder: {root_text}\n{crop_text}")
+    panel.set_context_text(
+        f"{frame_text}\nOutput folder: {root_text}\nCrop source: {crop_source}\nCrop (x1, x2, y1, y2): {crop_text}"
+    )
 
 
 def run_extract_current_frame(
