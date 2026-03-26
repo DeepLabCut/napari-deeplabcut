@@ -145,9 +145,8 @@ class VideoActionPanel(QGroupBox):
         self.crop_button.clicked.connect(on_store_crop)
         layout.addWidget(self.crop_button)
 
-        self.context_label = QLabel("")
+        self.context_label = QLabel("No crop or video context yet.")
         self.context_label.setWordWrap(True)
-        self.context_label.setStyleSheet("color: palette(mid);")
         layout.addWidget(self.context_label)
 
     def set_context_text(self, text: str) -> None:
@@ -271,6 +270,10 @@ def sync_crop_layer_autorefresh(viewer, panel, refresh_callback) -> None:
     if prev_layer is not None and prev_handler is not None:
         try:
             prev_layer.events.data.disconnect(prev_handler)
+        except Exception:
+            pass
+        try:
+            prev_layer.events.selected_data.disconnect(prev_handler)
         except Exception:
             pass
 
@@ -770,7 +773,7 @@ def update_video_panel_context(viewer, panel) -> None:
 
     image_layer = get_active_or_last_layer(viewer, Image)
     if image_layer is None:
-        panel.set_context_text("Load a video/image layer to enable extraction and crop tools.")
+        panel.set_context_text("No active video/image layer.")
         return
 
     try:
@@ -785,18 +788,21 @@ def update_video_panel_context(viewer, panel) -> None:
 
     crop_source, crop_spec = get_crop_source_summary(viewer)
 
-    viewer_crop_text = "none"
-    config_crop_text = "none"
-    if crop_spec is not None:
-        viewer_crop_text = str(crop_spec.viewer_crop.values)
-        config_crop_text = str(crop_spec.config_crop.values)
+    if crop_spec is None:
+        panel.set_context_text(
+            f"{frame_text}\nOutput folder: {root_text}\nCrop source: {crop_source}\nNo valid rectangle selected yet."
+        )
+        return
+
+    viewer_crop_text = str(crop_spec.viewer_crop.values)
+    config_crop_text = str(crop_spec.config_crop.values)
 
     panel.set_context_text(
         f"{frame_text}\n"
         f"Output folder: {root_text}\n"
         f"Crop source: {crop_source}\n"
-        f"napari/viewer crop (used for extraction): {viewer_crop_text}\n"
-        f"DLC config crop (saved to config.yaml): {config_crop_text}"
+        f"Viewer crop: {viewer_crop_text}\n"
+        f"Config crop: {config_crop_text}"
     )
 
 

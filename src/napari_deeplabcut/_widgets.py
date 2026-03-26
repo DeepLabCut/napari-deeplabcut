@@ -233,6 +233,7 @@ class KeypointControls(QWidget):
         self._video_group.apply_crop_cb.toggled.connect(self._on_apply_crop_toggled)
         self.viewer.dims.events.current_step.connect(lambda event: self._refresh_video_panel_context())
         self.viewer.layers.selection.events.active.connect(lambda event: self._refresh_video_panel_context())
+        QTimer.singleShot(0, self._refresh_video_panel_context)
 
         # form helper display
         self._keypoint_mapping_button = None
