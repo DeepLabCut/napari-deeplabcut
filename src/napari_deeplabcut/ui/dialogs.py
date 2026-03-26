@@ -219,7 +219,7 @@ class Shortcuts(QDialog):
         if emitter is not None:
             try:
                 emitter.disconnect(self._refresh_availability)
-            except (TypeError, RuntimeError):
+            except (TypeError, RuntimeError, ValueError):
                 pass
             self._active_event_emitter = None
 
