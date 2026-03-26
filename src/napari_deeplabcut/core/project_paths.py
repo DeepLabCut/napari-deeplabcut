@@ -15,7 +15,7 @@ Therefore the root anchor must be inferable from what the user opened:
   root, but must remain configurable and must not be required.
 """
 
-# src/napari_deeplabcut/core/paths.py
+# src/napari_deeplabcut/core/project_paths.py
 from __future__ import annotations
 
 import logging

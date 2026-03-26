@@ -79,7 +79,8 @@ class DLCProjectContext(BaseModel):
         # If project_root exists and config_path is missing, infer config path conventionally
         if project_root is not None and config_path is None:
             candidate = project_root / "config.yaml"
-            config_path = candidate
+            if candidate.exists():
+                config_path = candidate
 
         # If root_anchor is missing, prefer project_root, otherwise dataset_folder
         if root_anchor is None:
