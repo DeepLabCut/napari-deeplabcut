@@ -321,7 +321,7 @@ def _resolve_video_key(image_layer: Image, project_path: str, fallback_video_nam
 
     if src:
         try:
-            return str(Path(src).expanduser().resolve())
+            return str(Path(src).expanduser())
         except Exception:
             return str(Path(src))
 
