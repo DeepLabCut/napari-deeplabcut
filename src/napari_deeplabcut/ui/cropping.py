@@ -797,7 +797,12 @@ def execute_crop_save(plan: CropSavePlan) -> str:
     """
     cfg = io.load_config(str(plan.config_path))
     video_sets = cfg.setdefault("video_sets", {})
-    existing = dict(video_sets.get(plan.video_key, {}))
+
+    existing = video_sets.get(plan.video_key)
+    if not isinstance(existing, dict):
+        existing = {}
+        video_sets[plan.video_key] = existing
+
     existing["crop"] = ", ".join(map(str, plan.config_crop.values))
     video_sets[plan.video_key] = existing
     io.write_config(str(plan.config_path), cfg)

@@ -8,9 +8,8 @@ import pytest
 
 import napari_deeplabcut.core.conflicts as conflicts_mod
 import napari_deeplabcut.core.dataframes as dataframes_mod
-from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.config.models import AnnotationKind, DLCProjectContext
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
-from napari_deeplabcut.core.project_paths import DLCProjectContext
 
 
 def _make_points_meta(
