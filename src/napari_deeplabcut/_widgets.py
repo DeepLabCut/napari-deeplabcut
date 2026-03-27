@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
 from functools import cached_property, partial
@@ -44,6 +45,7 @@ from napari_deeplabcut.config.keybinds import (
 )
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core import keypoints
+from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
 from napari_deeplabcut.core.layers import (
     get_first_points_layer,
@@ -52,6 +54,7 @@ from napari_deeplabcut.core.layers import (
 )
 from napari_deeplabcut.core.metadata import (
     MergePolicy,
+    apply_project_paths_override_to_points_meta,
     infer_image_root,
     migrate_points_layer_metadata,
     parse_points_metadata,
@@ -59,7 +62,15 @@ from napari_deeplabcut.core.metadata import (
     sync_points_from_image,
     write_points_meta,
 )
-from napari_deeplabcut.core.project_paths import PathMatchPolicy
+from napari_deeplabcut.core.project_paths import (
+    PathMatchPolicy,
+    coerce_paths_to_dlc_row_keys,
+    dataset_folder_has_files,
+    infer_dlc_project_from_points_meta,
+    is_windows_absolute_path,
+    resolve_project_root_from_config,
+    target_dataset_folder_for_config,
+)
 from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.core.sidecar import (
     get_default_scorer,
@@ -82,6 +93,7 @@ from napari_deeplabcut.napari_compat import (
     register_points_action,
 )
 from napari_deeplabcut.napari_compat.points_layer import make_paste_data
+from napari_deeplabcut.ui import dialogs as ui_dialogs
 from napari_deeplabcut.ui.color_scheme_display import ColorSchemePanel
 from napari_deeplabcut.ui.cropping import (
     build_video_action_menu,
@@ -168,6 +180,16 @@ def _prompt_for_scorer(parent_widget, *, anchor: str, suggested: str) -> str | N
     if not scorer:
         return None
     return scorer
+
+
+@contextmanager
+def _temporary_layer_metadata(layer: Points, metadata: dict):
+    old_metadata = dict(layer.metadata or {})
+    layer.metadata = metadata
+    try:
+        yield
+    finally:
+        layer.metadata = old_metadata
 
 
 class KeypointControls(QWidget):
@@ -857,6 +879,191 @@ class KeypointControls(QWidget):
                     getattr(ly, "name", ly),
                     out,
                 )
+
+    def _is_projectless_folder_association_candidate(self, layer: Points, pts_meta: PointsMetadata) -> bool:
+        """
+        Return True for the 'associate current labeled folder with a DLC project'
+        workflow.
+
+        Non-candidates include:
+        - machine/promotion layers
+        - layers with an explicit save_target
+        - layers that already have a resolved DLC project/config context
+        - layers without a usable folder root
+        - layers whose paths do not look like a simple single-folder labeling session
+        """
+        # Promotion / machine-save path is a separate workflow.
+        if is_machine_layer(layer):
+            return False
+
+        # If save routing was already explicitly chosen, do not override it here.
+        if getattr(pts_meta, "save_target", None) is not None:
+            return False
+
+        # Already project-backed -> do not prompt again.
+        project_ctx = infer_dlc_project_from_points_meta(pts_meta, prefer_project_root=False)
+        if project_ctx.project_root is not None and project_ctx.config_path is not None:
+            return False
+
+        root = getattr(pts_meta, "root", None)
+        paths = list(getattr(pts_meta, "paths", None) or [])
+        if not root or not paths:
+            return False
+
+        try:
+            root_path = Path(root).expanduser().resolve(strict=False)
+        except Exception:
+            root_path = Path(root)
+
+        # Simple single-folder path shape only:
+        # - relative basenames
+        # - absolute files directly under root
+        # - already-canonical labeled-data/<dataset>/<image>
+        for value in paths:
+            text = str(value).replace("\\", "/")
+            p = Path(value)
+
+            parts = [part for part in text.split("/") if part]
+            lowered = [part.lower() for part in parts]
+            if "labeled-data" in lowered:
+                idx = lowered.index("labeled-data")
+                if idx + 2 < len(parts):
+                    continue
+
+            # On POSIX, pathlib.Path(...) does not recognize Windows drive-letter
+            # / UNC paths as absolute. Prevent those from being misclassified as
+            # simple relative basenames.
+            is_windows_abs_misclassified = not p.is_absolute() and is_windows_absolute_path(value)
+            if not p.is_absolute():
+                if is_windows_abs_misclassified:
+                    # Treat as an absolute/unresolved path, not as a basename candidate.
+                    # In this lightweight workflow, unrelated absolute paths are allowed
+                    # and preserved unchanged.
+                    continue
+
+                # Only allow simple basenames as projectless candidates.
+                # Any directory components or '.' / '..' segments are rejected.
+                if len(p.parts) == 1 and p.parts[0] not in (".", ".."):
+                    continue
+                return False
+
+            try:
+                rel_to_root = p.expanduser().resolve(strict=False).relative_to(root_path)
+            except Exception:
+                # Unrelated absolute path outside the current labeled folder is allowed:
+                # it will simply be preserved unchanged.
+                continue
+
+            # Only direct children of the current labeled folder are considered
+            # safely coercible in this lightweight workflow.
+            if len(rel_to_root.parts) == 1:
+                continue
+
+            # Nested paths *inside* the current root are considered ambiguous for now.
+            return False
+
+        return True
+
+    def _maybe_prepare_project_path_override_metadata(self, layer: Points) -> tuple[dict | None, bool]:
+        """
+        Optionally prepare save-time metadata by associating a project-less labeled
+        folder with an explicit DLC project chosen via config.yaml.
+
+        Returns
+        -------
+        tuple[dict | None, bool]
+            (overridden_metadata, abort_save)
+
+            - (None, False): feature not applicable; continue normal save
+            - (metadata, False): apply metadata override and continue
+            - (None, True): user cancelled or operation was refused; abort save
+        """
+        res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
+        if isinstance(res, ValidationError):
+            return None, False
+
+        pts_meta: PointsMetadata = res
+        paths = pts_meta.paths or []
+        if not paths:
+            return None, False
+
+        if not self._is_projectless_folder_association_candidate(layer, pts_meta):
+            return None, False
+
+        source_root = pts_meta.root
+        if not source_root:
+            return None, False
+
+        try:
+            source_root_path = Path(source_root).expanduser().resolve(strict=False)
+        except Exception:
+            source_root_path = Path(source_root)
+
+        # NOTE: @C-Achard 2026-03-27 Currently does not let user choose
+        # a different dataset name than the source folder,
+        # to keep a lightweight workflow.
+        # This could be allowed in the future if there is demand.
+        dataset_name = source_root_path.name
+        if not dataset_name:
+            return None, False
+
+        initial_dir = self._project_path or pts_meta.project or str(source_root_path)
+        dialog_result = ui_dialogs.prompt_for_project_config_for_save(self, initial_dir=initial_dir)
+
+        if dialog_result.action is ui_dialogs.ProjectConfigPromptAction.CANCEL:
+            logger.debug("User cancelled project association prompt.")
+            return None, True  # abort save
+
+        if dialog_result.action is ui_dialogs.ProjectConfigPromptAction.SKIP:
+            logger.debug("User chose to continue without project association.")
+            return None, False  # continue normal save path
+
+        if dialog_result.action is not ui_dialogs.ProjectConfigPromptAction.ASSOCIATE:
+            logger.warning("Unexpected project association dialog result: %r", dialog_result)
+            return None, True  # fail safe: abort save
+
+        config_path = dialog_result.config_path
+        if not config_path:
+            logger.warning("Project association result was ASSOCIATE but config_path was empty.")
+            return None, True  # fail safe: abort save
+
+        project_root = resolve_project_root_from_config(config_path)
+        if project_root is None:
+            QMessageBox.warning(
+                self,
+                "Invalid project configuration",
+                "The selected file is not a valid DeepLabCut config.yaml or project root. "
+                "The save operation has been cancelled.",
+            )
+            return None, True
+
+        target_folder = target_dataset_folder_for_config(config_path, dataset_name=dataset_name)
+        if dataset_folder_has_files(target_folder):
+            ui_dialogs.warn_existing_dataset_folder_conflict(self, target_folder=target_folder)
+            return None, True  # refuse the save
+
+        rewritten_paths, unresolved = coerce_paths_to_dlc_row_keys(
+            paths,
+            source_root=source_root_path,
+            dataset_name=dataset_name,
+        )
+
+        if not ui_dialogs.maybe_confirm_dataset_path_rewrite(
+            self,
+            project_root=project_root,
+            dataset_name=dataset_name,
+            n_paths=len(paths),
+            n_unresolved=len(unresolved),
+        ):
+            return None, True  # user declined
+
+        overridden = apply_project_paths_override_to_points_meta(
+            pts_meta,
+            project_root=project_root,
+            rewritten_paths=rewritten_paths,
+        )
+
+        return overridden.model_dump(mode="python", exclude_none=True), False
 
     def _show_color_scheme(self):
         show = self._view_scheme_cb.isChecked()
@@ -1604,9 +1811,6 @@ class KeypointControls(QWidget):
             By default, all layers are saved.
         """
 
-        from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
-        from napari_deeplabcut.ui.dialogs import maybe_confirm_overwrite
-
         selected_layers = list(self.viewer.layers.selection)
         msg = ""
         if not len(self.viewer.layers):
@@ -1630,9 +1834,14 @@ class KeypointControls(QWidget):
                 layer.metadata.get("save_target"),
             )
             try:
+                overridden_metadata, abort_save = self._maybe_prepare_project_path_override_metadata(layer)
+                if abort_save:
+                    logger.debug("Save aborted during project-association path handling.")
+                    return
+
                 attributes = {
                     "name": layer.name,
-                    "metadata": dict(layer.metadata or {}),
+                    "metadata": overridden_metadata if overridden_metadata is not None else dict(layer.metadata or {}),
                     "properties": dict(layer.properties or {}),
                 }
                 report = compute_overwrite_report_for_points_save(layer.data, attributes)
@@ -1647,14 +1856,20 @@ class KeypointControls(QWidget):
                 return
 
             if report is not None:
-                if not maybe_confirm_overwrite(
+                if not ui_dialogs.maybe_confirm_overwrite(
                     parent=self,
                     report=report,
                 ):
                     logger.debug("Save cancelled.")
                     return
 
-            self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+            if overridden_metadata is not None:
+                with _temporary_layer_metadata(layer, overridden_metadata):
+                    self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+                # Persist the successful override into live metadata after save
+                layer.metadata = dict(overridden_metadata)
+            else:
+                self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
             # hook to persist UI state on successful save
             try:
                 self._persist_folder_ui_state_for_points_layer(layer)

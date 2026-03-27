@@ -510,6 +510,74 @@ def test_widget_map_keypoints_writes_to_config(viewer, qtbot, points, config_pat
     }
 
 
+def test_read_config_injects_tables_metadata(tmp_path):
+    cfg = {
+        "Task": "demo",
+        "scorer": "Tester",
+        "date": "2026-03-27",
+        "multianimalproject": False,
+        "identity": "",
+        "project_path": str(tmp_path),
+        "bodyparts": ["bp1", "bp2"],
+        "skeleton": [],
+        "pcutoff": 0.6,
+        "dotsize": 8,
+        "colormap": "viridis",
+        "SuperAnimalConversionTables": {
+            "superanimal_quadruped": {
+                "bp1": "nose",
+                "bp2": "upper_jaw",
+            }
+        },
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+    layers = io.read_config(str(config_path))
+    _, layer_props, layer_type = layers[0]
+
+    assert layer_type == "points"
+    assert "tables" in layer_props["metadata"]
+    assert layer_props["metadata"]["tables"] == {
+        "superanimal_quadruped": {
+            "bp1": "nose",
+            "bp2": "upper_jaw",
+        }
+    }
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_points_layer_with_tables_shows_superkeypoints_button(viewer, qtbot, points):
+    controls = _widgets.KeypointControls(viewer)
+    qtbot.add_widget(controls)
+
+    assert not controls._keypoint_mapping_button.isVisible()
+
+    points.metadata["tables"] = {"superanimal_quadruped": {"bp1": "nose", "bp2": "upper_jaw"}}
+
+    # Simulate the same setup path that real inserted/adopted layers use
+    controls._setup_points_layer(points, allow_merge=False)
+
+    assert not controls._keypoint_mapping_button.isHidden()
+    assert controls._keypoint_mapping_button.text() == "Load superkeypoints diagram"
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_points_layer_with_tables_button_not_lost_on_merge_path(viewer, qtbot, points, monkeypatch):
+    controls = _widgets.KeypointControls(viewer)
+    qtbot.add_widget(controls)
+
+    points.metadata["tables"] = {"superanimal_quadruped": {"bp1": "nose"}}
+
+    # Force the merge branch to happen
+    monkeypatch.setattr(controls, "_maybe_merge_config_points_layer", lambda layer: True)
+
+    controls._setup_points_layer(points, allow_merge=True)
+
+    assert controls._keypoint_mapping_button.isHidden()
+
+
 @pytest.mark.usefixtures("qtbot")
 def test_video_panel_has_extraction_options(viewer, qtbot):
     from napari_deeplabcut._widgets import KeypointControls

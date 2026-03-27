@@ -7,6 +7,13 @@ from types import SimpleNamespace
 import pytest
 
 import napari_deeplabcut.core.project_paths as paths_mod
+from napari_deeplabcut.core.project_paths import (
+    coerce_paths_to_dlc_row_keys,
+    dataset_folder_has_files,
+    infer_dlc_project_from_config,
+    resolve_project_root_from_config,
+    target_dataset_folder_for_config,
+)
 
 
 # -----------------------------------------------------------------------------
@@ -525,3 +532,89 @@ def test_infer_dlc_project_from_image_layer_returns_best_effort_without_config(t
     assert ctx.project_root is None
     assert ctx.config_path is None
     assert ctx.root_anchor == videos.resolve()
+
+
+def test_resolve_project_root_from_config(tmp_path):
+    project = tmp_path / "my-project"
+    project.mkdir()
+    cfg = project / "config.yaml"
+    cfg.write_text("scorer: test\n", encoding="utf-8")
+
+    assert resolve_project_root_from_config(cfg) == project
+    assert resolve_project_root_from_config(project / "not_config.yaml") is None
+    assert resolve_project_root_from_config(project / "config.yml") is None
+    assert resolve_project_root_from_config(project / "missing" / "config.yaml") is None
+
+
+def test_coerce_paths_to_dlc_row_keys_for_projectless_folder(tmp_path):
+    source_root = tmp_path / "session_42"
+    source_root.mkdir()
+
+    inside_abs = source_root / "img001.png"
+    nested_abs = source_root / "nested" / "img_nested.png"
+    nested_abs.parent.mkdir()
+    outside_abs = tmp_path / "elsewhere" / "img999.png"
+    outside_abs.parent.mkdir()
+
+    rewritten, unresolved = coerce_paths_to_dlc_row_keys(
+        [
+            inside_abs,
+            "img002.png",
+            "labeled-data\\session_42\\img003.png",
+            nested_abs,
+            outside_abs,
+        ],
+        source_root=source_root,
+    )
+
+    assert rewritten == [
+        "labeled-data/session_42/img001.png",
+        "labeled-data/session_42/img002.png",
+        "labeled-data/session_42/img003.png",
+        nested_abs.as_posix(),
+        outside_abs.as_posix(),
+    ]
+    assert unresolved == (3, 4)
+
+
+def test_target_dataset_folder_and_existing_files_guard(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    cfg = project / "config.yaml"
+    cfg.write_text("scorer: John\n", encoding="utf-8")
+
+    target = target_dataset_folder_for_config(cfg, dataset_name="session_42")
+    assert target == project / "labeled-data" / "session_42"
+    assert not dataset_folder_has_files(target)
+
+    target.mkdir(parents=True)
+    assert not dataset_folder_has_files(target)
+
+    (target / "img001.png").write_bytes(b"x")
+    assert dataset_folder_has_files(target)
+
+
+def test_infer_dlc_project_from_config_returns_explicit_project_context(tmp_path):
+    project = tmp_path / "my-project"
+    project.mkdir()
+
+    config_path = project / "config.yaml"
+    config_path.write_text("scorer: John\n", encoding="utf-8")
+
+    ctx = infer_dlc_project_from_config(config_path)
+
+    assert ctx.root_anchor == project
+    assert ctx.project_root == project
+    assert ctx.config_path == config_path
+    assert ctx.dataset_folder is None
+
+
+def test_infer_dlc_project_from_config_rejects_invalid_path(tmp_path):
+    project = tmp_path / "my-project"
+    project.mkdir()
+
+    bad_config = project / "not_config.yaml"
+    bad_config.write_text("scorer: John\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        infer_dlc_project_from_config(bad_config)

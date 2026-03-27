@@ -21,16 +21,25 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from napari_deeplabcut.config.models import DLCProjectContext, PointsMetadata
 
 logger = logging.getLogger(__name__)
 
 
+def is_windows_absolute_path(value: str | Path) -> bool:
+    try:
+        return PureWindowsPath(str(value)).is_absolute()
+    except Exception:
+        return False
+
+
 # -----------------------------------------------------------------------------
 # Canonicalization
 # -----------------------------------------------------------------------------
+
+
 def canonicalize_path(p: str | Path, n: int = 3) -> str:
     """
     Return canonical POSIX path built from the last n path components.
@@ -362,6 +371,197 @@ def find_nearest_config(
         cur = cur.parent
 
     return None
+
+
+def infer_dlc_project_from_config(config_path: str | Path) -> DLCProjectContext:
+    root = resolve_project_root_from_config(config_path)
+    if root is None:
+        raise ValueError(f"Not a valid DLC config.yaml: {config_path!r}")
+    cfg = Path(config_path).expanduser().resolve(strict=False)
+    return DLCProjectContext(
+        root_anchor=root,
+        project_root=root,
+        config_path=cfg,
+        dataset_folder=None,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Explicit config-based DLC path normalization for project-less labeled folders
+# -----------------------------------------------------------------------------
+def resolve_project_root_from_config(config_path: str | Path | None) -> Path | None:
+    """
+    Return the DLC project root (= parent directory) from an explicit config.yaml path.
+    """
+    if config_path is None:
+        return None
+
+    try:
+        p = Path(config_path).expanduser().resolve(strict=False)
+    except Exception:
+        try:
+            p = Path(config_path)
+        except Exception:
+            return None
+
+    if p.name.lower() != "config.yaml":
+        return None
+
+    if not p.is_file():
+        return None
+
+    return p.parent
+
+
+def coerce_paths_to_dlc_row_keys(
+    paths: Iterable[str | Path],
+    *,
+    source_root: str | Path,
+    dataset_name: str | None = None,
+) -> tuple[list[str], tuple[int, ...]]:
+    """
+    Rewrite paths from a project-less labeled folder into canonical DLC row-key form:
+
+        labeled-data/<dataset_name>/<image_name>
+
+    Intended use
+    ------------
+    This is for the workflow where the user labeled a folder outside any DLC
+    project, then chooses a target config.yaml at save time to associate the
+    labels with a DLC project.
+
+    Rules
+    -----
+    - If a path is already a DLC row key (`labeled-data/<dataset>/<image>`),
+      normalize it to POSIX and keep it.
+    - If a path is an absolute file directly inside `source_root`,
+      rewrite it to `labeled-data/<dataset_name>/<basename>`.
+    - If a path is a relative basename (e.g. `img001.png`),
+      rewrite it similarly.
+    - All other paths are preserved unchanged (POSIX-normalized) and reported as unresolved.
+
+    This deliberately does NOT:
+    - invent nested DLC row keys for subdirectories,
+    - coerce multi-folder or ambiguous layouts,
+    - validate against the selected project root.
+    """
+    root = normalize_anchor_candidate(source_root)
+    if root is None:
+        raise ValueError("source_root must resolve to a valid directory-like anchor")
+
+    try:
+        root = root.expanduser().resolve(strict=False)
+    except Exception:
+        pass
+
+    ds_name = (dataset_name or root.name).strip()
+    if not ds_name:
+        raise ValueError("dataset_name must be non-empty")
+
+    rewritten: list[str] = []
+    unresolved: list[int] = []
+
+    for i, value in enumerate(paths):
+        try:
+            text = str(value).replace("\\", "/")
+        except Exception:
+            text = ""
+
+        if not text:
+            rewritten.append(text)
+            unresolved.append(i)
+            continue
+
+        parts = [p for p in text.split("/") if p]
+
+        # Already canonical-ish DLC row key -> preserve from labeled-data onward
+        lowered = [p.lower() for p in parts]
+        if "labeled-data" in lowered:
+            try:
+                idx = lowered.index("labeled-data")
+                if idx + 2 < len(parts):
+                    rewritten.append("/".join(parts[idx:]))
+                    continue
+            except Exception:
+                pass
+
+        try:
+            p = Path(value)
+        except Exception:
+            p = None
+
+        if p is not None and not p.is_absolute() and is_windows_absolute_path(value):
+            rewritten.append(PureWindowsPath(str(value)).as_posix())
+            unresolved.append(i)
+            continue
+
+        # Relative basename only -> coerce safely.
+        # Refuse any relative path that contains '.', '..', or multiple path parts.
+        if p is not None and not p.is_absolute():
+            raw_parts = [str(part) for part in p.parts if str(part) != ""]
+            if len(raw_parts) == 1 and raw_parts[0] not in (".", ".."):
+                rewritten.append(f"labeled-data/{ds_name}/{raw_parts[0]}")
+            else:
+                rewritten.append(text)
+                unresolved.append(i)
+            continue
+
+        # Absolute file directly under source_root -> coerce safely
+        try:
+            abs_path = Path(value).expanduser().resolve(strict=False)
+        except Exception:
+            rewritten.append(text)
+            unresolved.append(i)
+            continue
+
+        try:
+            rel_to_root = abs_path.relative_to(root)
+        except Exception:
+            rewritten.append(abs_path.as_posix())
+            unresolved.append(i)
+            continue
+
+        # Only direct children of source_root are coerced in this lightweight version.
+        if len(rel_to_root.parts) == 1:
+            rewritten.append(f"labeled-data/{ds_name}/{rel_to_root.name}")
+        else:
+            rewritten.append(abs_path.as_posix())
+            unresolved.append(i)
+
+    return rewritten, tuple(unresolved)
+
+
+def target_dataset_folder_for_config(
+    config_path: str | Path,
+    *,
+    dataset_name: str,
+) -> Path | None:
+    """
+    Return the target DLC dataset folder under the chosen project:
+
+        <project_root>/labeled-data/<dataset_name>
+    """
+    project_root = resolve_project_root_from_config(config_path)
+    if project_root is None:
+        return None
+    return project_root / "labeled-data" / dataset_name
+
+
+def dataset_folder_has_files(folder: str | Path | None) -> bool:
+    """
+    Return True if the given folder exists and contains any files.
+
+    This is intentionally conservative: any existing file content means we refuse
+    the project-association override to avoid colliding with an existing dataset.
+    """
+    if folder is None:
+        return False
+
+    p = Path(folder)
+    if not p.exists() or not p.is_dir():
+        return False
+
+    return any(child.is_file() for child in p.iterdir())
 
 
 # -----------------------------------------------------------------------------
