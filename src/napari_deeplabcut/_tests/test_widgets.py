@@ -513,3 +513,36 @@ def test_widget_map_keypoints_writes_to_config(viewer, qtbot, points, config_pat
         "bp1": "nose",
         "bp2": "upper_jaw",
     }
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_video_panel_has_extraction_options(viewer, qtbot):
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    qtbot.addWidget(controls)
+
+    panel = controls._video_group
+    assert panel.extract_button.text() == "Extract current frame"
+    assert panel.crop_button.text() == "Save crop to config"
+    assert panel.export_labels_cb.text() == "Also export labels"
+    assert panel.apply_crop_cb.text() == "Crop to rectangle"
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_extract_single_frame_warns_without_image_layer(viewer, qtbot, monkeypatch):
+    from napari_deeplabcut._widgets import KeypointControls
+
+    controls = KeypointControls(viewer)
+    qtbot.addWidget(controls)
+
+    seen = {}
+
+    monkeypatch.setattr(
+        "napari_deeplabcut.ui.cropping.show_warning",
+        lambda msg: seen.setdefault("warning", msg),
+    )
+
+    controls._extract_single_frame()
+
+    assert "No image/video layer is active." in seen["warning"]

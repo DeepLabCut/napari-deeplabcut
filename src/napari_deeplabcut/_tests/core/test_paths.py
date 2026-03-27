@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-import napari_deeplabcut.core.paths as paths_mod
+import napari_deeplabcut.core.project_paths as paths_mod
 
 
 # -----------------------------------------------------------------------------
@@ -74,8 +75,6 @@ def test_canonicalize_path_returns_empty_string_when_stringify_fails():
 # -----------------------------------------------------------------------------
 # PathMatchPolicy / find_matching_depth
 # -----------------------------------------------------------------------------
-
-
 def test_path_match_policy_ordered_depths():
     assert paths_mod.PathMatchPolicy.ORDERED_DEPTHS.depths == (3, 2, 1)
 
@@ -126,8 +125,6 @@ def test_find_matching_depth_returns_none_for_empty_inputs(old_paths, new_paths)
 # -----------------------------------------------------------------------------
 # config.yaml / DLC artifact heuristics
 # -----------------------------------------------------------------------------
-
-
 def test_is_config_yaml_true_only_for_existing_config_yaml(tmp_path: Path):
     cfg = tmp_path / "config.yaml"
     cfg.touch()
@@ -215,173 +212,316 @@ def test_should_force_dlc_reader_false_for_empty_or_regular_inputs(tmp_path: Pat
 
 
 # -----------------------------------------------------------------------------
-# root-anchor inference
+# normalize_anchor_candidate
 # -----------------------------------------------------------------------------
-
-
-def test_infer_root_anchor_prefers_explicit_root(tmp_path: Path):
-    opened = tmp_path / "project" / "labeled-data" / "mouse1"
-    opened.mkdir(parents=True)
-
-    explicit = tmp_path / "explicit-anchor"
-    explicit.mkdir()
-
-    assert paths_mod.infer_root_anchor(opened, explicit_root=explicit) == str(explicit)
-
-
-def test_infer_root_anchor_returns_directory_when_opening_folder(tmp_path: Path):
+def test_normalize_anchor_candidate_returns_directory_for_directory(tmp_path: Path):
     folder = tmp_path / "dataset"
     folder.mkdir()
 
-    assert paths_mod.infer_root_anchor(folder) == str(folder)
+    assert paths_mod.normalize_anchor_candidate(folder) == folder.resolve()
 
 
-def test_infer_root_anchor_returns_parent_when_opening_file(tmp_path: Path):
+def test_normalize_anchor_candidate_returns_parent_for_file(tmp_path: Path):
     folder = tmp_path / "dataset"
     folder.mkdir()
     file_path = folder / "CollectedData_Jane.h5"
     file_path.touch()
 
-    assert paths_mod.infer_root_anchor(file_path) == str(folder)
+    assert paths_mod.normalize_anchor_candidate(file_path) == folder.resolve()
 
 
-def test_infer_root_anchor_returns_none_for_missing_path(tmp_path: Path):
+def test_normalize_anchor_candidate_returns_path_for_missing_path(tmp_path: Path):
     missing = tmp_path / "does_not_exist"
-    assert paths_mod.infer_root_anchor(missing) is None
+
+    result = paths_mod.normalize_anchor_candidate(missing)
+    assert result == missing.resolve()
+
+
+def test_normalize_anchor_candidate_returns_none_for_none():
+    assert paths_mod.normalize_anchor_candidate(None) is None
 
 
 # -----------------------------------------------------------------------------
-# project-root discovery
+# find_nearest_config
 # -----------------------------------------------------------------------------
-
-
-def test_find_nearest_project_root_finds_config_in_current_directory(tmp_path: Path):
+def test_find_nearest_config_finds_config_in_current_directory(tmp_path: Path):
     project = tmp_path / "project"
     project.mkdir()
-    (project / "config.yaml").touch()
+    cfg = project / "config.yaml"
+    cfg.touch()
 
-    assert paths_mod.find_nearest_project_root(project) == str(project)
+    assert paths_mod.find_nearest_config(project) == cfg.resolve()
 
 
-def test_find_nearest_project_root_finds_parent_project_from_nested_file(tmp_path: Path):
+def test_find_nearest_config_finds_parent_project_from_nested_file(tmp_path: Path):
     project = tmp_path / "project"
     dataset = project / "labeled-data" / "mouse1"
     dataset.mkdir(parents=True)
-    (project / "config.yaml").touch()
+    cfg = project / "config.yaml"
+    cfg.touch()
 
     img = dataset / "img001.png"
     img.touch()
 
-    assert paths_mod.find_nearest_project_root(img) == str(project)
+    assert paths_mod.find_nearest_config(img) == cfg.resolve()
 
 
-def test_find_nearest_project_root_respects_max_levels(tmp_path: Path):
+def test_find_nearest_config_respects_max_levels(tmp_path: Path):
     project = tmp_path / "project"
     deep = project / "a" / "b" / "c" / "d" / "e" / "f"
     deep.mkdir(parents=True)
-    (project / "config.yaml").touch()
+    cfg = project / "config.yaml"
+    cfg.touch()
 
-    # too shallow: cannot reach project root
-    assert paths_mod.find_nearest_project_root(deep, max_levels=2) is None
-
-    # enough levels: can reach project root
-    assert paths_mod.find_nearest_project_root(deep, max_levels=6) == str(project)
+    assert paths_mod.find_nearest_config(deep, max_levels=2) is None
+    assert paths_mod.find_nearest_config(deep, max_levels=6) == cfg.resolve()
 
 
-def test_find_nearest_project_root_returns_none_when_no_config(tmp_path: Path):
+def test_find_nearest_config_returns_none_when_no_config(tmp_path: Path):
     folder = tmp_path / "no_project_here"
     folder.mkdir()
 
-    assert paths_mod.find_nearest_project_root(folder) is None
+    assert paths_mod.find_nearest_config(folder) is None
 
 
 # -----------------------------------------------------------------------------
-# anchor candidate selection
+# infer_labeled_data_folder_from_paths
 # -----------------------------------------------------------------------------
+def test_infer_labeled_data_folder_from_paths_uses_fallback_root_when_already_dataset(tmp_path: Path):
+    dataset = tmp_path / "project" / "labeled-data" / "mouse1"
+    dataset.mkdir(parents=True)
 
-
-def test_choose_anchor_candidate_prefers_explicit_root(tmp_path: Path):
-    opened = tmp_path / "project" / "labeled-data" / "mouse1"
-    opened.mkdir(parents=True)
-
-    explicit = tmp_path / "explicit-root"
-    explicit.mkdir()
-
-    result = paths_mod.choose_anchor_candidate(
-        opened=opened,
-        explicit_root=explicit,
-        prefer_project_root=True,
+    result = paths_mod.infer_labeled_data_folder_from_paths(
+        [],
+        fallback_root=dataset,
     )
 
-    assert result == str(explicit)
+    assert result == dataset.resolve()
 
 
-def test_choose_anchor_candidate_uses_inferred_anchor_by_default(tmp_path: Path):
-    folder = tmp_path / "dataset"
-    folder.mkdir()
-
-    result = paths_mod.choose_anchor_candidate(opened=folder)
-    assert result == str(folder)
-
-
-def test_choose_anchor_candidate_can_elevate_to_project_root(tmp_path: Path):
+def test_infer_labeled_data_folder_from_paths_builds_folder_from_project_and_relpaths(tmp_path: Path):
     project = tmp_path / "project"
-    dataset = project / "labeled-data" / "mouse1"
-    dataset.mkdir(parents=True)
-    (project / "config.yaml").touch()
+    project.mkdir()
 
-    result = paths_mod.choose_anchor_candidate(
-        opened=dataset,
-        prefer_project_root=True,
+    result = paths_mod.infer_labeled_data_folder_from_paths(
+        ["labeled-data/mouse1/img001.png"],
+        project_root=project,
     )
 
-    assert result == str(project)
+    assert result == (project / "labeled-data" / "mouse1").resolve()
 
 
-def test_choose_anchor_candidate_keeps_local_anchor_when_no_project_root_found(tmp_path: Path):
-    dataset = tmp_path / "labeled-data" / "mouse1"
-    dataset.mkdir(parents=True)
+def test_infer_labeled_data_folder_from_paths_returns_none_without_dataset_name(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
 
-    result = paths_mod.choose_anchor_candidate(
-        opened=dataset,
-        prefer_project_root=True,
+    result = paths_mod.infer_labeled_data_folder_from_paths(
+        ["images/img001.png"],
+        project_root=project,
     )
 
-    assert result == str(dataset)
+    assert result is None
 
 
-def test_choose_anchor_candidate_returns_none_when_anchor_cannot_be_inferred(tmp_path: Path):
-    missing = tmp_path / "missing"
-
-    result = paths_mod.choose_anchor_candidate(
-        opened=missing,
-        prefer_project_root=True,
+def test_infer_labeled_data_folder_from_paths_returns_none_without_project_root():
+    result = paths_mod.infer_labeled_data_folder_from_paths(
+        ["labeled-data/mouse1/img001.png"],
+        project_root=None,
     )
 
     assert result is None
 
 
 # -----------------------------------------------------------------------------
-# artifact check wrapper
+# infer_dlc_project
 # -----------------------------------------------------------------------------
+def test_infer_dlc_project_prefers_explicit_root_and_finds_config(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    cfg = project / "config.yaml"
+    cfg.touch()
+
+    other = tmp_path / "other"
+    other.mkdir()
+
+    ctx = paths_mod.infer_dlc_project(
+        explicit_root=project,
+        anchor_candidates=[other],
+        prefer_project_root=True,
+    )
+
+    assert ctx.project_root == project.resolve()
+    assert ctx.config_path == cfg.resolve()
+    assert ctx.root_anchor == project.resolve()
 
 
-def test_anchor_contains_dlc_artifacts_true_when_datafiles_present(tmp_path: Path):
-    folder = tmp_path / "dataset"
-    folder.mkdir()
-    (folder / "CollectedData_Jane.h5").touch()
+def test_infer_dlc_project_keeps_local_anchor_when_prefer_project_root_false(tmp_path: Path):
+    project = tmp_path / "project"
+    dataset = project / "labeled-data" / "mouse1"
+    dataset.mkdir(parents=True)
+    cfg = project / "config.yaml"
+    cfg.touch()
 
-    assert paths_mod.anchor_contains_dlc_artifacts(folder) is True
+    ctx = paths_mod.infer_dlc_project(
+        anchor_candidates=[dataset],
+        prefer_project_root=False,
+    )
+
+    assert ctx.project_root == project.resolve()
+    assert ctx.config_path == cfg.resolve()
+    assert ctx.root_anchor == dataset.resolve()
 
 
-def test_anchor_contains_dlc_artifacts_false_when_no_datafiles(tmp_path: Path):
-    folder = tmp_path / "dataset"
-    folder.mkdir()
+def test_infer_dlc_project_returns_best_effort_without_config(tmp_path: Path):
+    dataset = tmp_path / "labeled-data" / "mouse1"
+    dataset.mkdir(parents=True)
 
-    assert paths_mod.anchor_contains_dlc_artifacts(folder) is False
+    ctx = paths_mod.infer_dlc_project(
+        anchor_candidates=[dataset],
+        prefer_project_root=True,
+    )
+
+    assert ctx.project_root is None
+    assert ctx.config_path is None
+    assert ctx.root_anchor == dataset.resolve()
 
 
-def test_anchor_contains_dlc_artifacts_swallows_exceptions(monkeypatch):
-    monkeypatch.setattr(paths_mod, "has_dlc_datafiles", lambda anchor: (_ for _ in ()).throw(RuntimeError("boom")))
+def test_infer_dlc_project_uses_dataset_candidate_when_no_anchor_candidates(tmp_path: Path):
+    dataset = tmp_path / "project" / "labeled-data" / "mouse1"
+    dataset.mkdir(parents=True)
 
-    assert paths_mod.anchor_contains_dlc_artifacts("/tmp/whatever") is False
+    ctx = paths_mod.infer_dlc_project(
+        dataset_candidates=[dataset],
+    )
+
+    assert ctx.dataset_folder == dataset.resolve()
+    assert ctx.root_anchor == dataset.resolve()
+
+
+# -----------------------------------------------------------------------------
+# infer_dlc_project_from_opened
+# -----------------------------------------------------------------------------
+def test_infer_dlc_project_from_opened_uses_opened_path(tmp_path: Path):
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+
+    ctx = paths_mod.infer_dlc_project_from_opened(dataset)
+
+    assert ctx.root_anchor == dataset.resolve()
+    assert ctx.project_root is None
+    assert ctx.config_path is None
+
+
+def test_infer_dlc_project_from_opened_can_find_project_root(tmp_path: Path):
+    project = tmp_path / "project"
+    dataset = project / "labeled-data" / "mouse1"
+    dataset.mkdir(parents=True)
+    cfg = project / "config.yaml"
+    cfg.touch()
+
+    ctx = paths_mod.infer_dlc_project_from_opened(dataset)
+
+    assert ctx.project_root == project.resolve()
+    assert ctx.config_path == cfg.resolve()
+    assert ctx.root_anchor == project.resolve()
+
+
+# -----------------------------------------------------------------------------
+# infer_dlc_project_from_points_meta
+# -----------------------------------------------------------------------------
+def test_infer_dlc_project_from_points_meta_infers_dataset_and_project(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    cfg = project / "config.yaml"
+    cfg.touch()
+
+    pts_meta = SimpleNamespace(
+        project=str(project),
+        root=None,
+        paths=["labeled-data/mouse1/img001.png"],
+    )
+
+    ctx = paths_mod.infer_dlc_project_from_points_meta(pts_meta)
+
+    assert ctx.project_root == project.resolve()
+    assert ctx.config_path == cfg.resolve()
+    assert ctx.dataset_folder == (project / "labeled-data" / "mouse1").resolve()
+    assert ctx.root_anchor == project.resolve()
+
+
+def test_infer_dlc_project_from_points_meta_uses_root_as_dataset_fallback(tmp_path: Path):
+    dataset = tmp_path / "project" / "labeled-data" / "mouse1"
+    dataset.mkdir(parents=True)
+
+    pts_meta = SimpleNamespace(
+        project=None,
+        root=str(dataset),
+        paths=[],
+    )
+
+    ctx = paths_mod.infer_dlc_project_from_points_meta(pts_meta)
+
+    assert ctx.dataset_folder == dataset.resolve()
+    assert ctx.root_anchor == dataset.resolve()
+
+
+# -----------------------------------------------------------------------------
+# infer_dlc_project_from_image_layer
+# -----------------------------------------------------------------------------
+def test_infer_dlc_project_from_image_layer_uses_metadata_project(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    cfg = project / "config.yaml"
+    cfg.touch()
+
+    layer = SimpleNamespace(
+        metadata={"project": str(project)},
+        source=SimpleNamespace(path=None),
+    )
+
+    ctx = paths_mod.infer_dlc_project_from_image_layer(layer)
+
+    assert ctx.project_root == project.resolve()
+    assert ctx.config_path == cfg.resolve()
+    assert ctx.root_anchor == project.resolve()
+
+
+def test_infer_dlc_project_from_image_layer_falls_back_to_source_path(tmp_path: Path):
+    project = tmp_path / "project"
+    videos = project / "videos"
+    videos.mkdir(parents=True)
+    cfg = project / "config.yaml"
+    cfg.touch()
+
+    video = videos / "demo.mp4"
+    video.touch()
+
+    layer = SimpleNamespace(
+        metadata={},
+        source=SimpleNamespace(path=str(video)),
+    )
+
+    ctx = paths_mod.infer_dlc_project_from_image_layer(layer)
+
+    assert ctx.project_root == project.resolve()
+    assert ctx.config_path == cfg.resolve()
+    assert ctx.root_anchor == project.resolve()
+
+
+def test_infer_dlc_project_from_image_layer_returns_best_effort_without_config(tmp_path: Path):
+    videos = tmp_path / "videos"
+    videos.mkdir()
+
+    video = videos / "demo.mp4"
+    video.touch()
+
+    layer = SimpleNamespace(
+        metadata={},
+        source=SimpleNamespace(path=str(video)),
+    )
+
+    ctx = paths_mod.infer_dlc_project_from_image_layer(layer)
+
+    assert ctx.project_root is None
+    assert ctx.config_path is None
+    assert ctx.root_anchor == videos.resolve()

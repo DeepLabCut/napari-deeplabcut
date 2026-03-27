@@ -4,10 +4,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def unsorted_unique(array: Sequence) -> np.ndarray:
@@ -24,6 +25,72 @@ class MetadataKind(str, Enum):
 
     IMAGE = "image"
     POINTS = "points"
+
+
+# -----------------------------------------------------------------------------
+# Project structure models
+# -----------------------------------------------------------------------------
+class DLCProjectContext(BaseModel):
+    """
+    Best-effort DLC project/location context inferred from available hints.
+
+    All fields are optional because users may open partial project fragments
+    (e.g. only a video, only a labeled-data folder, only annotations).
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    root_anchor: Path | None = Field(
+        default=None,
+        description="Base folder anchor used for project-relative resolution when no stronger hint exists.",
+    )
+    project_root: Path | None = Field(
+        default=None,
+        description="Folder containing config.yaml, if inferable.",
+    )
+    config_path: Path | None = Field(
+        default=None,
+        description="Resolved path to DLC config.yaml, if inferable.",
+    )
+    dataset_folder: Path | None = Field(
+        default=None,
+        description="Resolved labeled-data/<dataset> folder, if inferable.",
+    )
+
+    @model_validator(mode="after")
+    def _normalize_and_validate(self) -> DLCProjectContext:
+        def _norm(p: Path | None) -> Path | None:
+            if p is None:
+                return None
+            try:
+                return p.expanduser().resolve()
+            except Exception:
+                return p
+
+        root_anchor = _norm(self.root_anchor)
+        project_root = _norm(self.project_root)
+        config_path = _norm(self.config_path)
+        dataset_folder = _norm(self.dataset_folder)
+
+        # If config_path is present, project_root should default to its parent
+        if config_path is not None and project_root is None:
+            project_root = config_path.parent
+
+        # If project_root exists and config_path is missing, infer config path conventionally
+        if project_root is not None and config_path is None:
+            candidate = project_root / "config.yaml"
+            if candidate.exists():
+                config_path = candidate
+
+        # If root_anchor is missing, prefer project_root, otherwise dataset_folder
+        if root_anchor is None:
+            root_anchor = project_root or dataset_folder
+
+        object.__setattr__(self, "root_anchor", root_anchor)
+        object.__setattr__(self, "project_root", project_root)
+        object.__setattr__(self, "config_path", config_path)
+        object.__setattr__(self, "dataset_folder", dataset_folder)
+        return self
 
 
 # -----------------------------------------------------------------------------

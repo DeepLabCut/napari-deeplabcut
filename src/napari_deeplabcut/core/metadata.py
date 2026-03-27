@@ -12,7 +12,7 @@ from pydantic import BaseModel, ValidationError
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.discovery import infer_annotation_kind_for_file
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
-from napari_deeplabcut.core.paths import canonicalize_path
+from napari_deeplabcut.core.project_paths import canonicalize_path
 
 logger = logging.getLogger(__name__)
 

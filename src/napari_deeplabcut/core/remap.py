@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from napari_deeplabcut.core.paths import PathMatchPolicy, canonicalize_path, find_matching_depth
+from napari_deeplabcut.core.project_paths import PathMatchPolicy, canonicalize_path, find_matching_depth
 
 logger = logging.getLogger(__name__)
 

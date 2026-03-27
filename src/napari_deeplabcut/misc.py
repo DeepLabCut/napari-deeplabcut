@@ -11,7 +11,7 @@ from typing import Protocol
 import numpy as np
 from natsort import natsorted
 
-from napari_deeplabcut.core.paths import canonicalize_path
+from napari_deeplabcut.core.project_paths import canonicalize_path
 from napari_deeplabcut.utils.deprecations import DeprecationMode, deprecated
 
 logger = logging.getLogger(__name__)

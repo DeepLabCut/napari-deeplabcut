@@ -45,8 +45,8 @@ from napari_deeplabcut.core.dataframes import (
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
 from napari_deeplabcut.core.metadata import attach_source_and_io, parse_points_metadata
-from napari_deeplabcut.core.paths import canonicalize_path
-from napari_deeplabcut.core.provenance import infer_dataset_folder_from_points_meta, resolve_output_path_from_metadata
+from napari_deeplabcut.core.project_paths import canonicalize_path, infer_dlc_project_from_points_meta
+from napari_deeplabcut.core.provenance import resolve_output_path_from_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -353,7 +353,10 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             raise MissingProvenanceError("Cannot resolve provenance output path for MACHINE source.")
 
         # Prefer dataset folder if inferable (DLC convention)
-        dataset_dir = infer_dataset_folder_from_points_meta(pts_meta)
+        project_ctx = infer_dlc_project_from_points_meta(pts_meta, prefer_project_root=False)
+        dataset_dir = None
+        if project_ctx is not None and project_ctx.dataset_folder is not None:
+            dataset_dir = project_ctx.dataset_folder
 
         # If dataset_dir exists or can be created, use it; else fall back to pts_meta.root
         if dataset_dir is not None:

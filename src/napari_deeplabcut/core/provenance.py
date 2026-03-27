@@ -6,64 +6,11 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import ValidationError
 
-from napari_deeplabcut.config.models import AnnotationKind, IOProvenance, PointsMetadata
+from napari_deeplabcut.config.models import AnnotationKind, IOProvenance
 from napari_deeplabcut.core.errors import MissingProvenanceError, UnresolvablePathError
 from napari_deeplabcut.core.metadata import parse_points_metadata
 
 logger = logging.getLogger(__name__)
-
-
-def infer_dataset_folder_from_points_meta(pts_meta: PointsMetadata) -> Path | None:
-    """
-    Infer DLC dataset folder (…/labeled-data/<dataset>) from PointsMetadata.
-
-    Uses:
-      - pts_meta.project (config parent) as project root
-      - pts_meta.paths (canonicalized relpaths like labeled-data/test/img000.png)
-      - pts_meta.root as a fallback hint
-
-    Returns a Path to dataset folder or None if not inferable.
-    """
-    project = getattr(pts_meta, "project", None)
-    paths = getattr(pts_meta, "paths", None) or []
-    root = getattr(pts_meta, "root", None)
-
-    # If root itself is already dataset folder, use it
-    try:
-        if root:
-            rp = Path(root).expanduser().resolve()
-            if "labeled-data" in [p.lower() for p in rp.parts] and rp.name.lower() != "labeled-data":
-                return rp
-    except Exception:
-        pass
-
-    # Infer from paths like "labeled-data/<dataset>/img000.png"
-    dataset_name = None
-    for s in paths:
-        if not isinstance(s, str):
-            continue
-        parts = s.replace("\\", "/").split("/")
-        try:
-            i = [p.lower() for p in parts].index("labeled-data")
-            if i + 1 < len(parts):
-                dataset_name = parts[i + 1]
-                break
-        except ValueError:
-            continue
-
-    if not dataset_name:
-        return None
-
-    # Need a project root anchor to build full dataset path
-    if not project:
-        return None
-
-    try:
-        proj = Path(project).expanduser().resolve()
-    except Exception:
-        proj = Path(project)
-
-    return proj / "labeled-data" / dataset_name
 
 
 def resolve_output_path_from_metadata(metadata: dict) -> tuple[str | None, str | None, AnnotationKind | None]:
@@ -157,29 +104,6 @@ def normalize_provenance(io: IOProvenance | None) -> IOProvenance | None:
         src = src.replace("\\\\", "/").replace("\\", "/")
 
     return io.model_copy(update={"source_relpath_posix": src})
-
-
-# def build_io_provenance_dict(
-#     *,
-#     project_root: str | Path,
-#     source_relpath_posix: str,
-#     kind: AnnotationKind | None,
-#     dataset_key: str,
-#     **extra: Any,
-# ) -> dict[str, Any]:
-#     """
-#     Build a provenance dict for storage in napari layer.metadata.
-
-#     Important: uses mode="python" so AnnotationKind stays an enum at runtime.
-#     """
-#     io = IOProvenance(
-#         project_root=str(project_root),
-#         source_relpath_posix=source_relpath_posix,
-#         kind=kind,
-#         dataset_key=dataset_key,
-#         **extra,
-#     )
-#     return io.model_dump(mode="python", exclude_none=True)
 
 
 def resolve_provenance_path(
