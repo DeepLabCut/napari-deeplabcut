@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from napari_deeplabcut.ui import cropping as cropping_mod
@@ -449,3 +450,56 @@ def test_update_video_panel_context_renders_current_summary(monkeypatch, tmp_pat
     assert "Frame 3/5" in panel.text
     assert f"Output folder: {tmp_path / 'dataset'}" in panel.text
     assert "Crop source: DLC crop layer" in panel.text
+
+
+def test_execute_frame_extraction_keeps_new_labels_row_on_duplicate_index(monkeypatch, tmp_path: Path):
+    from napari.layers import Image
+
+    # Avoid writing a real image file through skimage; just create the output file.
+    monkeypatch.setattr(
+        cropping_mod,
+        "_write_image",
+        lambda arr, path: Path(path).write_bytes(b"fake-image"),
+    )
+
+    image = Image(
+        np.zeros((3, 20, 30), dtype=np.uint8),
+        name="demo.mp4",
+        metadata={"root": str(tmp_path)},
+    )
+
+    output_path = tmp_path / "img1.png"
+    labels_path = tmp_path / "machinelabels-iter0.h5"
+
+    # Existing row for the same extracted image path
+    idx = pd.MultiIndex.from_tuples([("tmp", "pytest", "img1.png")])
+    df_prev = pd.DataFrame({"bp1": [111.0]}, index=idx)
+    df_prev.to_hdf(labels_path, key="df_with_missing")
+
+    # New extracted row should overwrite the previous one
+    df_new = pd.DataFrame({"bp1": [222.0]}, index=idx)
+
+    monkeypatch.setattr(
+        cropping_mod,
+        "_build_extracted_frame_labels_df",
+        lambda plan: (df_new, None),
+    )
+
+    plan = cropping_mod.FrameExtractionPlan(
+        image_layer=image,
+        points_layer=object(),
+        frame_index=1,
+        output_root=tmp_path,
+        output_path=output_path,
+        labels_path=labels_path,
+        export_labels=True,
+        viewer_crop=None,
+    )
+
+    written, note = cropping_mod.execute_frame_extraction(plan)
+
+    assert note is None
+    assert labels_path in written
+
+    df_written = pd.read_hdf(labels_path, key="df_with_missing")
+    assert float(df_written.iloc[0]["bp1"]) == 222.0
