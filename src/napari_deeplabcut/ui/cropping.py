@@ -362,9 +362,20 @@ def _dlc_config_y_extent(viewer) -> int | None:
     [y, x]. Fall back to an active/last Image layer shape if needed.
     """
     try:
-        dims_range = getattr(getattr(viewer, "dims", None), "range", None)
-        if dims_range is not None and len(dims_range) >= 2:
-            return int(dims_range[-2][1])
+        dims = getattr(viewer, "dims", None)
+        if dims is not None:
+            dims_range = getattr(dims, "range", None)
+            displayed = getattr(dims, "displayed", None)
+
+            # Preferred: use the second-to-last displayed axis as Y and get its extent.
+            if displayed is not None and hasattr(displayed, "__len__") and len(displayed) >= 2 and dims_range is not None:
+                y_axis = displayed[-2]
+                if isinstance(y_axis, int) and 0 <= y_axis < len(dims_range):
+                    return int(dims_range[y_axis][1])
+
+            # Fallback: legacy behavior using the second-to-last range entry directly.
+            if dims_range is not None and len(dims_range) >= 2:
+                return int(dims_range[-2][1])
     except Exception:
         pass
 
