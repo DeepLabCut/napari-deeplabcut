@@ -92,6 +92,7 @@ from napari_deeplabcut.napari_compat import (
     register_points_action,
 )
 from napari_deeplabcut.napari_compat.points_layer import make_paste_data
+from napari_deeplabcut.ui import dialogs as ui_dialogs
 from napari_deeplabcut.ui.color_scheme_display import ColorSchemePanel
 from napari_deeplabcut.ui.cropping import (
     build_video_action_menu,
@@ -101,14 +102,7 @@ from napari_deeplabcut.ui.cropping import (
     run_store_crop_coordinates,
     update_video_panel_context,
 )
-from napari_deeplabcut.ui.dialogs import (
-    Shortcuts,
-    Tutorial,
-    maybe_confirm_dataset_path_rewrite,
-    maybe_confirm_overwrite,
-    prompt_for_project_config_for_save,
-    warn_existing_dataset_folder_conflict,
-)
+from napari_deeplabcut.ui.dialogs import Shortcuts, Tutorial
 from napari_deeplabcut.ui.labels_and_dropdown import (
     DropdownMenu,
     KeypointsDropdownMenu,
@@ -930,7 +924,7 @@ class KeypointControls(QWidget):
         dataset_name = source_root_path.name
 
         initial_dir = self._project_path or pts_meta.project or str(source_root_path)
-        config_path = prompt_for_project_config_for_save(self, initial_dir=initial_dir)
+        config_path = ui_dialogs.prompt_for_project_config_for_save(self, initial_dir=initial_dir)
         if not config_path:
             return None
 
@@ -940,7 +934,7 @@ class KeypointControls(QWidget):
 
         target_folder = target_dataset_folder_for_config(config_path, dataset_name=dataset_name)
         if dataset_folder_has_files(target_folder):
-            warn_existing_dataset_folder_conflict(self, target_folder=target_folder)
+            ui_dialogs.warn_existing_dataset_folder_conflict(self, target_folder=target_folder)
             return None
 
         rewritten_paths, unresolved = coerce_paths_to_dlc_row_keys(
@@ -949,7 +943,7 @@ class KeypointControls(QWidget):
             dataset_name=dataset_name,
         )
 
-        if not maybe_confirm_dataset_path_rewrite(
+        if not ui_dialogs.maybe_confirm_dataset_path_rewrite(
             self,
             project_root=project_root,
             dataset_name=dataset_name,
@@ -1753,7 +1747,7 @@ class KeypointControls(QWidget):
                 return
 
             if report is not None:
-                if not maybe_confirm_overwrite(
+                if not ui_dialogs.maybe_confirm_overwrite(
                     parent=self,
                     report=report,
                 ):
