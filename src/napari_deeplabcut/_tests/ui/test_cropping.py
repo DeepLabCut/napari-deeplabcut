@@ -102,7 +102,7 @@ def test_crop_save_plan_rejects_viewer_coords_for_config(tmp_path: Path):
 # -----------------------------------------------------------------------------
 
 
-def test_rectangle_spec_returns_viewer_and_legacy_config_coords(monkeypatch):
+def test_rectangle_spec_returns_viewer_and_DLC_config_coords(monkeypatch):
     monkeypatch.setattr(cropping_mod, "Shapes", FakeShapes)
 
     # rectangle vertices in [t, y, x]
@@ -130,7 +130,7 @@ def test_rectangle_spec_returns_viewer_and_legacy_config_coords(monkeypatch):
     # raw napari/image-data coords
     assert spec.viewer_crop.values == (20, 60, 10, 40)
 
-    # legacy config coords (y flipped with h=100)
+    #  DLC config coords (y flipped with h=100)
     assert spec.config_crop.values == (20, 60, 60, 90)
 
 
@@ -316,7 +316,7 @@ def test_plan_crop_save_uses_config_crop(monkeypatch, tmp_path: Path):
 # -----------------------------------------------------------------------------
 
 
-def test_store_crop_coordinates_saves_legacy_config_coords(monkeypatch, tmp_path: Path):
+def test_store_crop_coordinates_saves_DLC_config_coords(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(cropping_mod, "Shapes", FakeShapes)
 
     project = tmp_path / "project"
@@ -358,7 +358,8 @@ def test_store_crop_coordinates_saves_legacy_config_coords(monkeypatch, tmp_path
         layers=FakeLayerList([crop_layer, image_layer], active=crop_layer),
         dims=SimpleNamespace(
             current_step=(0,),
-            range=[(0, 10, 1), (0, 20, 1), (0, 100, 1)],
+            # Y extent is 100 (index -2), X extent is 200 (index -1 / old hardcoded index 2)
+            range=[(0, 10, 1), (0, 100, 1), (0, 200, 1)],
         ),
     )
 
@@ -374,6 +375,41 @@ def test_store_crop_coordinates_saves_legacy_config_coords(monkeypatch, tmp_path
 
     cfg = cropping_mod.io.load_config(str(config_path))
     assert cfg["video_sets"][str(video_path)]["crop"] == "20, 60, 60, 90"
+
+
+def test_rectangle_spec_uses_y_axis_extent_for_DLC_config_coords(monkeypatch):
+    monkeypatch.setattr(cropping_mod, "Shapes", FakeShapes)
+
+    # rectangle vertices in [t, y, x]
+    rect = np.array(
+        [
+            [0.0, 10.0, 20.0],
+            [0.0, 10.0, 60.0],
+            [0.0, 40.0, 60.0],
+            [0.0, 40.0, 20.0],
+        ],
+        dtype=float,
+    )
+    layer = FakeShapes(
+        data=[rect],
+        shape_type=["rectangle"],
+        metadata={cropping_mod.DLC_CROP_LAYER_META_KEY: True},
+        selected_data={0},
+    )
+
+    # Make Y extent and X extent different so using the wrong axis would fail.
+    # dims.range[-2][1] == 100  (Y)
+    # dims.range[2][1]  == 200  (X)  <-- old buggy code would incorrectly use this
+    viewer = SimpleNamespace(dims=SimpleNamespace(range=[(0, 10, 1), (0, 100, 1), (0, 200, 1)]))
+
+    spec = cropping_mod._rectangle_spec(viewer, layer, 0)
+    assert spec is not None
+
+    # raw napari/image-data coords
+    assert spec.viewer_crop.values == (20, 60, 10, 40)
+
+    # DLC config coords must use Y extent = 100, not X extent = 200
+    assert spec.config_crop.values == (20, 60, 60, 90)
 
 
 # -----------------------------------------------------------------------------

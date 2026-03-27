@@ -51,7 +51,7 @@ class ViewerCropCoords(_CropModel):
 
 class DLCConfigCropCoords(_CropModel):
     """
-    Rectangle coordinates in the legacy DLC-compatible config.yaml convention.
+    Rectangle coordinates in the DLC-compatible config.yaml convention.
     Used only for writing cfg['video_sets'][...]['crop'].
     """
 
@@ -351,6 +351,49 @@ def _selected_rectangle_indices(layer: Shapes) -> list[int]:
     return [idx for idx in selected if _is_rectangle_shape(layer, idx)]
 
 
+def _dlc_config_y_extent(viewer) -> int | None:
+    """
+    Return the Y-axis extent used for DLC config crop conversion.
+
+    Prefer the displayed Y axis in napari dims (second-to-last displayed axis),
+    because rectangle coordinates are interpreted from the last two columns as
+    [y, x]. Fall back to an active/last Image layer shape if needed.
+    """
+    try:
+        dims_range = getattr(getattr(viewer, "dims", None), "range", None)
+        if dims_range is not None and len(dims_range) >= 2:
+            return int(dims_range[-2][1])
+    except Exception:
+        pass
+
+    try:
+        active = getattr(getattr(viewer, "layers", None), "selection", None)
+        active = getattr(active, "active", None)
+        if isinstance(active, Image):
+            data = getattr(active, "data", None)
+            if data is not None and hasattr(data, "shape") and len(data.shape) >= 2:
+                # For (t, y, x) -> y is -2
+                # For (t, y, x, c) -> y is -3
+                if len(data.shape) >= 4:
+                    return int(data.shape[-3])
+                return int(data.shape[-2])
+    except Exception:
+        pass
+
+    try:
+        for layer in reversed(viewer.layers):
+            if isinstance(layer, Image):
+                data = getattr(layer, "data", None)
+                if data is not None and hasattr(data, "shape") and len(data.shape) >= 2:
+                    if len(data.shape) >= 4:
+                        return int(data.shape[-3])
+                    return int(data.shape[-2])
+    except Exception:
+        pass
+
+    return None
+
+
 def _rectangle_spec(viewer, layer: Shapes, rect_index: int) -> CropRectangleSpec | None:
     """
     Resolve both coordinate conventions from the same rectangle:
@@ -358,7 +401,7 @@ def _rectangle_spec(viewer, layer: Shapes, rect_index: int) -> CropRectangleSpec
     - viewer_crop:
         raw napari/image-data coordinates used for extraction
     - config_crop:
-        legacy backwards-compatible coordinates written to config.yaml
+        DLC-compatible coordinates written to config.yaml
     """
     try:
         data = np.asarray(layer.data[rect_index], dtype=float)
@@ -393,19 +436,20 @@ def _rectangle_spec(viewer, layer: Shapes, rect_index: int) -> CropRectangleSpec
     viewer_crop = ViewerCropCoords(values=(vx1, vx2, vy1, vy2))
 
     # -----------------------------------------
-    # 2) legacy DLC-compatible config.yaml crop
+    # 2) DLC-compatible config.yaml crop
     # -----------------------------------------
-    try:
-        h = viewer.dims.range[2][1]
-    except Exception:
+    h = _dlc_config_y_extent(viewer)
+    if h is None:
         return None
 
-    legacy_y = h - y_vals
-    legacy = np.column_stack([legacy_y, x_vals])
-    legacy = np.clip(legacy, 0, a_max=None).astype(int)
+    # Flip the coordinates to the DLC convention where Y is inverted
+    # and comes first, then clip to non-negative integers.
+    dlc_y = h - y_vals
+    dlc_crop = np.column_stack([dlc_y, x_vals])
+    dlc_crop = np.clip(dlc_crop, 0, a_max=None).astype(int)
 
-    y1_cfg, x1_cfg = legacy.min(axis=0)
-    y2_cfg, x2_cfg = legacy.max(axis=0)
+    y1_cfg, x1_cfg = dlc_crop.min(axis=0)
+    y2_cfg, x2_cfg = dlc_crop.max(axis=0)
 
     if x2_cfg <= x1_cfg or y2_cfg <= y1_cfg:
         return None
