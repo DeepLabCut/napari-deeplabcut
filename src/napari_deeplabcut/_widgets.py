@@ -67,6 +67,7 @@ from napari_deeplabcut.core.project_paths import (
     coerce_paths_to_dlc_row_keys,
     dataset_folder_has_files,
     infer_dlc_project_from_points_meta,
+    is_windows_absolute_path,
     resolve_project_root_from_config,
     target_dataset_folder_for_config,
 )
@@ -929,7 +930,17 @@ class KeypointControls(QWidget):
                 if idx + 2 < len(parts):
                     continue
 
+            # On POSIX, pathlib.Path(...) does not recognize Windows drive-letter
+            # / UNC paths as absolute. Prevent those from being misclassified as
+            # simple relative basenames.
+            is_windows_abs_misclassified = not p.is_absolute() and is_windows_absolute_path(value)
             if not p.is_absolute():
+                if is_windows_abs_misclassified:
+                    # Treat as an absolute/unresolved path, not as a basename candidate.
+                    # In this lightweight workflow, unrelated absolute paths are allowed
+                    # and preserved unchanged.
+                    continue
+
                 # Only allow simple basenames as projectless candidates.
                 # Any directory components or '.' / '..' segments are rejected.
                 if len(p.parts) == 1 and p.parts[0] not in (".", ".."):

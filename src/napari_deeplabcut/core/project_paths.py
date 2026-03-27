@@ -21,16 +21,25 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from napari_deeplabcut.config.models import DLCProjectContext, PointsMetadata
 
 logger = logging.getLogger(__name__)
 
 
+def is_windows_absolute_path(value: str | Path) -> bool:
+    try:
+        return PureWindowsPath(str(value)).is_absolute()
+    except Exception:
+        return False
+
+
 # -----------------------------------------------------------------------------
 # Canonicalization
 # -----------------------------------------------------------------------------
+
+
 def canonicalize_path(p: str | Path, n: int = 3) -> str:
     """
     Return canonical POSIX path built from the last n path components.
@@ -480,6 +489,11 @@ def coerce_paths_to_dlc_row_keys(
             p = Path(value)
         except Exception:
             p = None
+
+        if p is not None and not p.is_absolute() and is_windows_absolute_path(value):
+            rewritten.append(PureWindowsPath(str(value)).as_posix())
+            unresolved.append(i)
+            continue
 
         # Relative basename only -> coerce safely.
         # Refuse any relative path that contains '.', '..', or multiple path parts.
