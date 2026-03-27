@@ -15,12 +15,14 @@ from qtpy.QtWidgets import QCheckBox, QGroupBox, QLabel, QMessageBox, QPushButto
 
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut._writer import _write_image
+from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_extracted_labels_row
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.project_paths import (
     canonicalize_path,
     infer_dlc_project,
     infer_dlc_project_from_image_layer,
 )
+from napari_deeplabcut.ui.dialogs import maybe_confirm_overwrite
 
 DLC_CROP_LAYER_NAME = "DLC crop"
 DLC_CROP_LAYER_META_KEY = "_dlc_crop_layer"
@@ -625,6 +627,66 @@ def plan_frame_extraction(
     )
 
 
+def _build_extracted_frame_labels_df(plan: FrameExtractionPlan) -> tuple[pd.DataFrame | None, str | None]:
+    """
+    Build the one-row labels dataframe corresponding to the extracted frame.
+
+    Returns
+    -------
+    (df, note)
+        df: one-row dataframe ready to merge into machinelabels-iter0.h5
+        note: optional non-fatal message if labels cannot be built for this frame
+    """
+    if plan.points_layer is None or plan.labels_path is None:
+        return None, None
+
+    df = io.form_df(
+        plan.points_layer.data,
+        layer_metadata=plan.points_layer.metadata,
+        layer_properties=plan.points_layer.properties,
+    )
+
+    if plan.frame_index >= len(df):
+        return None, (
+            "Frame image was extracted, "
+            "but labels were skipped because the points layer did not contain the current frame."
+        )
+
+    df = df.iloc[plan.frame_index : plan.frame_index + 1]
+
+    canon = canonicalize_path(plan.output_path, 3)
+    df.index = pd.MultiIndex.from_tuples([tuple(canon.split("/"))])
+
+    return df, None
+
+
+def compute_extracted_labels_overwrite_report(
+    plan: FrameExtractionPlan,
+) -> tuple[object | None, str | None]:
+    """
+    Compute overwrite report for the extracted-frame labels merge.
+
+    Returns
+    -------
+    (report, note)
+        report: OverwriteConflictReport or None
+        note: optional non-fatal note if labels cannot be built for this frame
+    """
+    if not plan.export_labels or plan.points_layer is None or plan.labels_path is None:
+        return None, None
+
+    df_new, note = _build_extracted_frame_labels_df(plan)
+    if df_new is None:
+        return None, note
+
+    report = compute_overwrite_report_for_extracted_labels_row(
+        plan.labels_path,
+        df_new,
+        layer_name=getattr(plan.points_layer, "name", None),
+    )
+    return report, note
+
+
 def execute_frame_extraction(plan: FrameExtractionPlan) -> tuple[list[Path], str | None]:
     """
     Execute a previously validated extraction plan.
@@ -648,34 +710,26 @@ def execute_frame_extraction(plan: FrameExtractionPlan) -> tuple[list[Path], str
     note = None
 
     if plan.export_labels and plan.points_layer is not None and plan.labels_path is not None:
-        df = io.form_df(
-            plan.points_layer.data,
-            layer_metadata=plan.points_layer.metadata,
-            layer_properties=plan.points_layer.properties,
-        )
-
-        if plan.frame_index >= len(df):
-            note = (
-                "Frame image was extracted, "
-                "but labels were skipped because the points layer did not contain the current frame."
-            )
+        df_new, note = _build_extracted_frame_labels_df(plan)
+        if df_new is None:
             return written, note
-
-        df = df.iloc[plan.frame_index : plan.frame_index + 1]
-
-        canon = canonicalize_path(plan.output_path, 3)
-        df.index = pd.MultiIndex.from_tuples([tuple(canon.split("/"))])
 
         if plan.labels_path.is_file():
             try:
                 df_prev = pd.read_hdf(plan.labels_path, key="df_with_missing")
             except Exception:
                 df_prev = pd.read_hdf(plan.labels_path)
-            guarantee_multiindex_rows(df_prev)
-            df = pd.concat([df_prev, df])
-            df = df[~df.index.duplicated(keep="first")]
 
-        df.to_hdf(plan.labels_path, key="df_with_missing")
+            guarantee_multiindex_rows(df_prev)
+            df_merged = pd.concat([df_prev, df_new])
+
+            # IMPORTANT:
+            # Keep the newly exported row when the frame already exists.
+            df_merged = df_merged[~df_merged.index.duplicated(keep="last")]
+        else:
+            df_merged = df_new
+
+        df_merged.to_hdf(plan.labels_path, key="df_with_missing")
         written.append(plan.labels_path)
 
     return written, note
@@ -887,6 +941,7 @@ def run_extract_current_frame(
         show_warning(msg)
         return False, msg
 
+    # 1) Image overwrite confirmation
     if plan.output_path.exists():
         answer = QMessageBox.question(
             panel,
@@ -898,15 +953,34 @@ def run_extract_current_frame(
         if answer != QMessageBox.Yes:
             return False, "Frame extraction cancelled."
 
-    written_paths, note = execute_frame_extraction(plan)
+    # 2) Labels overwrite preflight using the shared conflict dialog infrastructure
+    report = None
+    note = None
+    if plan.export_labels and plan.points_layer is not None and plan.labels_path is not None:
+        report, note = compute_extracted_labels_overwrite_report(plan)
+
+        if note is not None:
+            # non-fatal: image can still be extracted even if labels are missing for this frame
+            pass
+
+        if report is not None:
+            if not maybe_confirm_overwrite(
+                parent=panel,
+                report=report,
+            ):
+                return False, "Frame extraction cancelled."
+
+    written_paths, exec_note = execute_frame_extraction(plan)
+
+    final_note = exec_note or note
 
     msg = f"Extracted frame {plan.frame_index} to {plan.output_path}"
     if len(written_paths) > 1:
         msg += f" and updated {written_paths[-1].name}"
 
-    if note:
-        show_warning(note)
-        msg = f"{msg} ({note})"
+    if final_note:
+        show_warning(final_note)
+        msg = f"{msg} ({final_note})"
     else:
         show_info(msg)
 

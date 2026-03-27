@@ -156,3 +156,53 @@ def compute_overwrite_report_for_points_save(
     )
 
     return report if report.has_conflicts else None
+
+
+def compute_overwrite_report_for_extracted_labels_row(
+    destination_path: str | Path,
+    df_new: pd.DataFrame,
+    *,
+    layer_name: str | None = None,
+) -> OverwriteConflictReport | None:
+    """
+    Compute an overwrite-conflict report for a single extracted-frame labels row
+    being merged into an existing machinelabels-iter0.h5 file.
+
+    Parameters
+    ----------
+    destination_path:
+        Existing or prospective machinelabels file.
+    df_new:
+        A one-row DLC-style dataframe for the extracted frame, indexed by the
+        canonical image path tuple.
+    layer_name:
+        Optional display name for the source layer in the dialog.
+
+    Returns
+    -------
+    OverwriteConflictReport | None
+        Report if overwrites would occur, otherwise None.
+    """
+    from napari_deeplabcut.core.dataframes import (
+        build_overwrite_conflict_report,
+        keypoint_conflicts,
+    )
+
+    out = Path(destination_path)
+    if not out.exists():
+        return None
+
+    try:
+        df_old = pd.read_hdf(out, key="df_with_missing")
+    except (KeyError, ValueError):
+        df_old = pd.read_hdf(out)
+
+    key_conflict = keypoint_conflicts(df_old, df_new)
+
+    report = build_overwrite_conflict_report(
+        key_conflict,
+        layer_name=layer_name or "Extracted frame labels",
+        destination_path=str(out),
+    )
+
+    return report if report.has_conflicts else None
