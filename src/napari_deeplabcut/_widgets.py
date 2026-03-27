@@ -879,6 +879,72 @@ class KeypointControls(QWidget):
                     out,
                 )
 
+    def _is_projectless_folder_association_candidate(self, layer: Points, pts_meta: PointsMetadata) -> bool:
+        """
+        Return True for the 'associate current labeled folder with a DLC project'
+        workflow.
+
+        Non-candidates include:
+        - machine/promotion layers
+        - layers with an explicit save_target
+        - layers that already have a resolved DLC project/config context
+        - layers without a usable folder root
+        - layers whose paths do not look like a simple single-folder labeling session
+        """
+        # Promotion / machine-save path is a separate workflow.
+        if is_machine_layer(layer):
+            return False
+
+        # If save routing was already explicitly chosen, do not override it here.
+        if getattr(pts_meta, "save_target", None) is not None:
+            return False
+
+        # Already project-backed -> do not prompt again.
+        project_ctx = infer_dlc_project_from_points_meta(pts_meta, prefer_project_root=False)
+        if project_ctx.project_root is not None and project_ctx.config_path is not None:
+            return False
+
+        root = getattr(pts_meta, "root", None)
+        paths = list(getattr(pts_meta, "paths", None) or [])
+        if not root or not paths:
+            return False
+
+        try:
+            root_path = Path(root).expanduser().resolve(strict=False)
+        except Exception:
+            root_path = Path(root)
+
+        # Simple single-folder path shape only:
+        # - relative basenames
+        # - absolute files directly under root
+        # - already-canonical labeled-data/<dataset>/<image>
+        for value in paths:
+            text = str(value).replace("\\", "/")
+            p = Path(value)
+
+            parts = [part for part in text.split("/") if part]
+            lowered = [part.lower() for part in parts]
+            if "labeled-data" in lowered:
+                idx = lowered.index("labeled-data")
+                if idx + 2 < len(parts):
+                    continue
+
+            if not p.is_absolute():
+                rel_parts = [part for part in p.parts if str(part) not in ("", ".", "..")]
+                if len(rel_parts) == 1:
+                    continue
+                return False
+
+            try:
+                rel_to_root = p.expanduser().resolve(strict=False).relative_to(root_path)
+            except Exception:
+                return False
+
+            if len(rel_to_root.parts) != 1:
+                return False
+
+        return True
+
     def _maybe_prepare_project_path_override_metadata(self, layer: Points) -> dict | None:
         """
         Optionally prepare save-time metadata by associating a project-less labeled
@@ -900,7 +966,7 @@ class KeypointControls(QWidget):
 
         pts_meta: PointsMetadata = res
         paths = pts_meta.paths or []
-        if not paths:
+        if not paths or not self._is_projectless_folder_association_candidate(layer, pts_meta):
             return None
 
         project_ctx = infer_dlc_project_from_points_meta(pts_meta, prefer_project_root=False)
