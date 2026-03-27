@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import html
 from collections import defaultdict, namedtuple
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from napari.layers import Points
@@ -27,7 +29,6 @@ from qtpy.QtWidgets import (
 from napari_deeplabcut.config.keybinds import iter_shortcuts
 from napari_deeplabcut.config.settings import get_overwrite_confirmation_enabled
 from napari_deeplabcut.core.conflicts import OverwriteConflictReport
-from napari_deeplabcut.core.project_paths import resolve_project_root_from_config
 
 # from napari_deeplabcut.core.dataframes import summarize_keypoint_conflicts
 
@@ -411,28 +412,60 @@ class Tutorial(QDialog):
 # --------------------------------------------------------------------------------
 # Headless labeled data resolved to existing config.yaml project dialog
 # --------------------------------------------------------------------------------
+class ProjectConfigPromptAction(str, Enum):
+    ASSOCIATE = "associate"
+    SKIP = "skip"
+    CANCEL = "cancel"
+
+
+@dataclass(frozen=True)
+class ProjectConfigPromptResult:
+    action: ProjectConfigPromptAction
+    config_path: str | None = None
+
+
 def prompt_for_project_config_for_save(
     parent,
     *,
     initial_dir: str | None = None,
-) -> str | None:
+) -> ProjectConfigPromptResult:
     """
-    Ask the user for an optional DLC config.yaml to associate the current labeled
-    folder with an existing DLC project.
+    Ask the user whether to associate the current labeled folder with an
+    existing DLC project.
+
+    Returns
+    -------
+    ProjectConfigPromptResult
+        - ASSOCIATE: user selected a config.yaml
+        - SKIP: user explicitly chose not to associate, but wants to continue
+        - CANCEL: user cancelled the flow and the caller should abort save
     """
-    choice = QMessageBox.question(
-        parent,
-        "Associate folder with DLC project?",
+    msg = QMessageBox(parent)
+    msg.setIcon(QMessageBox.Question)
+    msg.setWindowTitle("Associate folder with DLC project?")
+    msg.setText(
         "No DLC project root could be inferred for this layer.\n\n"
         "Do you want to choose a config.yaml so this labeled folder can be saved "
         "using DeepLabCut's standard dataset paths?\n\n"
         "Important: the current folder name will become the DLC dataset name:\n"
         "labeled-data/<current-folder-name>/...\n\n"
-        "This will not move files on disk or edit config.yaml.",
-        QMessageBox.Yes | QMessageBox.No,
+        "This will not move files on disk or edit config.yaml."
     )
-    if choice != QMessageBox.Yes:
-        return None
+
+    yes_btn = msg.addButton("Choose config.yaml", QMessageBox.YesRole)
+    no_btn = msg.addButton("Continue without association", QMessageBox.NoRole)
+    cancel_btn = msg.addButton(QMessageBox.Cancel)
+
+    msg.setDefaultButton(yes_btn)
+    msg.exec_()
+
+    clicked = msg.clickedButton()
+
+    if clicked is cancel_btn:
+        return ProjectConfigPromptResult(ProjectConfigPromptAction.CANCEL)
+
+    if clicked is no_btn:
+        return ProjectConfigPromptResult(ProjectConfigPromptAction.SKIP)
 
     filename, _ = QFileDialog.getOpenFileName(
         parent,
@@ -441,18 +474,12 @@ def prompt_for_project_config_for_save(
         filter="DeepLabCut config (config.yaml)",
     )
     if not filename:
-        return None
+        return ProjectConfigPromptResult(ProjectConfigPromptAction.CANCEL)
 
-    root = resolve_project_root_from_config(filename)
-    if root is None:
-        QMessageBox.warning(
-            parent,
-            "Invalid config.yaml",
-            "The selected file is not a valid existing config.yaml.",
-        )
-        return None
-
-    return filename
+    return ProjectConfigPromptResult(
+        ProjectConfigPromptAction.ASSOCIATE,
+        config_path=filename,
+    )
 
 
 def maybe_confirm_dataset_path_rewrite(

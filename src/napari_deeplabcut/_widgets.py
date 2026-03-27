@@ -998,19 +998,23 @@ class KeypointControls(QWidget):
 
         initial_dir = self._project_path or pts_meta.project or str(source_root_path)
         dialog_result = ui_dialogs.prompt_for_project_config_for_save(self, initial_dir=initial_dir)
-        # Support both previous (path-or-None) and new (path, abort_save) return types.
-        if isinstance(dialog_result, tuple):
-            config_path, abort_save = dialog_result
-        else:
-            config_path = dialog_result
-            # Legacy behavior: None means abort, any truthy path means proceed.
-            abort_save = not bool(config_path)
-        if abort_save:
-            # User cancelled
-            return None, True
+
+        if dialog_result.action is ui_dialogs.ProjectConfigPromptAction.CANCEL:
+            logger.debug("User cancelled project association prompt.")
+            return None, True  # abort save
+
+        if dialog_result.action is ui_dialogs.ProjectConfigPromptAction.SKIP:
+            logger.debug("User chose to continue without project association.")
+            return None, False  # continue normal save path
+
+        if dialog_result.action is not ui_dialogs.ProjectConfigPromptAction.ASSOCIATE:
+            logger.warning("Unexpected project association dialog result: %r", dialog_result)
+            return None, True  # fail safe: abort save
+
+        config_path = dialog_result.config_path
         if not config_path:
-            # User chose not to associate with a project
-            return None, False
+            logger.warning("Project association result was ASSOCIATE but config_path was empty.")
+            return None, True  # fail safe: abort save
 
         project_root = resolve_project_root_from_config(config_path)
         if project_root is None:
