@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import yaml
-from napari.layers import Image
+from napari.layers import Image, Tracks
 from qtpy.QtWidgets import QScrollArea
 from vispy import keys
 
@@ -52,7 +52,13 @@ def test_show_trails(viewer, store):
     controls._stores[store.layer] = store
     viewer.layers.selection.active = store.layer
     controls._is_saved = True
-    controls._show_trails(state=2)
+
+    controls._trail_cb.setChecked(True)
+
+    trails = controls._trails_controller.layer
+    assert trails is not None
+    assert isinstance(trails, Tracks)
+    assert trails.visible is True
 
 
 @pytest.mark.usefixtures("qtbot")
