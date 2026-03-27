@@ -368,7 +368,12 @@ def _dlc_config_y_extent(viewer) -> int | None:
             displayed = getattr(dims, "displayed", None)
 
             # Preferred: use the second-to-last displayed axis as Y and get its extent.
-            if displayed is not None and hasattr(displayed, "__len__") and len(displayed) >= 2 and dims_range is not None:
+            if (
+                displayed is not None
+                and hasattr(displayed, "__len__")
+                and len(displayed) >= 2
+                and dims_range is not None
+            ):
                 y_axis = displayed[-2]
                 if isinstance(y_axis, int) and 0 <= y_axis < len(dims_range):
                     return int(dims_range[y_axis][1])
