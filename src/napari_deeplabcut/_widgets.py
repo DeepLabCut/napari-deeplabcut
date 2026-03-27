@@ -3,7 +3,6 @@
 # src/napari_deeplabcut/_widgets.py
 from __future__ import annotations
 
-import hashlib
 import logging
 from contextlib import contextmanager
 from copy import deepcopy
@@ -43,7 +42,7 @@ from napari_deeplabcut.config.keybinds import (
     install_global_points_keybindings,
     install_points_layer_keybindings,
 )
-from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
+from napari_deeplabcut.config.models import DLCHeaderModel, ImageMetadata, PointsMetadata
 from napari_deeplabcut.core import keypoints
 from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
@@ -65,10 +64,15 @@ from napari_deeplabcut.core.project_paths import (
     PathMatchPolicy,
     coerce_paths_to_dlc_row_keys,
     dataset_folder_has_files,
-    infer_dlc_project_from_points_meta,
-    is_windows_absolute_path,
     resolve_project_root_from_config,
     target_dataset_folder_for_config,
+)
+from napari_deeplabcut.core.provenance import (
+    apply_gt_save_target,
+    find_config_scorer_nearby,
+    is_projectless_folder_association_candidate,
+    requires_gt_promotion,
+    suggest_human_placeholder,
 )
 from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.core.sidecar import (
@@ -102,28 +106,7 @@ from napari_deeplabcut.ui.labels_and_dropdown import (
 from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
-logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
-
-
-def _find_config_scorer_nearby(anchor: str) -> str | None:
-    """Try to find config.yaml scorer (best-effort)."""
-    try:
-        # misc.find_project_config_path expects a path; anchor works fine as starting point.
-        cfg_path = misc.find_project_config_path(anchor)
-        if cfg_path:
-            cfg = io.load_config(cfg_path)
-            s = cfg.get("scorer")
-            if isinstance(s, str) and s.strip():
-                return s.strip()
-    except Exception:
-        pass
-    return None
-
-
-def _suggest_human_placeholder(anchor: str) -> str:
-    """Deterministic placeholder: human_<6hex> derived from anchor path."""
-    h = hashlib.sha1(anchor.encode("utf-8", errors="ignore")).hexdigest()[:6]
-    return f"human_{h}"
+# logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
 
 
 def _prompt_for_scorer(parent_widget, *, anchor: str, suggested: str) -> str | None:
@@ -844,90 +827,6 @@ class KeypointControls(QWidget):
                     out,
                 )
 
-    def _is_projectless_folder_association_candidate(self, layer: Points, pts_meta: PointsMetadata) -> bool:
-        """
-        Return True for the 'associate current labeled folder with a DLC project'
-        workflow.
-
-        Non-candidates include:
-        - machine/promotion layers
-        - layers with an explicit save_target
-        - layers that already have a resolved DLC project/config context
-        - layers without a usable folder root
-        - layers whose paths do not look like a simple single-folder labeling session
-        """
-        # Promotion / machine-save path is a separate workflow.
-        if is_machine_layer(layer):
-            return False
-
-        # If save routing was already explicitly chosen, do not override it here.
-        if getattr(pts_meta, "save_target", None) is not None:
-            return False
-
-        # Already project-backed -> do not prompt again.
-        project_ctx = infer_dlc_project_from_points_meta(pts_meta, prefer_project_root=False)
-        if project_ctx.project_root is not None and project_ctx.config_path is not None:
-            return False
-
-        root = getattr(pts_meta, "root", None)
-        paths = list(getattr(pts_meta, "paths", None) or [])
-        if not root or not paths:
-            return False
-
-        try:
-            root_path = Path(root).expanduser().resolve(strict=False)
-        except Exception:
-            root_path = Path(root)
-
-        # Simple single-folder path shape only:
-        # - relative basenames
-        # - absolute files directly under root
-        # - already-canonical labeled-data/<dataset>/<image>
-        for value in paths:
-            text = str(value).replace("\\", "/")
-            p = Path(value)
-
-            parts = [part for part in text.split("/") if part]
-            lowered = [part.lower() for part in parts]
-            if "labeled-data" in lowered:
-                idx = lowered.index("labeled-data")
-                if idx + 2 < len(parts):
-                    continue
-
-            # On POSIX, pathlib.Path(...) does not recognize Windows drive-letter
-            # / UNC paths as absolute. Prevent those from being misclassified as
-            # simple relative basenames.
-            is_windows_abs_misclassified = not p.is_absolute() and is_windows_absolute_path(value)
-            if not p.is_absolute():
-                if is_windows_abs_misclassified:
-                    # Treat as an absolute/unresolved path, not as a basename candidate.
-                    # In this lightweight workflow, unrelated absolute paths are allowed
-                    # and preserved unchanged.
-                    continue
-
-                # Only allow simple basenames as projectless candidates.
-                # Any directory components or '.' / '..' segments are rejected.
-                if len(p.parts) == 1 and p.parts[0] not in (".", ".."):
-                    continue
-                return False
-
-            try:
-                rel_to_root = p.expanduser().resolve(strict=False).relative_to(root_path)
-            except Exception:
-                # Unrelated absolute path outside the current labeled folder is allowed:
-                # it will simply be preserved unchanged.
-                continue
-
-            # Only direct children of the current labeled folder are considered
-            # safely coercible in this lightweight workflow.
-            if len(rel_to_root.parts) == 1:
-                continue
-
-            # Nested paths *inside* the current root are considered ambiguous for now.
-            return False
-
-        return True
-
     def _maybe_prepare_project_path_override_metadata(self, layer: Points) -> tuple[dict | None, bool]:
         """
         Optionally prepare save-time metadata by associating a project-less labeled
@@ -951,7 +850,7 @@ class KeypointControls(QWidget):
         if not paths:
             return None, False
 
-        if not self._is_projectless_folder_association_candidate(layer, pts_meta):
+        if not is_projectless_folder_association_candidate(pts_meta):
             return None, False
 
         source_root = pts_meta.root
@@ -1358,11 +1257,9 @@ class KeypointControls(QWidget):
 
         Returns True if save_target is set (or already existed), False if user cancels.
         """
-        # Only machine layers need promotion; non-machine layers can be saved as-is without a save_target
         if not is_machine_layer(layer):
             return True
 
-        # Best-effort migrate provenance (may fill io/save_target for legacy layers)
         mig = migrate_points_layer_metadata(layer)
         if hasattr(mig, "errors"):
             logger.warning(
@@ -1382,27 +1279,18 @@ class KeypointControls(QWidget):
             return False
 
         pts: PointsMetadata = res
-        io_meta = pts.io
-        save_target = pts.save_target
 
-        # If this machine layer already has a promotion target, we're done
-        if save_target is not None:
+        if not requires_gt_promotion(pts):
             return True
 
-        # If io is missing or doesn't look like a machine source, don't block (fail open)
-        src_kind = getattr(io_meta, "kind", None) if io_meta is not None else None
-        if src_kind is not AnnotationKind.MACHINE:
-            return True
-
-        # ---- machine source + no save_target: require promotion target ----
         anchor = safe_folder_anchor_from_points_layer(layer)
         if not anchor:
             QMessageBox.warning(self, "Cannot save", "Could not determine a folder anchor for saving.")
             return False
 
-        scorer = _find_config_scorer_nearby(anchor) or get_default_scorer(anchor)
+        scorer = find_config_scorer_nearby(anchor) or get_default_scorer(anchor)
         if not scorer:
-            suggested = _suggest_human_placeholder(anchor)
+            suggested = suggest_human_placeholder(anchor)
             while True:
                 s = _prompt_for_scorer(self, anchor=anchor, suggested=suggested)
                 if s is None:
@@ -1426,16 +1314,13 @@ class KeypointControls(QWidget):
             except Exception:
                 logger.debug("Failed to persist default scorer to sidecar", exc_info=True)
 
-        target_name = f"CollectedData_{scorer}.h5"
-        st = IOProvenance(
-            project_root=anchor,
-            source_relpath_posix=target_name,
-            kind=AnnotationKind.GT,
-            dataset_key="keypoints",
+        updated = apply_gt_save_target(
+            pts,
+            anchor=anchor,
             scorer=scorer,
+            dataset_key="keypoints",
         )
 
-        updated = pts.model_copy(update={"save_target": st})
         out = write_points_meta(
             layer,
             updated,
