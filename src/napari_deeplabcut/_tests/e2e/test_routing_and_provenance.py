@@ -521,9 +521,14 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     store.current_keypoint = keypoints.Keypoint("bodypart1", "")
     points.add(np.array([0.0, 11.0, 22.0], dtype=float))
 
+    from napari_deeplabcut.ui import dialogs as ui_dialogs
+
     monkeypatch.setattr(
         "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
-        lambda *args, **kwargs: str(config_path),
+        lambda *args, **kwargs: ui_dialogs.ProjectConfigPromptResult(
+            action=ui_dialogs.ProjectConfigPromptAction.ASSOCIATE,
+            config_path=str(config_path),
+        ),
     )
     monkeypatch.setattr(
         "napari_deeplabcut._widgets.ui_dialogs.maybe_confirm_dataset_path_rewrite",
@@ -646,9 +651,14 @@ def test_projectless_folder_save_refuses_when_target_dataset_folder_already_cont
 
     warned = {}
 
+    from napari_deeplabcut.ui import dialogs as ui_dialogs
+
     monkeypatch.setattr(
         "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
-        lambda *args, **kwargs: str(config_path),
+        lambda *args, **kwargs: ui_dialogs.ProjectConfigPromptResult(
+            action=ui_dialogs.ProjectConfigPromptAction.ASSOCIATE,
+            config_path=str(config_path),
+        ),
     )
     monkeypatch.setattr(
         "napari_deeplabcut._widgets.ui_dialogs.warn_existing_dataset_folder_conflict",
