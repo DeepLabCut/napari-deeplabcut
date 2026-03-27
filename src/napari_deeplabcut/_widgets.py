@@ -987,6 +987,10 @@ class KeypointControls(QWidget):
         except Exception:
             source_root_path = Path(source_root)
 
+        # NOTE: @C-Achard 2026-03-27 Currently does not let user choose
+        # a different dataset name than the source folder,
+        # to keep a lightweight workflow.
+        # This could be allowed in the future if there is demand.
         dataset_name = source_root_path.name
         if not dataset_name:
             return None, False

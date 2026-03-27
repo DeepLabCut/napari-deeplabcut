@@ -425,7 +425,9 @@ def prompt_for_project_config_for_save(
         "Associate folder with DLC project?",
         "No DLC project root could be inferred for this layer.\n\n"
         "Do you want to choose a config.yaml so this labeled folder can be saved "
-        "using DeepLabCut's standard labeled-data/<dataset>/<image> paths?\n\n"
+        "using DeepLabCut's standard dataset paths?\n\n"
+        "Important: the current folder name will become the DLC dataset name:\n"
+        "labeled-data/<current-folder-name>/...\n\n"
         "This will not move files on disk or edit config.yaml.",
         QMessageBox.Yes | QMessageBox.No,
     )
@@ -470,13 +472,20 @@ def maybe_confirm_dataset_path_rewrite(
 
     target_folder = Path(project_root) / "labeled-data" / dataset_name
 
+    dataset_note = (
+        "The current folder name will become the DLC dataset name:\n"
+        f"  {dataset_name}\n\n"
+        "Paths will be written in the form:\n"
+        f"  labeled-data/{dataset_name}/<image>\n\n"
+    )
+
     if n_unresolved == 0:
         text = (
             f"This save will associate the current folder with the DLC project:\n\n"
             f"{project_root}\n\n"
             f"Target dataset folder:\n{target_folder}\n\n"
-            f"All {n_rewritten} path(s) will be saved as:\n"
-            f"labeled-data/{dataset_name}/<image>\n\n"
+            f"{dataset_note}"
+            f"All {n_rewritten} path(s) can be written in DLC dataset form.\n\n"
             "Continue?"
         )
     else:
@@ -484,8 +493,8 @@ def maybe_confirm_dataset_path_rewrite(
             f"This save will associate the current folder with the DLC project:\n\n"
             f"{project_root}\n\n"
             f"Target dataset folder:\n{target_folder}\n\n"
-            f"{n_rewritten} path(s) will be saved as:\n"
-            f"labeled-data/{dataset_name}/<image>\n\n"
+            f"{dataset_note}"
+            f"{n_rewritten} path(s) will be written in DLC dataset form.\n"
             f"{n_unresolved} path(s) could not be safely coerced and will be kept as-is.\n\n"
             "Continue?"
         )
@@ -513,8 +522,9 @@ def warn_existing_dataset_folder_conflict(
         "Cannot associate with existing dataset folder",
         "The target dataset folder already exists and contains files:\n\n"
         f"{target_folder}\n\n"
-        "To avoid colliding with an existing DeepLabCut dataset, this operation was refused.\n"
-        "Please move/rename the current folder, choose a different project, or clear the target dataset folder first.",
+        "To avoid colliding with an existing DeepLabCut dataset, this operation was refused.\n\n"
+        "If this folder is the intended target, move or rename the current labeled folder first, "
+        "or, if desired, clear the target dataset folder before retrying.",
     )
 
 
