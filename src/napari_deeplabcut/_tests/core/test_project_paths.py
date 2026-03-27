@@ -7,6 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 import napari_deeplabcut.core.project_paths as paths_mod
+from napari_deeplabcut.core.project_paths import (
+    relativize_dlc_image_paths,
+    resolve_project_root_from_config,
+)
 
 
 # -----------------------------------------------------------------------------
@@ -525,3 +529,43 @@ def test_infer_dlc_project_from_image_layer_returns_best_effort_without_config(t
     assert ctx.project_root is None
     assert ctx.config_path is None
     assert ctx.root_anchor == videos.resolve()
+
+
+def test_resolve_project_root_from_config(tmp_path):
+    project = tmp_path / "my-project"
+    project.mkdir()
+    cfg = project / "config.yaml"
+    cfg.write_text("scorer: test\n", encoding="utf-8")
+
+    assert resolve_project_root_from_config(cfg) == project
+    assert resolve_project_root_from_config(project / "not_config.yaml") is None
+    assert resolve_project_root_from_config(project / "config.yml") is None
+    assert resolve_project_root_from_config(project / "missing" / "config.yaml") is None
+
+
+def test_relativize_dlc_image_paths_normalizes_only_safe_dlc_paths(tmp_path):
+    project = tmp_path / "proj"
+    dataset_dir = project / "labeled-data" / "video1"
+    dataset_dir.mkdir(parents=True)
+
+    inside_abs = dataset_dir / "img001.png"
+    other_abs = project / "somewhere" / "else.png"
+    outside_abs = tmp_path / "outside" / "img999.png"
+
+    rewritten, unresolved = relativize_dlc_image_paths(
+        [
+            inside_abs,
+            "labeled-data\\video1\\img002.png",
+            other_abs,
+            outside_abs,
+        ],
+        project_root=project,
+    )
+
+    assert rewritten == [
+        "labeled-data/video1/img001.png",
+        "labeled-data/video1/img002.png",
+        other_abs.as_posix(),
+        outside_abs.as_posix(),
+    ]
+    assert unresolved == (2, 3)
