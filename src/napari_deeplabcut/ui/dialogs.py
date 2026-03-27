@@ -257,6 +257,8 @@ class Shortcuts(QDialog):
         """
         Return (available, reason) for a shortcut in the current viewer context.
         """
+        if self.viewer is None:
+            return False, "No viewer available."
         active = self._active_layer()
         active_is_points = isinstance(active, Points)
 
