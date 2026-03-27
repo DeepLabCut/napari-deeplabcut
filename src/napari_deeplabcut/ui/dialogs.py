@@ -3,16 +3,19 @@ from __future__ import annotations
 
 import html
 from collections import defaultdict, namedtuple
+from pathlib import Path
 
 from napari.layers import Points
 from qtpy.QtCore import QPoint, Qt
 from qtpy.QtWidgets import (
     QDialog,
+    QFileDialog,
     QFrame,
     QGraphicsOpacityEffect,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -24,6 +27,7 @@ from qtpy.QtWidgets import (
 from napari_deeplabcut.config.keybinds import iter_shortcuts
 from napari_deeplabcut.config.settings import get_overwrite_confirmation_enabled
 from napari_deeplabcut.core.conflicts import OverwriteConflictReport
+from napari_deeplabcut.core.project_paths import resolve_project_root_from_config
 
 # from napari_deeplabcut.core.dataframes import summarize_keypoint_conflicts
 
@@ -402,6 +406,91 @@ class Tutorial(QDialog):
     def update_nav_buttons(self):
         self.prev_button.setEnabled(self._current_tip > 0)
         self.next_button.setEnabled(self._current_tip < len(self._tips) - 1)
+
+
+# --------------------------------------------------------------------------------
+# Headless labeled data resolved to existing config.yaml project dialog
+# --------------------------------------------------------------------------------
+
+
+def prompt_for_project_config_for_save(
+    parent,
+    *,
+    initial_dir: str | None = None,
+) -> str | None:
+    """
+    Ask the user for an optional DLC config.yaml to normalize saved image paths.
+    Returns the selected config path, or None if cancelled / declined.
+    """
+    choice = QMessageBox.question(
+        parent,
+        "Use DLC project config?",
+        "No DLC project root could be inferred for this layer.\n\n"
+        "Do you want to choose a config.yaml so image paths can be saved relative"
+        " to an existing DLC project?\n"
+        "Note: this will not move the images or alter config.yaml, "
+        "but rather populate the h5 file with project-relative paths.",
+        QMessageBox.Yes | QMessageBox.No,
+    )
+    if choice != QMessageBox.Yes:
+        return None
+
+    filename, _ = QFileDialog.getOpenFileName(
+        parent,
+        "Choose config.yaml",
+        dir=initial_dir or "",
+        filter="DeepLabCut config (config.yaml)",
+    )
+    if not filename:
+        return None
+
+    root = resolve_project_root_from_config(filename)
+    if root is None:
+        QMessageBox.warning(
+            parent,
+            "Invalid config.yaml",
+            "The selected file is not a valid existing config.yaml.",
+        )
+        return None
+
+    return filename
+
+
+def maybe_confirm_relative_paths_summary(
+    parent,
+    *,
+    project_root: str | Path,
+    n_paths: int,
+    n_unresolved: int,
+) -> bool:
+    """
+    Summarize how many image paths will be normalized to DLC row keys.
+    """
+    if n_paths == 0:
+        return True
+
+    n_relative = n_paths - n_unresolved
+    if n_unresolved == 0:
+        text = (
+            f"All {n_relative} image path(s) will be saved relative to the selected DLC project:\n\n"
+            f"{project_root}\n\n"
+            "Continue?"
+        )
+    else:
+        text = (
+            f"{n_relative} image path(s) will be saved in DLC relative form under:\n\n"
+            f"{project_root}\n\n"
+            f"{n_unresolved} path(s) could not be normalized and will be kept as-is.\n\n"
+            "Continue?"
+        )
+
+    choice = QMessageBox.question(
+        parent,
+        "Confirm path normalization",
+        text,
+        QMessageBox.Yes | QMessageBox.No,
+    )
+    return choice == QMessageBox.Yes
 
 
 # --------------------------------------------------------------------------------------

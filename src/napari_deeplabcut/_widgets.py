@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
 from functools import cached_property, partial
@@ -44,6 +45,7 @@ from napari_deeplabcut.config.keybinds import (
 )
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core import keypoints
+from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
 from napari_deeplabcut.core.layers import (
     get_first_points_layer,
@@ -52,6 +54,7 @@ from napari_deeplabcut.core.layers import (
 )
 from napari_deeplabcut.core.metadata import (
     MergePolicy,
+    apply_project_paths_override_to_points_meta,
     infer_image_root,
     migrate_points_layer_metadata,
     parse_points_metadata,
@@ -59,7 +62,12 @@ from napari_deeplabcut.core.metadata import (
     sync_points_from_image,
     write_points_meta,
 )
-from napari_deeplabcut.core.project_paths import PathMatchPolicy
+from napari_deeplabcut.core.project_paths import (
+    PathMatchPolicy,
+    infer_dlc_project_from_points_meta,
+    relativize_dlc_image_paths,
+    resolve_project_root_from_config,
+)
 from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.core.sidecar import (
     get_default_scorer,
@@ -91,7 +99,13 @@ from napari_deeplabcut.ui.cropping import (
     run_store_crop_coordinates,
     update_video_panel_context,
 )
-from napari_deeplabcut.ui.dialogs import Shortcuts, Tutorial
+from napari_deeplabcut.ui.dialogs import (
+    Shortcuts,
+    Tutorial,
+    maybe_confirm_overwrite,
+    maybe_confirm_relative_paths_summary,
+    prompt_for_project_config_for_save,
+)
 from napari_deeplabcut.ui.labels_and_dropdown import (
     DropdownMenu,
     KeypointsDropdownMenu,
@@ -168,6 +182,16 @@ def _prompt_for_scorer(parent_widget, *, anchor: str, suggested: str) -> str | N
     if not scorer:
         return None
     return scorer
+
+
+@contextmanager
+def _temporary_layer_metadata(layer: Points, metadata: dict):
+    old_metadata = dict(layer.metadata or {})
+    layer.metadata = metadata
+    try:
+        yield
+    finally:
+        layer.metadata = old_metadata
 
 
 class KeypointControls(QWidget):
@@ -857,6 +881,58 @@ class KeypointControls(QWidget):
                     getattr(ly, "name", ly),
                     out,
                 )
+
+    def _maybe_prepare_project_path_override_metadata(self, layer: Points) -> dict | None:
+        """
+        Optionally prepare save-time metadata with paths normalized to DLC row-key form
+        using a user-selected config.yaml.
+
+        Returns
+        -------
+        dict | None
+            Overridden metadata dict for save/preflight, or None if no override is requested.
+        """
+        res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
+        if isinstance(res, ValidationError):
+            return None
+
+        pts_meta: PointsMetadata = res
+        paths = pts_meta.paths or []
+        if not paths:
+            return None
+
+        project_ctx = infer_dlc_project_from_points_meta(pts_meta, prefer_project_root=False)
+
+        # If we already have a real project root/config context, do not prompt.
+        if project_ctx.project_root is not None and project_ctx.config_path is not None:
+            return None
+
+        initial_dir = self._project_path or pts_meta.project or pts_meta.root
+        config_path = prompt_for_project_config_for_save(self, initial_dir=initial_dir)
+        if not config_path:
+            return None
+
+        project_root = resolve_project_root_from_config(config_path)
+        if project_root is None:
+            return None
+
+        rewritten_paths, unresolved = relativize_dlc_image_paths(paths, project_root=project_root)
+
+        if not maybe_confirm_relative_paths_summary(
+            self,
+            project_root=project_root,
+            n_paths=len(paths),
+            n_unresolved=len(unresolved),
+        ):
+            return None
+
+        overridden = apply_project_paths_override_to_points_meta(
+            pts_meta,
+            project_root=project_root,
+            rewritten_paths=rewritten_paths,
+        )
+
+        return overridden.model_dump(mode="python", exclude_none=True)
 
     def _show_color_scheme(self):
         show = self._view_scheme_cb.isChecked()
@@ -1604,9 +1680,6 @@ class KeypointControls(QWidget):
             By default, all layers are saved.
         """
 
-        from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
-        from napari_deeplabcut.ui.dialogs import maybe_confirm_overwrite
-
         selected_layers = list(self.viewer.layers.selection)
         msg = ""
         if not len(self.viewer.layers):
@@ -1630,9 +1703,10 @@ class KeypointControls(QWidget):
                 layer.metadata.get("save_target"),
             )
             try:
+                overridden_metadata = self._maybe_prepare_project_path_override_metadata(layer)
                 attributes = {
                     "name": layer.name,
-                    "metadata": dict(layer.metadata or {}),
+                    "metadata": overridden_metadata if overridden_metadata is not None else dict(layer.metadata or {}),
                     "properties": dict(layer.properties or {}),
                 }
                 report = compute_overwrite_report_for_points_save(layer.data, attributes)
@@ -1654,7 +1728,13 @@ class KeypointControls(QWidget):
                     logger.debug("Save cancelled.")
                     return
 
-            self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+            if overridden_metadata is not None:
+                with _temporary_layer_metadata(layer, overridden_metadata):
+                    self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+                # Persist the successful override into live metadata after save
+                layer.metadata = dict(overridden_metadata)
+            else:
+                self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
             # hook to persist UI state on successful save
             try:
                 self._persist_folder_ui_state_for_points_layer(layer)

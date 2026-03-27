@@ -201,6 +201,37 @@ def sync_points_from_image(image_meta: ImageMetadata, points_meta: PointsMetadat
     return PointsMetadata(**updated)
 
 
+def apply_project_paths_override_to_points_meta(
+    pts_meta: PointsMetadata,
+    *,
+    project_root: str | Path,
+    rewritten_paths: list[str],
+) -> PointsMetadata:
+    """
+    Return a copy of PointsMetadata with a save-time project/path override applied.
+
+    This updates:
+    - project
+    - paths
+    - io.project_root (if present)
+    - save_target.project_root (if present)
+    """
+    project_root_str = str(project_root)
+
+    updates = {
+        "project": project_root_str,
+        "paths": list(rewritten_paths),
+    }
+
+    if pts_meta.io is not None:
+        updates["io"] = pts_meta.io.model_copy(update={"project_root": project_root_str})
+
+    if pts_meta.save_target is not None:
+        updates["save_target"] = pts_meta.save_target.model_copy(update={"project_root": project_root_str})
+
+    return pts_meta.model_copy(update=updates)
+
+
 def ensure_metadata_models(
     image_meta: dict | ImageMetadata | None,
     points_meta: dict | PointsMetadata | None,
