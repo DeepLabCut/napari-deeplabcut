@@ -10,6 +10,7 @@ import napari_deeplabcut.core.project_paths as paths_mod
 from napari_deeplabcut.core.project_paths import (
     coerce_paths_to_dlc_row_keys,
     dataset_folder_has_files,
+    infer_dlc_project_from_config,
     resolve_project_root_from_config,
     target_dataset_folder_for_config,
 )
@@ -591,3 +592,29 @@ def test_target_dataset_folder_and_existing_files_guard(tmp_path):
 
     (target / "img001.png").write_bytes(b"x")
     assert dataset_folder_has_files(target)
+
+
+def test_infer_dlc_project_from_config_returns_explicit_project_context(tmp_path):
+    project = tmp_path / "my-project"
+    project.mkdir()
+
+    config_path = project / "config.yaml"
+    config_path.write_text("scorer: John\n", encoding="utf-8")
+
+    ctx = infer_dlc_project_from_config(config_path)
+
+    assert ctx.root_anchor == project
+    assert ctx.project_root == project
+    assert ctx.config_path == config_path
+    assert ctx.dataset_folder is None
+
+
+def test_infer_dlc_project_from_config_rejects_invalid_path(tmp_path):
+    project = tmp_path / "my-project"
+    project.mkdir()
+
+    bad_config = project / "not_config.yaml"
+    bad_config.write_text("scorer: John\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        infer_dlc_project_from_config(bad_config)
