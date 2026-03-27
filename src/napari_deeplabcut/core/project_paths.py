@@ -481,11 +481,12 @@ def coerce_paths_to_dlc_row_keys(
         except Exception:
             p = None
 
-        # Relative basename only -> coerce safely
+        # Relative basename only -> coerce safely.
+        # Refuse any relative path that contains '.', '..', or multiple path parts.
         if p is not None and not p.is_absolute():
-            rel_parts = [part for part in p.parts if str(part) not in ("", ".", "..")]
-            if len(rel_parts) == 1:
-                rewritten.append(f"labeled-data/{ds_name}/{rel_parts[0]}")
+            raw_parts = [str(part) for part in p.parts if str(part) != ""]
+            if len(raw_parts) == 1 and raw_parts[0] not in (".", ".."):
+                rewritten.append(f"labeled-data/{ds_name}/{raw_parts[0]}")
             else:
                 rewritten.append(text)
                 unresolved.append(i)

@@ -930,8 +930,9 @@ class KeypointControls(QWidget):
                     continue
 
             if not p.is_absolute():
-                rel_parts = [part for part in p.parts if str(part) not in ("", ".", "..")]
-                if len(rel_parts) == 1:
+                # Only allow simple basenames as projectless candidates.
+                # Any directory components or '.' / '..' segments are rejected.
+                if len(p.parts) == 1 and p.parts[0] not in (".", ".."):
                     continue
                 return False
 

@@ -36,39 +36,6 @@ def forbid_project_config_dialog(monkeypatch):
     )
 
 
-@pytest.fixture
-def project_config_prompt(monkeypatch):
-    """Patch the project-less save prompt to return a chosen config path, and track calls for test assertions."""
-    state = {"calls": []}
-
-    def _return_none(*args, **kwargs):
-        state["calls"].append((args, kwargs))
-        return None
-
-    monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
-        _return_none,
-    )
-    monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.maybe_confirm_dataset_path_rewrite",
-        lambda *args, **kwargs: True,
-    )
-    monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.warn_existing_dataset_folder_conflict",
-        lambda *args, **kwargs: None,
-    )
-
-    class Controller:
-        @property
-        def calls(self):
-            return state["calls"]
-
-        def forbid(self):
-            return None
-
-    return Controller()
-
-
 @pytest.mark.usefixtures("qtbot")
 def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
     """
