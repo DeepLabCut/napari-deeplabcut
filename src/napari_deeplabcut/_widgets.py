@@ -997,9 +997,20 @@ class KeypointControls(QWidget):
             return None, False
 
         initial_dir = self._project_path or pts_meta.project or str(source_root_path)
-        config_path = ui_dialogs.prompt_for_project_config_for_save(self, initial_dir=initial_dir)
+        dialog_result = ui_dialogs.prompt_for_project_config_for_save(self, initial_dir=initial_dir)
+        # Support both previous (path-or-None) and new (path, abort_save) return types.
+        if isinstance(dialog_result, tuple):
+            config_path, abort_save = dialog_result
+        else:
+            config_path = dialog_result
+            # Legacy behavior: None means abort, any truthy path means proceed.
+            abort_save = not bool(config_path)
+        if abort_save:
+            # User cancelled
+            return None, True
         if not config_path:
-            return None, True  # user explicitly declined / cancelled
+            # User chose not to associate with a project
+            return None, False
 
         project_root = resolve_project_root_from_config(config_path)
         if project_root is None:
