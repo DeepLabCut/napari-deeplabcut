@@ -364,6 +364,174 @@ def find_nearest_config(
     return None
 
 
+def infer_dlc_project_from_config(config_path: str | Path) -> DLCProjectContext:
+    root = resolve_project_root_from_config(config_path)
+    if root is None:
+        raise ValueError(f"Not a valid DLC config.yaml: {config_path!r}")
+    cfg = Path(config_path).expanduser().resolve(strict=False)
+    return DLCProjectContext(
+        root_anchor=root,
+        project_root=root,
+        config_path=cfg,
+        dataset_folder=None,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Explicit config-based DLC path normalization
+# -----------------------------------------------------------------------------
+def resolve_project_root_from_config(config_path: str | Path | None) -> Path | None:
+    """
+    Return the DLC project root (= parent directory) from an explicit config.yaml path.
+
+    Parameters
+    ----------
+    config_path:
+        Path to a user-selected DLC config.yaml.
+
+    Returns
+    -------
+    Path | None
+        Parent directory of the config if valid, else None.
+    """
+    if config_path is None:
+        return None
+
+    try:
+        p = Path(config_path).expanduser().resolve(strict=False)
+    except Exception:
+        try:
+            p = Path(config_path)
+        except Exception:
+            return None
+
+    if p.name.lower() != "config.yaml":
+        return None
+
+    if not p.is_file():
+        return None
+
+    return p.parent
+
+
+def _extract_dlc_relpath(parts: Iterable[str]) -> str | None:
+    """
+    Extract the canonical DLC row-key path:
+
+        labeled-data/<dataset>/<image>
+
+    from an iterable of path components.
+
+    Returns None if a valid DLC-style relative path cannot be formed.
+    """
+    parts = [str(p) for p in parts if str(p)]
+    lowered = [p.lower() for p in parts]
+
+    try:
+        idx = lowered.index("labeled-data")
+    except ValueError:
+        return None
+
+    # Require at least: labeled-data / <dataset> / <image>
+    if idx + 2 >= len(parts):
+        return None
+
+    return "/".join(parts[idx:])
+
+
+def relativize_dlc_image_paths(
+    paths: Iterable[str | Path],
+    *,
+    project_root: str | Path,
+) -> tuple[list[str], tuple[int, ...]]:
+    """
+    Normalize image paths to DLC-style project-relative row keys when safely possible.
+
+    For each path:
+    - If it is already relative and contains a valid `labeled-data/...` suffix,
+      normalize it to POSIX and keep only that suffix.
+    - If it is absolute and lies under `project_root`, rewrite it to the suffix
+      `labeled-data/<dataset>/<image>` when such a suffix exists.
+    - Otherwise, keep the path unchanged (normalized to POSIX).
+
+    Parameters
+    ----------
+    paths:
+        Input image paths from layer metadata.
+    project_root:
+        DLC project root, typically ``Path(config.yaml).parent``.
+
+    Returns
+    -------
+    tuple[list[str], tuple[int, ...]]
+        - rewritten paths
+        - indices of paths that could not be normalized to DLC-style relative form
+          and were therefore kept unchanged
+    """
+    root = normalize_anchor_candidate(project_root)
+    if root is None:
+        raise ValueError("project_root must resolve to a valid directory-like anchor")
+
+    try:
+        root = root.expanduser().resolve(strict=False)
+    except Exception:
+        pass
+
+    rewritten: list[str] = []
+    unresolved: list[int] = []
+
+    for i, value in enumerate(paths):
+        # First, preserve string form robustly
+        try:
+            text = str(value).replace("\\", "/")
+        except Exception:
+            text = ""
+        if not text:
+            rewritten.append(text)
+            unresolved.append(i)
+            continue
+
+        # Case 1: already-relative path -> try to normalize from labeled-data onward
+        try:
+            p = Path(value)
+        except Exception:
+            p = None
+
+        if p is not None and not p.is_absolute():
+            rel = _extract_dlc_relpath(text.split("/"))
+            if rel is not None:
+                rewritten.append(rel)
+            else:
+                rewritten.append(text)
+                unresolved.append(i)
+            continue
+
+        # Case 2: absolute path -> only relativize if safely under project_root
+        try:
+            abs_path = Path(value).expanduser().resolve(strict=False)
+        except Exception:
+            rewritten.append(text)
+            unresolved.append(i)
+            continue
+
+        try:
+            rel_to_root = abs_path.relative_to(root)
+        except Exception:
+            rewritten.append(abs_path.as_posix())
+            unresolved.append(i)
+            continue
+
+        rel = _extract_dlc_relpath(rel_to_root.parts)
+        if rel is not None:
+            rewritten.append(rel)
+        else:
+            # Under project root, but not under labeled-data/<dataset>/...
+            rewritten.append(abs_path.as_posix())
+            unresolved.append(i)
+
+    return rewritten, tuple(unresolved)
+
+
 # -----------------------------------------------------------------------------
 # Source-specific adapters
 # -----------------------------------------------------------------------------
