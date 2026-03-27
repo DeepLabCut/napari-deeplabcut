@@ -411,25 +411,22 @@ class Tutorial(QDialog):
 # --------------------------------------------------------------------------------
 # Headless labeled data resolved to existing config.yaml project dialog
 # --------------------------------------------------------------------------------
-
-
 def prompt_for_project_config_for_save(
     parent,
     *,
     initial_dir: str | None = None,
 ) -> str | None:
     """
-    Ask the user for an optional DLC config.yaml to normalize saved image paths.
-    Returns the selected config path, or None if cancelled / declined.
+    Ask the user for an optional DLC config.yaml to associate the current labeled
+    folder with an existing DLC project.
     """
     choice = QMessageBox.question(
         parent,
-        "Use DLC project config?",
+        "Associate folder with DLC project?",
         "No DLC project root could be inferred for this layer.\n\n"
-        "Do you want to choose a config.yaml so image paths can be saved relative"
-        " to an existing DLC project?\n"
-        "Note: this will not move the images or alter config.yaml, "
-        "but rather populate the h5 file with project-relative paths.",
+        "Do you want to choose a config.yaml so this labeled folder can be saved "
+        "using DeepLabCut's standard labeled-data/<dataset>/<image> paths?\n\n"
+        "This will not move files on disk or edit config.yaml.",
         QMessageBox.Yes | QMessageBox.No,
     )
     if choice != QMessageBox.Yes:
@@ -456,41 +453,69 @@ def prompt_for_project_config_for_save(
     return filename
 
 
-def maybe_confirm_relative_paths_summary(
+def maybe_confirm_dataset_path_rewrite(
     parent,
     *,
     project_root: str | Path,
+    dataset_name: str,
     n_paths: int,
     n_unresolved: int,
 ) -> bool:
     """
-    Summarize how many image paths will be normalized to DLC row keys.
+    Summarize the project-association rewrite before saving.
     """
+    n_rewritten = n_paths - n_unresolved
     if n_paths == 0:
         return True
 
-    n_relative = n_paths - n_unresolved
+    target_folder = Path(project_root) / "labeled-data" / dataset_name
+
     if n_unresolved == 0:
         text = (
-            f"All {n_relative} image path(s) will be saved relative to the selected DLC project:\n\n"
+            f"This save will associate the current folder with the DLC project:\n\n"
             f"{project_root}\n\n"
+            f"Target dataset folder:\n{target_folder}\n\n"
+            f"All {n_rewritten} path(s) will be saved as:\n"
+            f"labeled-data/{dataset_name}/<image>\n\n"
             "Continue?"
         )
     else:
         text = (
-            f"{n_relative} image path(s) will be saved in DLC relative form under:\n\n"
+            f"This save will associate the current folder with the DLC project:\n\n"
             f"{project_root}\n\n"
-            f"{n_unresolved} path(s) could not be normalized and will be kept as-is.\n\n"
+            f"Target dataset folder:\n{target_folder}\n\n"
+            f"{n_rewritten} path(s) will be saved as:\n"
+            f"labeled-data/{dataset_name}/<image>\n\n"
+            f"{n_unresolved} path(s) could not be safely coerced and will be kept as-is.\n\n"
             "Continue?"
         )
 
     choice = QMessageBox.question(
         parent,
-        "Confirm path normalization",
+        "Confirm DLC project association",
         text,
         QMessageBox.Yes | QMessageBox.No,
     )
     return choice == QMessageBox.Yes
+
+
+def warn_existing_dataset_folder_conflict(
+    parent,
+    *,
+    target_folder: str | Path,
+) -> None:
+    """
+    Explain why project-association save is refused when the target dataset folder
+    already exists and contains files.
+    """
+    QMessageBox.warning(
+        parent,
+        "Cannot associate with existing dataset folder",
+        "The target dataset folder already exists and contains files:\n\n"
+        f"{target_folder}\n\n"
+        "To avoid colliding with an existing DeepLabCut dataset, this operation was refused.\n"
+        "Please move/rename the current folder, choose a different project, or clear the target dataset folder first.",
+    )
 
 
 # --------------------------------------------------------------------------------------

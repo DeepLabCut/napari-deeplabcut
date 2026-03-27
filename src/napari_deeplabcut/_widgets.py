@@ -64,9 +64,11 @@ from napari_deeplabcut.core.metadata import (
 )
 from napari_deeplabcut.core.project_paths import (
     PathMatchPolicy,
+    coerce_paths_to_dlc_row_keys,
+    dataset_folder_has_files,
     infer_dlc_project_from_points_meta,
-    relativize_dlc_image_paths,
     resolve_project_root_from_config,
+    target_dataset_folder_for_config,
 )
 from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.core.sidecar import (
@@ -102,9 +104,10 @@ from napari_deeplabcut.ui.cropping import (
 from napari_deeplabcut.ui.dialogs import (
     Shortcuts,
     Tutorial,
+    maybe_confirm_dataset_path_rewrite,
     maybe_confirm_overwrite,
-    maybe_confirm_relative_paths_summary,
     prompt_for_project_config_for_save,
+    warn_existing_dataset_folder_conflict,
 )
 from napari_deeplabcut.ui.labels_and_dropdown import (
     DropdownMenu,
@@ -884,13 +887,18 @@ class KeypointControls(QWidget):
 
     def _maybe_prepare_project_path_override_metadata(self, layer: Points) -> dict | None:
         """
-        Optionally prepare save-time metadata with paths normalized to DLC row-key form
-        using a user-selected config.yaml.
+        Optionally prepare save-time metadata by associating a project-less labeled
+        folder with an explicit DLC project chosen via config.yaml.
 
-        Returns
-        -------
-        dict | None
-            Overridden metadata dict for save/preflight, or None if no override is requested.
+        This uses:
+        - project_root = config.parent
+        - dataset_name = current source folder name
+
+        and rewrites safe paths to:
+            labeled-data/<dataset_name>/<image>
+
+        It refuses the operation if the target dataset folder already exists and
+        contains files.
         """
         res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
         if isinstance(res, ValidationError):
@@ -907,7 +915,21 @@ class KeypointControls(QWidget):
         if project_ctx.project_root is not None and project_ctx.config_path is not None:
             return None
 
-        initial_dir = self._project_path or pts_meta.project or pts_meta.root
+        source_root = pts_meta.root
+        if not source_root:
+            return None
+
+        try:
+            source_root_path = Path(source_root).expanduser().resolve(strict=False)
+        except Exception:
+            source_root_path = Path(source_root)
+
+        if not source_root_path.name:
+            return None
+
+        dataset_name = source_root_path.name
+
+        initial_dir = self._project_path or pts_meta.project or str(source_root_path)
         config_path = prompt_for_project_config_for_save(self, initial_dir=initial_dir)
         if not config_path:
             return None
@@ -916,11 +938,21 @@ class KeypointControls(QWidget):
         if project_root is None:
             return None
 
-        rewritten_paths, unresolved = relativize_dlc_image_paths(paths, project_root=project_root)
+        target_folder = target_dataset_folder_for_config(config_path, dataset_name=dataset_name)
+        if dataset_folder_has_files(target_folder):
+            warn_existing_dataset_folder_conflict(self, target_folder=target_folder)
+            return None
 
-        if not maybe_confirm_relative_paths_summary(
+        rewritten_paths, unresolved = coerce_paths_to_dlc_row_keys(
+            paths,
+            source_root=source_root_path,
+            dataset_name=dataset_name,
+        )
+
+        if not maybe_confirm_dataset_path_rewrite(
             self,
             project_root=project_root,
+            dataset_name=dataset_name,
             n_paths=len(paths),
             n_unresolved=len(unresolved),
         ):

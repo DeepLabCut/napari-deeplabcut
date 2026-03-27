@@ -215,6 +215,9 @@ def apply_project_paths_override_to_points_meta(
     - paths
     - io.project_root (if present)
     - save_target.project_root (if present)
+
+    It intentionally does NOT rewrite `root`, so the current source-folder anchor
+    remains available for remapping / plugin-local workflows.
     """
     project_root_str = str(project_root)
 
