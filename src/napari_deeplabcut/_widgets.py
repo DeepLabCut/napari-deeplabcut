@@ -57,7 +57,6 @@ from napari_deeplabcut.core.metadata import (
     apply_project_paths_override_to_points_meta,
     infer_image_root,
     migrate_points_layer_metadata,
-    parse_points_metadata,
     read_points_meta,
     sync_points_from_image,
     write_points_meta,
@@ -74,17 +73,9 @@ from napari_deeplabcut.core.project_paths import (
 from napari_deeplabcut.core.remap import remap_layer_data_by_paths
 from napari_deeplabcut.core.sidecar import (
     get_default_scorer,
-    get_trails_config,
     set_default_scorer,
-    set_trails_config,
 )
-from napari_deeplabcut.core.trails import (
-    build_trails_payload,
-    display_config_from_tracks_layer,
-    tracks_kwargs_from_display_config,
-    trails_geometry_signature,
-    trails_signature,
-)
+from napari_deeplabcut.core.trails import TrailsController, safe_folder_anchor_from_points_layer
 from napari_deeplabcut.napari_compat import (
     apply_points_layer_ui_tweaks,
     install_add_wrapper,
@@ -111,35 +102,7 @@ from napari_deeplabcut.ui.labels_and_dropdown import (
 from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
-logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp
-
-
-def _safe_folder_anchor_from_points_layer(layer: Points) -> str | None:
-    """Best-effort anchor folder for sidecar + CollectedData creation."""
-    md = layer.metadata or {}
-
-    # Prefer IO provenance project_root if present
-    try:
-        pts = parse_points_metadata(md)
-        if pts.io and pts.io.project_root:
-            return str(pts.io.project_root)
-    except Exception:
-        pass
-
-    # Fall back to root field
-    root = md.get("root")
-    if isinstance(root, str) and root:
-        return root
-
-    # Fall back to legacy source_h5 parent
-    src = md.get("source_h5")
-    if isinstance(src, str) and src:
-        try:
-            return str(Path(src).expanduser().resolve().parent)
-        except Exception:
-            return str(Path(src).parent)
-
-    return None
+logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
 
 
 def _find_config_scorer_nearby(anchor: str) -> str | None:
@@ -280,11 +243,13 @@ class KeypointControls(QWidget):
         self._trail_cb.setToolTip("Show the trails for each keypoint over time, in the main video viewer")
         self._trail_cb.setChecked(False)
         self._trail_cb.setEnabled(False)
-        self._trail_cb.stateChanged.connect(self._show_trails)
-        self._trails = None
-        self._trails_geom_sig = None
-        self._trails_style_sig = None
-        self._refreshing_trails = False
+        self._trail_cb.stateChanged.connect(self._on_show_trails_toggled)
+        self._trails_controller = TrailsController(
+            self.viewer,
+            managed_points_layers_getter=lambda: tuple(self._stores.keys()),
+            color_mode_getter=lambda: self.color_mode,
+            resolved_cycle_getter=self._resolved_cycle_for_layer,
+        )
 
         self._mpl_docked = False
         self._matplotlib_canvas = KeypointMatplotlibCanvas(self.viewer)
@@ -556,8 +521,7 @@ class KeypointControls(QWidget):
         # apply cycles (works even if empty; see method)
         self._apply_points_coloring_from_metadata(layer)
         # refresh trails if enabled (e.g. when merging a config points layer with trails metadata)
-        if self._trail_cb.isChecked() and self._trails is not None:
-            self._refresh_trails()
+        self._trails_controller.on_points_layer_added_or_rewired(checkbox_checked=self._trail_cb.isChecked())
 
         # menus
         self._form_dropdown_menus(store)
@@ -1069,307 +1033,6 @@ class KeypointControls(QWidget):
         show = self._view_scheme_cb.isChecked()
         self._color_scheme_display.setVisible(show)
 
-    def _snapshot_selection(self):
-        selected = [layer for layer in self.viewer.layers.selection if layer in self.viewer.layers]
-        active = self.viewer.layers.selection.active
-        return selected, active
-
-    def _restore_selection(self, selected, active):
-        try:
-            self.viewer.layers.selection.clear()
-            for layer in selected:
-                if layer in self.viewer.layers:
-                    self.viewer.layers.selection.add(layer)
-            if active in self.viewer.layers:
-                self.viewer.layers.selection.active = active
-        except Exception:
-            pass
-
-    def _get_trails_anchor(self, layer: Points | None = None) -> str | None:
-        """
-        Resolve the folder-scoped sidecar anchor for the trails source layer.
-
-        This is intentionally a tiny wrapper so future multi-layer support can swap
-        the source-selection logic without touching persistence code.
-        """
-        pts_layer = layer if layer is not None else self._get_trails_source_layer()
-        if pts_layer is None:
-            return None
-        return _safe_folder_anchor_from_points_layer(pts_layer)
-
-    def _persist_current_trails_config(self, *, visible: bool | None = None) -> None:
-        """
-        Persist the current trails display config to the folder sidecar.
-
-        Option A policy:
-        - persist on our own lifecycle actions only
-        - do not try to watch napari's native layer controls continuously
-        """
-        if self._trails is None:
-            return
-
-        anchor = (self._trails.metadata or {}).get("_dlc_trails_anchor")
-        if not anchor:
-            anchor = self._get_trails_anchor()
-
-        if not anchor:
-            return
-
-        try:
-            cfg = display_config_from_tracks_layer(self._trails, visible=visible)
-            set_trails_config(anchor, cfg)
-        except Exception:
-            logger.debug("Failed to persist trails config for anchor=%r", anchor, exc_info=True)
-
-    def _persist_folder_ui_state_for_points_layer(self, layer: Points) -> None:
-        """
-        Best-effort persistence of folder-scoped UI state for a specific DLC-managed
-        points layer.
-
-        This never raises and must never block annotation saving.
-
-        Policy
-        ------
-        - If the current global trails layer belongs to this points layer (or same anchor),
-        snapshot its full display config.
-        - Otherwise, preserve the existing stored trails config and only mark visible=False.
-        """
-        anchor = _safe_folder_anchor_from_points_layer(layer)
-        if not anchor:
-            return
-
-        try:
-            # Case 1: live trails exist and belong to this saved layer/folder.
-            if self._trails is not None:
-                trails_md = self._trails.metadata or {}
-                trails_anchor = trails_md.get("_dlc_trails_anchor")
-                trails_src_id = trails_md.get("_source_points_layer_id")
-
-                same_source = trails_src_id == id(layer)
-                same_anchor = trails_anchor is not None and str(trails_anchor) == str(anchor)
-
-                if same_source or same_anchor:
-                    cfg = display_config_from_tracks_layer(
-                        self._trails,
-                        visible=bool(self._trail_cb.isChecked() and self._trails.visible),
-                    )
-                    set_trails_config(anchor, cfg)
-                    return
-
-            # Case 2: no live trails for this layer -> preserve existing config, but mark hidden.
-            cfg = get_trails_config(anchor)
-            cfg = cfg.model_copy(update={"visible": False})
-            set_trails_config(anchor, cfg)
-
-        except Exception:
-            logger.debug(
-                "Failed to persist folder UI state for saved points layer=%r",
-                getattr(layer, "name", layer),
-                exc_info=True,
-            )
-
-    def _resolved_trails_cycle(self, layer: Points) -> dict:
-        """
-        Return the resolved category->color mapping used by the points layer,
-        so trails match the exact displayed colors.
-        """
-        resolver = self._color_scheme_panel._resolver
-        cycles = resolver.get_face_color_cycles(layer) or {}
-
-        prop = resolver.get_active_color_property(layer)
-        props = getattr(layer, "properties", {}) or {}
-        values = props.get(prop)
-
-        if prop == "id":
-            try:
-                vals = np.asarray(values, dtype=object).ravel() if values is not None else np.array([], dtype=object)
-                if len(vals) == 0 or all(v in ("", None) or misc._is_nan_value(v) for v in vals):
-                    prop = "label"
-            except Exception:
-                prop = "label"
-
-        cycle = cycles.get(prop, {}) or {}
-        return {str(k): np.asarray(v, dtype=float) for k, v in cycle.items()}
-
-    def _update_trails_style(self) -> None:
-        """Update trails color mapping in-place without rebuilding geometry."""
-        if self._trails is None:
-            return
-
-        pts_layer = self._get_trails_source_layer()
-        if pts_layer is None:
-            return
-
-        try:
-            payload = build_trails_payload(
-                pts_layer,
-                self._color_mode,
-                cycle_override=self._resolved_trails_cycle(pts_layer),
-            )
-        except ValueError:
-            return
-
-        try:
-            new_props = dict(getattr(self._trails, "properties", {}) or {})
-            new_props.update(payload.properties)
-            self._trails.properties = new_props
-
-            new_cmaps = dict(getattr(self._trails, "colormaps_dict", {}) or {})
-            new_cmaps.update(payload.colormaps_dict)
-            self._trails.colormaps_dict = new_cmaps
-
-            self._trails.color_by = payload.color_by
-            self._trails.visible = True
-            self._trails_style_sig = payload.signature
-
-            # IMPORTANT: keep trails ownership metadata in sync with the actual source layer
-            self._trails.metadata = dict(self._trails.metadata or {})
-            self._trails.metadata["_source_points_layer_id"] = id(pts_layer)
-            self._trails.metadata["_dlc_trails_anchor"] = self._get_trails_anchor(pts_layer)
-
-        except Exception:
-            # Fallback to full rebuild if in-place update is not supported
-            self._refresh_trails()
-
-    def _remove_trails_layer(self) -> None:
-        """Remove trails without triggering checkbox side effects."""
-        if self._trails is None:
-            return
-
-        self._refreshing_trails = True
-        try:
-            self.viewer.layers.remove(self._trails)
-        except Exception:
-            pass
-        finally:
-            self._trails = None
-            self._trails_geom_sig = None
-            self._trails_style_sig = None
-            self._refreshing_trails = False
-
-    def _refresh_trails(self) -> None:
-        if not self._trail_cb.isChecked():
-            return
-
-        selected, active = self._snapshot_selection()
-        try:
-            self._remove_trails_layer()
-            self._create_trails()
-        finally:
-            self._restore_selection(selected, active)
-
-    def _show_trails(self, state):
-        checked = Qt.CheckState(state) == Qt.CheckState.Checked
-
-        if not checked:
-            if self._trails is not None:
-                self._trails.visible = False
-                # Persist `visible=False` to the trails display config
-                try:
-                    pts_layer = self._get_trails_source_layer()
-                    if pts_layer is not None:
-                        anchor = self._get_trails_anchor(pts_layer)
-                        if anchor:
-                            cfg = get_trails_config(anchor)
-                            if cfg is None and self._trails is not None:
-                                cfg = display_config_from_tracks_layer(self._trails)
-                            if cfg is not None:
-                                cfg = cfg.model_copy(update={"visible": False})
-                                set_trails_config(anchor, cfg)
-                except Exception:
-                    # Do not break UI behavior if persistence fails
-                    logger.debug(
-                        "Failed to persist trails visibility state on hide.",
-                        exc_info=True,
-                    )
-            return
-
-        if not self._stores:
-            return
-
-        pts_layer = self._get_trails_source_layer()
-        if pts_layer is None:
-            return
-
-        geom_sig = trails_geometry_signature(pts_layer)
-        style_sig = trails_signature(pts_layer, self._color_mode)
-
-        if self._trails is None:
-            self._create_trails()
-            return
-
-        if self._trails_geom_sig != geom_sig:
-            self._refresh_trails()
-            return
-
-        if self._trails_style_sig != style_sig:
-            self._update_trails_style()
-            return
-
-        self._trails.visible = True
-
-    def _create_trails(self):
-        if self._trails is not None or not self._stores:
-            return
-
-        pts_layer = self._get_trails_source_layer()
-        if pts_layer is None:
-            return
-
-        anchor = self._get_trails_anchor(pts_layer)
-        cfg = get_trails_config(anchor) if anchor else None
-        track_kwargs = tracks_kwargs_from_display_config(cfg) if cfg is not None else {}
-
-        selected, active = self._snapshot_selection()
-        try:
-            payload = build_trails_payload(
-                pts_layer,
-                self._color_mode,
-                cycle_override=self._resolved_trails_cycle(pts_layer),
-            )
-        except ValueError:
-            return
-
-        try:
-            self._trails = self.viewer.add_tracks(
-                payload.tracks_data,
-                properties=payload.properties,
-                color_by=payload.color_by,
-                colormaps_dict=payload.colormaps_dict,
-                name="trails",
-                metadata={
-                    "_source_points_layer_id": id(pts_layer),
-                    "_dlc_trails_anchor": anchor,
-                },
-                **track_kwargs,
-            )
-            # The user explicitly asked to show trails, so force visible True here.
-            # We still persist visible state in the sidecar for future use, but we do
-            # not let a stale visible=False sidecar entry override an explicit checkbox action.
-            self._trails.visible = True
-
-            self._trails_geom_sig = payload.geometry_signature
-            self._trails_style_sig = payload.signature
-
-            # Persist once so sidecar is normalized even if it was missing/partial.
-            self._persist_current_trails_config(visible=True)
-        finally:
-            self._restore_selection(selected, active)
-
-    def _get_trails_source_layer(self) -> Points | None:
-        active = self.viewer.layers.selection.active
-        if isinstance(active, Points) and active in self._stores:
-            return active
-
-        if self._trails is not None:
-            src_id = (self._trails.metadata or {}).get("_source_points_layer_id")
-            if src_id is not None:
-                for layer in self._stores:
-                    if id(layer) == src_id:
-                        return layer
-
-        return next(iter(self._stores.keys()), None)
-
     def _form_help_buttons(self):
         layout = QVBoxLayout()
         help_buttons_layout = QHBoxLayout()
@@ -1659,10 +1322,7 @@ class KeypointControls(QWidget):
 
             # Refresh color scheme panel regardless; it will clear itself if no valid target remains.
             self._update_color_scheme()
-            if self._trails is not None:
-                src_id = (self._trails.metadata or {}).get("_source_points_layer_id")
-                if src_id == id(layer):
-                    self._remove_trails_layer()
+            self._trails_controller.on_points_layer_removed(layer)
 
             if n_points_layer == 0:
                 while self._menus:
@@ -1683,19 +1343,16 @@ class KeypointControls(QWidget):
                 self.video_widget.setVisible(False)
 
         elif isinstance(layer, Tracks):
-            if getattr(self, "_refreshing_trails", False):
-                self._trails = None
-                self._trails_geom_sig = None
-                self._trails_style_sig = None
+            was_trails = self._trails_controller.on_tracks_layer_removed(layer)
+            if was_trails:
+                self._trail_cb.setChecked(False)
+                self._show_traj_plot_cb.setChecked(False)
                 return
 
-            self._trail_cb.setChecked(False)
-            self._show_traj_plot_cb.setChecked(False)
-            self._trails = None
-            self._trails_geom_sig = None
-            self._trails_style_sig = None
-
         self._refresh_video_panel_context()
+
+    def _on_show_trails_toggled(self, state):
+        self._trails_controller.toggle(Qt.CheckState(state) == Qt.CheckState.Checked)
 
     def _ensure_promotion_save_target(self, layer: Points) -> bool:
         """Ensure a prediction/machine source layer has a GT save_target set.
@@ -1739,7 +1396,7 @@ class KeypointControls(QWidget):
             return True
 
         # ---- machine source + no save_target: require promotion target ----
-        anchor = _safe_folder_anchor_from_points_layer(layer)
+        anchor = safe_folder_anchor_from_points_layer(layer)
         if not anchor:
             QMessageBox.warning(self, "Cannot save", "Could not determine a folder anchor for saving.")
             return False
@@ -1872,7 +1529,10 @@ class KeypointControls(QWidget):
                 self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
             # hook to persist UI state on successful save
             try:
-                self._persist_folder_ui_state_for_points_layer(layer)
+                self._trails_controller.persist_folder_ui_state_for_points_layer(
+                    layer,
+                    checkbox_checked=self._trail_cb.isChecked(),
+                )
             except Exception:
                 logger.debug(
                     "Failed to persist folder UI state after save for layer=%r",
@@ -1899,7 +1559,10 @@ class KeypointControls(QWidget):
 
                     for ly in candidate_layers:
                         if ly in self.viewer.layers:
-                            self._persist_folder_ui_state_for_points_layer(ly)
+                            self._trails_controller.persist_folder_ui_state_for_points_layer(
+                                ly,
+                                checkbox_checked=self._trail_cb.isChecked(),
+                            )
                 except Exception:
                     logger.debug("Failed to persist sidecar UI state after multi-layer save", exc_info=True)
 
@@ -1953,9 +1616,8 @@ class KeypointControls(QWidget):
             mark_layer_presentation_changed(layer)
             self._apply_points_coloring_from_metadata(layer)
 
-        self._update_color_scheme()
-        if self._trail_cb.isChecked() and self._trails is not None:
-            self._update_trails_style()
+            self._update_color_scheme()
+            self._trails_controller.on_points_visual_inputs_changed(checkbox_checked=self._trail_cb.isChecked())
 
     @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):
@@ -2004,8 +1666,7 @@ class KeypointControls(QWidget):
                 break
 
         self._update_color_scheme()
-        if self._trail_cb.isChecked() and self._trails is not None:
-            self._update_trails_style()
+        self._trails_controller.on_points_visual_inputs_changed(checkbox_checked=self._trail_cb.isChecked())
 
     def _is_multianimal(self, layer) -> bool:
         if layer is None or not isinstance(layer, Points):
@@ -2029,3 +1690,26 @@ class KeypointControls(QWidget):
                 return True
 
         return False
+
+    def _resolved_cycle_for_layer(self, layer: Points) -> dict:
+        """
+        Return the resolved category->color mapping used by the points layer,
+        so trails match the exact displayed colors.
+        """
+        resolver = self._color_scheme_panel._resolver
+        cycles = resolver.get_face_color_cycles(layer) or {}
+
+        prop = resolver.get_active_color_property(layer)
+        props = getattr(layer, "properties", {}) or {}
+        values = props.get(prop)
+
+        if prop == "id":
+            try:
+                vals = np.asarray(values, dtype=object).ravel() if values is not None else np.array([], dtype=object)
+                if len(vals) == 0 or all(v in ("", None) or misc._is_nan_value(v) for v in vals):
+                    prop = "label"
+            except Exception:
+                prop = "label"
+
+        cycle = cycles.get(prop, {}) or {}
+        return {str(k): np.asarray(v, dtype=float) for k, v in cycle.items()}
