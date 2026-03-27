@@ -7,13 +7,14 @@ import numpy as np
 import pytest
 import yaml
 from napari.layers import Image
-from qtpy.QtSvgWidgets import QSvgWidget
+from qtpy.QtWidgets import QScrollArea
 from vispy import keys
 
 from napari_deeplabcut import _widgets
 from napari_deeplabcut.core import io, keypoints
 from napari_deeplabcut.core.io import populate_keypoint_layer_properties
 from napari_deeplabcut.ui.color_scheme_display import ColorSchemeDisplay
+from napari_deeplabcut.ui.dialogs import ShortcutRow
 from napari_deeplabcut.ui.labels_and_dropdown import KeypointsDropdownMenu, LabelPair
 from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
@@ -385,15 +386,9 @@ def test_display_shortcuts_dialog(viewer, qtbot):
 
     # Verify it is visible
     assert dlg.isVisible()
-
-    # Ensure the SVG widget is present
-    found_svg = False
-    for child in dlg.children():
-        if isinstance(child, QSvgWidget):
-            found_svg = True
-            break
-
-    assert found_svg, "Shortcuts dialog should contain a QSvgWidget with the shortcuts image."
+    assert dlg.windowTitle() == "Keyboard shortcuts"
+    assert dlg.findChildren(QScrollArea)
+    assert dlg.findChildren(ShortcutRow)
 
 
 # NOTE SuperAnimal keypoints functionality and testing may need an overhaul in the future:

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
+from napari.layers import Image, Points
 from qtpy.QtCore import QPoint, Qt
-from qtpy.QtSvgWidgets import QSvgWidget
-from qtpy.QtWidgets import QDialog, QLabel, QPlainTextEdit, QPushButton
+from qtpy.QtWidgets import QDialog, QLabel, QPlainTextEdit, QPushButton, QScrollArea
 
+from napari_deeplabcut.config.keybinds import iter_shortcuts
 from napari_deeplabcut.ui.dialogs import (
     OverwriteConflictsDialog,
+    ShortcutRow,
     Shortcuts,
     Tutorial,
     maybe_confirm_overwrite,
@@ -18,18 +21,120 @@ from napari_deeplabcut.ui.dialogs import (
 # -----------------------------------------------------------------------------
 
 
-def test_shortcuts_dialog_smoke(dialog_parent, qtbot):
+class _DummyEmitter:
+    def __init__(self):
+        self._callbacks = []
+
+    def connect(self, callback):
+        self._callbacks.append(callback)
+
+    def disconnect(self, callback):
+        self._callbacks.remove(callback)
+
+    def emit(self, event=None):
+        for callback in list(self._callbacks):
+            callback(event)
+
+
+class _DummyViewer:
+    def __init__(self, *, active=None):
+        self.layers = SimpleNamespace(
+            selection=SimpleNamespace(
+                active=active,
+                events=SimpleNamespace(active=_DummyEmitter()),
+            )
+        )
+
+
+def _points_layer(name: str = "points"):
+    return Points(np.empty((0, 2)), name=name)
+
+
+def _image_layer(name: str = "image"):
+    return Image(np.zeros((8, 8)), name=name)
+
+
+def test_shortcuts_dialog_without_viewer_renders_registry(dialog_parent, qtbot):
     dlg = Shortcuts(dialog_parent)
     qtbot.addWidget(dlg)
 
     assert dlg.parent() is dialog_parent
-    assert dlg.windowTitle() == "Shortcuts"
-    assert dlg.layout() is not None
-    assert dlg.layout().count() == 1
+    assert dlg.windowTitle() == "Keyboard shortcuts"
+    assert dlg.testAttribute(Qt.WA_DeleteOnClose)
 
-    svg_widgets = dlg.findChildren(QSvgWidget)
-    assert len(svg_widgets) == 1
-    assert svg_widgets[0].styleSheet() == "background-color: white;"
+    scroll_areas = dlg.findChildren(QScrollArea)
+    assert len(scroll_areas) == 1
+
+    rows = dlg.findChildren(ShortcutRow)
+    assert len(rows) == len(tuple(iter_shortcuts()))
+
+    assert (
+        dlg.context_banner.text()
+        == "Showing all known shortcuts. Availability cannot be determined without a viewer context."
+    )
+
+
+def test_shortcuts_dialog_marks_points_shortcuts_unavailable_for_non_points_layer(dialog_parent, qtbot):
+    viewer = _DummyViewer(active=_image_layer("raw image"))
+    dlg = Shortcuts(dialog_parent, viewer=viewer)
+    qtbot.addWidget(dlg)
+
+    assert "No active <b>Points</b> layer" in dlg.context_banner.text()
+
+    rows = dlg.findChildren(ShortcutRow)
+    points_rows = [row for row in rows if row.spec.scope == "points-layer"]
+    global_rows = [row for row in rows if row.spec.scope == "global-points"]
+
+    assert points_rows, "expected at least one points-layer shortcut row"
+    assert global_rows, "expected at least one global-points shortcut row"
+
+    for row in points_rows:
+        assert row.graphicsEffect().opacity() == 0.45
+        assert "No active Points layer." in row.toolTip()
+
+    for row in global_rows:
+        assert row.graphicsEffect().opacity() == 1.0
+        assert "No active Points layer." not in row.toolTip()
+
+
+def test_shortcuts_dialog_updates_when_active_layer_changes_and_escapes_layer_name(dialog_parent, qtbot):
+    viewer = _DummyViewer(active=_image_layer("raw image"))
+    dlg = Shortcuts(dialog_parent, viewer=viewer)
+    qtbot.addWidget(dlg)
+
+    # Start with a non-Points layer: points shortcuts are dimmed.
+    row = next(row for row in dlg.findChildren(ShortcutRow) if row.spec.scope == "points-layer")
+    assert row.graphicsEffect().opacity() == 0.45
+    assert "No active Points layer." in row.toolTip()
+
+    # Switch to a Points layer with characters that must be escaped in rich text.
+    viewer.layers.selection.active = _points_layer("a <bizarre> & layer")
+    viewer.layers.selection.events.active.emit()
+
+    banner = dlg.context_banner.text()
+    assert "Active Points layer:" in banner
+    assert "&lt;bizarre&gt;" in banner
+    assert "&amp; layer" in banner
+    assert "a <bizarre> & layer" not in banner  # raw rich-text-breaking text should not appear
+
+    assert row.graphicsEffect().opacity() == 1.0
+    assert "No active Points layer." not in row.toolTip()
+
+
+def test_shortcuts_dialog_disconnects_from_viewer_on_close(dialog_parent, qtbot):
+    viewer = _DummyViewer(active=_image_layer("raw image"))
+    emitter = viewer.layers.selection.events.active
+
+    dlg = Shortcuts(dialog_parent, viewer=viewer)
+    qtbot.addWidget(dlg)
+
+    assert len(emitter._callbacks) == 1
+
+    dlg.show()
+    dlg.close()
+    qtbot.wait(0)
+
+    assert emitter._callbacks == []
 
 
 # -----------------------------------------------------------------------------

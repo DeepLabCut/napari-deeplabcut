@@ -38,6 +38,10 @@ from qtpy.QtWidgets import (
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut import misc
 from napari_deeplabcut.config import settings
+from napari_deeplabcut.config.keybinds import (
+    install_global_points_keybindings,
+    install_points_layer_keybindings,
+)
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, IOProvenance, PointsMetadata
 from napari_deeplabcut.core import keypoints
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
@@ -330,6 +334,8 @@ class KeypointControls(QWidget):
         display_shortcuts_action = QAction("&Shortcuts", self)
         display_shortcuts_action.triggered.connect(self.display_shortcuts)
         self.viewer.window.help_menu.addAction(display_shortcuts_action)
+        # Install global keybinds
+        install_global_points_keybindings()
 
         # Hide some unused viewer buttons
         # NOTE (future) do we truly want to disable these ? Tracking util may need to create new points layers
@@ -503,10 +509,6 @@ class KeypointControls(QWidget):
         store._get_label_mode = lambda: self._label_mode
         layer.text.visible = False
 
-        # key bindings
-        layer.bind_key("M", self.cycle_through_label_modes)
-        layer.bind_key("F", self.cycle_through_color_modes)
-
         paste_func = make_paste_data(self, store=store)
         install_paste_patch(layer, paste_func=paste_func)
 
@@ -517,12 +519,8 @@ class KeypointControls(QWidget):
         layer.events.add(query_next_frame=Event)
         layer.events.query_next_frame.connect(store._advance_step)
 
-        # navigation keys
-        # FIXME: @C-Achard 2026-03-11 Move this to dedicated config file
-        layer.bind_key("Shift-Right", store._find_first_unlabeled_frame)
-        layer.bind_key("Shift-Left", store._find_first_unlabeled_frame)
-        layer.bind_key("Down", store.next_keypoint, overwrite=True)
-        layer.bind_key("Up", store.prev_keypoint, overwrite=True)
+        # Install keybinds
+        install_points_layer_keybindings(layer, self, store)
 
         if len(self._stores) == 1 and self._is_multianimal(layer):
             # set internal mode without triggering recolor storms
@@ -754,7 +752,7 @@ class KeypointControls(QWidget):
         Tutorial(self.viewer.window._qt_window.current()).show()
 
     def display_shortcuts(self):
-        Shortcuts(self.viewer.window._qt_window.current()).show()
+        Shortcuts(self.viewer.window._qt_window.current(), viewer=self.viewer).show()
 
     def _move_image_layer_to_bottom(self, index):
         if (ind := index) != 0:
@@ -1816,9 +1814,3 @@ class KeypointControls(QWidget):
                 return True
 
         return False
-
-
-@Points.bind_key("E")
-def toggle_edge_color(layer):
-    # Trick to toggle between 0 and 2
-    layer.border_width = np.bitwise_xor(layer.border_width, 2)
