@@ -123,7 +123,13 @@ def test_rectangle_spec_returns_viewer_and_DLC_config_coords(monkeypatch):
         selected_data={0},
     )
 
-    viewer = SimpleNamespace(dims=SimpleNamespace(range=[(0, 1, 1), (0, 1, 1), (0, 100, 1)]))
+    viewer = SimpleNamespace(
+        dims=SimpleNamespace(
+            # Y extent = 100, X extent = 200
+            # This matches the [t, y, x] rectangle coordinates used in the test
+            range=[(0, 10, 1), (0, 100, 1), (0, 200, 1)]
+        )
+    )
 
     spec = cropping_mod._rectangle_spec(viewer, layer, 0)
     assert spec is not None
@@ -174,7 +180,7 @@ def test_find_crop_rectangle_prefers_dedicated_crop_layer(monkeypatch):
 
     viewer = SimpleNamespace(
         layers=FakeLayerList([other, dedicated], active=other),
-        dims=SimpleNamespace(range=[(0, 1, 1), (0, 1, 1), (0, 100, 1)]),
+        dims=SimpleNamespace(range=[(0, 10, 1), (0, 100, 1), (0, 200, 1)]),
     )
 
     spec = cropping_mod.find_crop_rectangle(viewer, prefer_selected=True)
@@ -220,7 +226,7 @@ def test_find_crop_rectangle_ignores_non_rectangles(monkeypatch):
 
     viewer = SimpleNamespace(
         layers=FakeLayerList([poly_layer, rect_layer], active=poly_layer),
-        dims=SimpleNamespace(range=[(0, 1, 1), (0, 1, 1), (0, 100, 1)]),
+        dims=SimpleNamespace(range=[(0, 10, 1), (0, 100, 1), (0, 200, 1)]),
     )
 
     spec = cropping_mod.find_crop_rectangle(viewer, prefer_selected=True)
@@ -453,7 +459,7 @@ def test_update_video_panel_context_renders_current_summary(monkeypatch, tmp_pat
 
 
 def test_execute_frame_extraction_keeps_new_labels_row_on_duplicate_index(monkeypatch, tmp_path: Path):
-    from napari.layers import Image
+    from napari.layers import Image, Points
 
     # Avoid writing a real image file through skimage; just create the output file.
     monkeypatch.setattr(
@@ -485,9 +491,14 @@ def test_execute_frame_extraction_keeps_new_labels_row_on_duplicate_index(monkey
         lambda plan: (df_new, None),
     )
 
+    points = Points(
+        np.empty((0, 3), dtype=float),
+        name="pts",
+    )
+
     plan = cropping_mod.FrameExtractionPlan(
         image_layer=image,
-        points_layer=object(),
+        points_layer=points,
         frame_index=1,
         output_root=tmp_path,
         output_path=output_path,
