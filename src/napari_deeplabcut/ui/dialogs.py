@@ -454,14 +454,15 @@ def prompt_for_project_config_for_save(
 
     yes_btn = msg.addButton("Choose config.yaml", QMessageBox.YesRole)
     no_btn = msg.addButton("Continue without association", QMessageBox.NoRole)
-    cancel_btn = msg.addButton(QMessageBox.Cancel)
+    msg.addButton(QMessageBox.Cancel)
 
     msg.setDefaultButton(yes_btn)
-    msg.exec_()
+    result = msg.exec_()
 
     clicked = msg.clickedButton()
 
-    if clicked is cancel_btn:
+    # Explicitly handle None or rejected dialog result
+    if clicked is None or result == QMessageBox.Rejected:
         return ProjectConfigPromptResult(ProjectConfigPromptAction.CANCEL)
 
     if clicked is no_btn:
