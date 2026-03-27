@@ -18,7 +18,7 @@ from napari.layers import Image, Points, Tracks
 from napari.utils.events import Event
 from napari.utils.history import get_save_history, update_save_history
 from pydantic import ValidationError
-from qtpy.QtCore import QSettings, Qt, QTimer
+from qtpy.QtCore import QSettings, QSignalBlocker, Qt, QTimer
 from qtpy.QtGui import QAction
 from qtpy.QtWidgets import (
     QButtonGroup,
@@ -1345,9 +1345,8 @@ class KeypointControls(QWidget):
         elif isinstance(layer, Tracks):
             was_trails = self._trails_controller.on_tracks_layer_removed(layer)
             if was_trails:
-                self._trail_cb.setChecked(False)
-                self._show_traj_plot_cb.setChecked(False)
-                return
+                with QSignalBlocker(self._trail_cb):
+                    self._trail_cb.setChecked(False)
 
         self._refresh_video_panel_context()
 
