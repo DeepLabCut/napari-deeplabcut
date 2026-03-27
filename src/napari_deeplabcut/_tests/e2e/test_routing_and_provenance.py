@@ -428,3 +428,159 @@ def test_promotion_second_save_uses_sidecar_no_prompt(make_napari_viewer, qtbot,
 
     machine_post = pd.read_hdf(machine_path, key="keypoints")
     pd.testing.assert_frame_equal(machine_pre, machine_post)
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_config_override_save_normalizes_only_safe_dlc_row_keys_and_uses_same_metadata_for_preflight_and_write(
+    viewer,
+    qtbot,
+    tmp_path,
+    monkeypatch,
+    overwrite_confirm,
+):
+    """
+    Contract: optional explicit config.yaml selection at save time may normalize
+    image paths to canonical DLC row keys, but only when this is safe.
+
+    Goals
+    -----
+    - If a Points layer has no inferable DLC project context, the save flow may
+      accept an explicit config.yaml chosen by the user.
+    - Absolute image paths under config.parent and inside
+      ``labeled-data/<dataset>/...`` are normalized to the canonical DLC row-key form:
+      ``labeled-data/<dataset>/<image>``.
+    - Already-relative DLC row keys are preserved / normalized to POSIX.
+    - The exact same normalized metadata is used for:
+        (a) overwrite preflight
+        (b) the actual write
+    - After a successful save, the project-relative metadata persists on the live layer.
+
+    Non-goals
+    ---------
+    - Do NOT rewrite paths outside the chosen project root.
+    - Do NOT coerce files under the chosen project root but outside
+      ``labeled-data/<dataset>/...`` into DLC-style row keys.
+    - Do NOT require an existing GT file; this test validates path normalization
+      and save routing to a newly created GT file.
+    """
+    overwrite_confirm.forbid()
+
+    project, config_path, labeled_folder = _make_project_config_and_frames_no_gt(tmp_path)
+    dataset = labeled_folder.name
+
+    frame_paths = sorted(labeled_folder.glob("*.png"))
+    assert len(frame_paths) >= 1, "Expected at least one extracted frame in labeled-data folder."
+
+    inside_abs = frame_paths[0]
+
+    # Extra image outside the project root: must remain unchanged.
+    outside_dir = tmp_path / "external-images"
+    outside_dir.mkdir()
+    outside_img = outside_dir / "img999.png"
+    outside_img.write_bytes(b"placeholder")
+
+    from napari_deeplabcut._widgets import KeypointControls
+    from napari_deeplabcut.core import keypoints
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    # Config-first placeholder points layer: no inferable dataset/project context yet.
+    viewer.open(str(config_path), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
+
+    points = next(ly for ly in viewer.layers if isinstance(ly, Points))
+    store = controls._stores.get(points)
+    assert store is not None
+
+    # Inject a mixed path state directly into metadata:
+    #  1) absolute path under the project and under labeled-data/... -> SHOULD rewrite
+    #  2) already-relative DLC row key -> SHOULD be preserved/normalized
+    #  3) absolute path outside the project -> MUST remain unchanged
+    points.metadata = dict(points.metadata or {})
+    points.metadata["paths"] = [
+        str(inside_abs),
+        f"labeled-data\\{dataset}\\img002.png",
+        str(outside_img),
+    ]
+    points.metadata.pop("project", None)
+    points.metadata["root"] = str(outside_dir)
+
+    # Add one annotation so the placeholder becomes saveable.
+    store.current_keypoint = keypoints.Keypoint("bodypart1", "")
+    points.add(np.array([0.0, 11.0, 22.0], dtype=float))
+
+    # Force the optional explicit-config path and accept the summary dialog.
+    prompt_calls = {}
+    confirm_calls = {}
+
+    # IMPORTANT:
+    # Patch where _widgets.py LOOKS UP the helpers.
+    # If _widgets.py imports them into module scope, patch _widgets.* rather than ui.dialogs.*.
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.prompt_for_project_config_for_save",
+        lambda *args, **kwargs: prompt_calls.setdefault("count", 0) or str(config_path),
+    )
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.maybe_confirm_relative_paths_summary",
+        lambda *args, **kwargs: confirm_calls.setdefault("count", 0) or True,
+    )
+
+    # Capture the attributes used for overwrite preflight to prove that preflight
+    # sees the normalized metadata, not the original raw layer metadata.
+    import napari_deeplabcut.core.conflicts as conflicts
+
+    real_compute = conflicts.compute_overwrite_report_for_points_save
+    captured = {}
+
+    def _wrapped_compute(data, attributes):
+        captured["attributes"] = attributes
+        return real_compute(data, attributes)
+
+    monkeypatch.setattr(
+        "napari_deeplabcut.core.conflicts.compute_overwrite_report_for_points_save",
+        _wrapped_compute,
+    )
+
+    viewer.layers.selection.active = points
+    controls.viewer.layers.selection.active = points
+    controls.viewer.layers.selection.select_only(points)
+
+    controls._save_layers_dialog(selected=True)
+    qtbot.wait(300)
+
+    expected_h5 = labeled_folder / "CollectedData_John.h5"
+    expected_csv = labeled_folder / "CollectedData_John.csv"
+
+    assert expected_h5.exists(), f"Expected GT to be created in dataset folder: {expected_h5}"
+    assert expected_csv.exists(), f"Expected companion CSV to be created: {expected_csv}"
+
+    # 1) Overwrite preflight must have seen normalized metadata.
+    assert "attributes" in captured, "Expected overwrite preflight to run with captured attributes."
+    preflight_md = captured["attributes"]["metadata"]
+    assert preflight_md["project"] == str(project)
+    assert preflight_md["paths"] == [
+        f"labeled-data/{dataset}/{inside_abs.name}",
+        f"labeled-data/{dataset}/img002.png",
+        outside_img.as_posix(),
+    ]
+
+    # 2) Live layer metadata must persist the same successful normalization.
+    assert points.metadata["project"] == str(project)
+    assert points.metadata["paths"] == [
+        f"labeled-data/{dataset}/{inside_abs.name}",
+        f"labeled-data/{dataset}/img002.png",
+        outside_img.as_posix(),
+    ]
+
+    # 3) On disk, the H5 row index must contain the canonical DLC row-key form
+    #    for the safe paths, while the outside path remains unchanged.
+    df = pd.read_hdf(expected_h5, key="keypoints")
+    if isinstance(df.index, pd.MultiIndex):
+        observed_rows = ["/".join(map(str, idx)) for idx in df.index]
+    else:
+        observed_rows = [str(idx).replace("\\", "/") for idx in df.index]
+
+    assert f"labeled-data/{dataset}/{inside_abs.name}" in observed_rows
+    assert f"labeled-data/{dataset}/img002.png" in observed_rows
+    assert outside_img.as_posix() in observed_rows
