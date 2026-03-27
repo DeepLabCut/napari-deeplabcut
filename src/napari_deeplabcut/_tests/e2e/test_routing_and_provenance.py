@@ -497,7 +497,7 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
 
     Goals
     -----
-    - Use current folder name as the target dataset name.
+    - Use current external folder name as the target dataset name.
     - Save safe paths as labeled-data/<dataset>/<image>.
     - Use the same normalized metadata for overwrite preflight and actual write.
     - Persist the improved metadata on the live layer after successful save.
@@ -510,12 +510,15 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     """
     overwrite_confirm.forbid()
 
-    project, config_path, labeled_folder = _make_project_config_and_frames_no_gt(tmp_path)
-    dataset = labeled_folder.name
+    project, config_path, _project_dataset_folder = _make_project_config_and_frames_no_gt(tmp_path)
 
-    frame_paths = sorted(labeled_folder.glob("*.png"))
-    assert len(frame_paths) >= 1
-    inside_abs = frame_paths[0]
+    # External project-less folder that the user labeled outside the project.
+    external_folder = tmp_path / "session_external"
+    external_folder.mkdir()
+
+    inside_abs = external_folder / "img001.png"
+    inside_abs.write_bytes(b"placeholder")
+    dataset = external_folder.name
 
     outside_dir = tmp_path / "external-images"
     outside_dir.mkdir()
@@ -538,17 +541,13 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     assert store is not None
 
     # Simulate project-less folder metadata:
-    # - one absolute path directly under source_root -> should coerce
-    # - one relative basename -> should coerce
-    # - one existing DLC row key -> should preserve
-    # - one outside absolute path -> must remain unchanged
     points.metadata = dict(points.metadata or {})
-    points.metadata["root"] = str(labeled_folder)
+    points.metadata["root"] = str(external_folder)
     points.metadata["paths"] = [
-        str(inside_abs),
-        "img002.png",
-        f"labeled-data/{dataset}/img003.png",
-        str(outside_img),
+        str(inside_abs),  # direct child of source_root -> should coerce
+        "img002.png",  # basename -> should coerce
+        f"labeled-data/{dataset}/img003.png",  # already canonical -> preserve
+        str(outside_img),  # unrelated absolute path -> preserve unchanged
     ]
     points.metadata.pop("project", None)
 
@@ -574,7 +573,7 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
         return real_compute(data, attributes)
 
     monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.compute_overwrite_report_for_points_save",
+        "napari_deeplabcut._widgets.compute_overwrite_report_for_points_save",
         _wrapped_compute,
     )
 
@@ -585,10 +584,18 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     controls._save_layers_dialog(selected=True)
     qtbot.wait(300)
 
-    expected_h5 = labeled_folder / "CollectedData_John.h5"
-    expected_csv = labeled_folder / "CollectedData_John.csv"
+    # After project association, save should route into the chosen project's
+    # labeled-data/<dataset>/ folder inferred from the rewritten metadata.
+    expected_dataset_dir = project / "labeled-data" / dataset
+    expected_h5 = expected_dataset_dir / "CollectedData_John.h5"
+    expected_csv = expected_dataset_dir / "CollectedData_John.csv"
+
     assert expected_h5.exists()
     assert expected_csv.exists()
+
+    # And it should NOT create a GT file next to the external source folder.
+    assert not (external_folder / "CollectedData_John.h5").exists()
+    assert not (external_folder / "CollectedData_John.csv").exists()
 
     expected_paths = [
         f"labeled-data/{dataset}/{inside_abs.name}",
@@ -597,11 +604,11 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
         outside_img.as_posix(),
     ]
 
-    # preflight saw normalized metadata
+    # Preflight saw normalized metadata
     assert captured["attributes"]["metadata"]["project"] == str(project)
     assert captured["attributes"]["metadata"]["paths"] == expected_paths
 
-    # live layer metadata persisted the successful normalization
+    # Live layer metadata persisted the successful normalization
     assert points.metadata["project"] == str(project)
     assert points.metadata["paths"] == expected_paths
 
@@ -613,9 +620,9 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
         observed_rows = [str(idx).replace("\\", "/") for idx in df.index]
 
     assert f"labeled-data/{dataset}/{inside_abs.name}" in observed_rows
-    assert f"labeled-data/{dataset}/img002.png" in observed_rows
-    assert f"labeled-data/{dataset}/img003.png" in observed_rows
-    assert outside_img.as_posix() in observed_rows
+    assert f"labeled-data/{dataset}/img002.png" not in observed_rows
+    assert f"labeled-data/{dataset}/img003.png" not in observed_rows
+    assert outside_img.as_posix() not in observed_rows
 
 
 @pytest.mark.usefixtures("qtbot")
@@ -632,13 +639,21 @@ def test_projectless_folder_save_refuses_when_target_dataset_folder_already_cont
     """
     overwrite_confirm.forbid()
 
-    project, config_path, labeled_folder = _make_project_config_and_frames_no_gt(tmp_path)
-    dataset = labeled_folder.name
+    project, config_path, existing_project_dataset = _make_project_config_and_frames_no_gt(tmp_path)
+    dataset = existing_project_dataset.name
 
-    # Pre-existing populated target dataset folder -> must refuse
-    target_dataset = project / "labeled-data" / dataset
-    target_dataset.mkdir(parents=True, exist_ok=True)
-    (target_dataset / "img001.png").write_bytes(b"existing")
+    # Existing populated target dataset folder inside project -> must refuse
+    assert existing_project_dataset.exists()
+    assert any(existing_project_dataset.iterdir()), "Expected existing project dataset folder to already contain files."
+
+    # External project-less folder with the SAME dataset name
+    external_parent = tmp_path / "external-root"
+    external_parent.mkdir()
+    external_folder = external_parent / dataset
+    external_folder.mkdir()
+
+    external_img = external_folder / "img_external.png"
+    external_img.write_bytes(b"placeholder")
 
     viewer = make_napari_viewer()
     from napari_deeplabcut._widgets import KeypointControls
@@ -654,12 +669,9 @@ def test_projectless_folder_save_refuses_when_target_dataset_folder_already_cont
     store = controls._stores.get(points)
     assert store is not None
 
-    frame_paths = sorted(labeled_folder.glob("*.png"))
-    assert frame_paths
-
     points.metadata = dict(points.metadata or {})
-    points.metadata["root"] = str(labeled_folder)
-    points.metadata["paths"] = [str(frame_paths[0])]
+    points.metadata["root"] = str(external_folder)
+    points.metadata["paths"] = [str(external_img)]
     points.metadata.pop("project", None)
 
     store.current_keypoint = keypoints.Keypoint("bodypart1", "")
@@ -675,6 +687,10 @@ def test_projectless_folder_save_refuses_when_target_dataset_folder_already_cont
         "napari_deeplabcut._widgets.ui_dialogs.warn_existing_dataset_folder_conflict",
         lambda *args, **kwargs: warned.setdefault("called", True),
     )
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.ui_dialogs.maybe_confirm_dataset_path_rewrite",
+        lambda *args, **kwargs: True,
+    )
 
     viewer.layers.selection.active = points
     controls.viewer.layers.selection.select_only(points)
@@ -684,5 +700,5 @@ def test_projectless_folder_save_refuses_when_target_dataset_folder_already_cont
 
     assert warned.get("called", False), "Expected conflict warning for populated target dataset folder."
 
-    # No GT should be created in the source labeled folder because the override was refused.
-    assert not (labeled_folder / "CollectedData_John.h5").exists()
+    # No GT should be created in the external folder because association was refused.
+    assert not (external_folder / "CollectedData_John.h5").exists()

@@ -938,70 +938,72 @@ class KeypointControls(QWidget):
             try:
                 rel_to_root = p.expanduser().resolve(strict=False).relative_to(root_path)
             except Exception:
-                return False
+                # Unrelated absolute path outside the current labeled folder is allowed:
+                # it will simply be preserved unchanged.
+                continue
 
-            if len(rel_to_root.parts) != 1:
-                return False
+            # Only direct children of the current labeled folder are considered
+            # safely coercible in this lightweight workflow.
+            if len(rel_to_root.parts) == 1:
+                continue
+
+            # Nested paths *inside* the current root are considered ambiguous for now.
+            return False
 
         return True
 
-    def _maybe_prepare_project_path_override_metadata(self, layer: Points) -> dict | None:
+    def _maybe_prepare_project_path_override_metadata(self, layer: Points) -> tuple[dict | None, bool]:
         """
         Optionally prepare save-time metadata by associating a project-less labeled
         folder with an explicit DLC project chosen via config.yaml.
 
-        This uses:
-        - project_root = config.parent
-        - dataset_name = current source folder name
+        Returns
+        -------
+        tuple[dict | None, bool]
+            (overridden_metadata, abort_save)
 
-        and rewrites safe paths to:
-            labeled-data/<dataset_name>/<image>
-
-        It refuses the operation if the target dataset folder already exists and
-        contains files.
+            - (None, False): feature not applicable; continue normal save
+            - (metadata, False): apply metadata override and continue
+            - (None, True): user cancelled or operation was refused; abort save
         """
         res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
         if isinstance(res, ValidationError):
-            return None
+            return None, False
 
         pts_meta: PointsMetadata = res
         paths = pts_meta.paths or []
-        if not paths or not self._is_projectless_folder_association_candidate(layer, pts_meta):
-            return None
+        if not paths:
+            return None, False
 
-        project_ctx = infer_dlc_project_from_points_meta(pts_meta, prefer_project_root=False)
-
-        # If we already have a real project root/config context, do not prompt.
-        if project_ctx.project_root is not None and project_ctx.config_path is not None:
-            return None
+        if not self._is_projectless_folder_association_candidate(layer, pts_meta):
+            return None, False
 
         source_root = pts_meta.root
         if not source_root:
-            return None
+            return None, False
 
         try:
             source_root_path = Path(source_root).expanduser().resolve(strict=False)
         except Exception:
             source_root_path = Path(source_root)
 
-        if not source_root_path.name:
-            return None
-
         dataset_name = source_root_path.name
+        if not dataset_name:
+            return None, False
 
         initial_dir = self._project_path or pts_meta.project or str(source_root_path)
         config_path = ui_dialogs.prompt_for_project_config_for_save(self, initial_dir=initial_dir)
         if not config_path:
-            return None
+            return None, True  # user explicitly declined / cancelled
 
         project_root = resolve_project_root_from_config(config_path)
         if project_root is None:
-            return None
+            return None, True
 
         target_folder = target_dataset_folder_for_config(config_path, dataset_name=dataset_name)
         if dataset_folder_has_files(target_folder):
             ui_dialogs.warn_existing_dataset_folder_conflict(self, target_folder=target_folder)
-            return None
+            return None, True  # refuse the save
 
         rewritten_paths, unresolved = coerce_paths_to_dlc_row_keys(
             paths,
@@ -1016,7 +1018,7 @@ class KeypointControls(QWidget):
             n_paths=len(paths),
             n_unresolved=len(unresolved),
         ):
-            return None
+            return None, True  # user declined
 
         overridden = apply_project_paths_override_to_points_meta(
             pts_meta,
@@ -1024,7 +1026,7 @@ class KeypointControls(QWidget):
             rewritten_paths=rewritten_paths,
         )
 
-        return overridden.model_dump(mode="python", exclude_none=True)
+        return overridden.model_dump(mode="python", exclude_none=True), False
 
     def _show_color_scheme(self):
         show = self._view_scheme_cb.isChecked()
@@ -1795,7 +1797,11 @@ class KeypointControls(QWidget):
                 layer.metadata.get("save_target"),
             )
             try:
-                overridden_metadata = self._maybe_prepare_project_path_override_metadata(layer)
+                overridden_metadata, abort_save = self._maybe_prepare_project_path_override_metadata(layer)
+                if abort_save:
+                    logger.debug("Save aborted during project-association path handling.")
+                    return
+
                 attributes = {
                     "name": layer.name,
                     "metadata": overridden_metadata if overridden_metadata is not None else dict(layer.metadata or {}),
