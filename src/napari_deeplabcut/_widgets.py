@@ -1029,6 +1029,12 @@ class KeypointControls(QWidget):
 
         project_root = resolve_project_root_from_config(config_path)
         if project_root is None:
+            QMessageBox.warning(
+                self,
+                "Invalid project configuration",
+                "The selected file is not a valid DeepLabCut config.yaml or project root. "
+                "The save operation has been cancelled.",
+            )
             return None, True
 
         target_folder = target_dataset_folder_for_config(config_path, dataset_name=dataset_name)
