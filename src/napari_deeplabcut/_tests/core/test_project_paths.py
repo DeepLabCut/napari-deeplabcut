@@ -8,8 +8,10 @@ import pytest
 
 import napari_deeplabcut.core.project_paths as paths_mod
 from napari_deeplabcut.core.project_paths import (
-    relativize_dlc_image_paths,
+    coerce_paths_to_dlc_row_keys,
+    dataset_folder_has_files,
     resolve_project_root_from_config,
+    target_dataset_folder_for_config,
 )
 
 
@@ -543,29 +545,49 @@ def test_resolve_project_root_from_config(tmp_path):
     assert resolve_project_root_from_config(project / "missing" / "config.yaml") is None
 
 
-def test_relativize_dlc_image_paths_normalizes_only_safe_dlc_paths(tmp_path):
-    project = tmp_path / "proj"
-    dataset_dir = project / "labeled-data" / "video1"
-    dataset_dir.mkdir(parents=True)
+def test_coerce_paths_to_dlc_row_keys_for_projectless_folder(tmp_path):
+    source_root = tmp_path / "session_42"
+    source_root.mkdir()
 
-    inside_abs = dataset_dir / "img001.png"
-    other_abs = project / "somewhere" / "else.png"
-    outside_abs = tmp_path / "outside" / "img999.png"
+    inside_abs = source_root / "img001.png"
+    nested_abs = source_root / "nested" / "img_nested.png"
+    nested_abs.parent.mkdir()
+    outside_abs = tmp_path / "elsewhere" / "img999.png"
+    outside_abs.parent.mkdir()
 
-    rewritten, unresolved = relativize_dlc_image_paths(
+    rewritten, unresolved = coerce_paths_to_dlc_row_keys(
         [
             inside_abs,
-            "labeled-data\\video1\\img002.png",
-            other_abs,
+            "img002.png",
+            "labeled-data\\session_42\\img003.png",
+            nested_abs,
             outside_abs,
         ],
-        project_root=project,
+        source_root=source_root,
     )
 
     assert rewritten == [
-        "labeled-data/video1/img001.png",
-        "labeled-data/video1/img002.png",
-        other_abs.as_posix(),
+        "labeled-data/session_42/img001.png",
+        "labeled-data/session_42/img002.png",
+        "labeled-data/session_42/img003.png",
+        nested_abs.as_posix(),
         outside_abs.as_posix(),
     ]
-    assert unresolved == (2, 3)
+    assert unresolved == (3, 4)
+
+
+def test_target_dataset_folder_and_existing_files_guard(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    cfg = project / "config.yaml"
+    cfg.write_text("scorer: John\n", encoding="utf-8")
+
+    target = target_dataset_folder_for_config(cfg, dataset_name="session_42")
+    assert target == project / "labeled-data" / "session_42"
+    assert not dataset_folder_has_files(target)
+
+    target.mkdir(parents=True)
+    assert not dataset_folder_has_files(target)
+
+    (target / "img001.png").write_bytes(b"x")
+    assert dataset_folder_has_files(target)
