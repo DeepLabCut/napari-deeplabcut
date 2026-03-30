@@ -1146,16 +1146,17 @@ class KeypointControls(QWidget):
             # Determine time column (napari-specific choice)
             time_col = 1 if isinstance(layer, Tracks) else 0
 
-            arr_before = np.asarray(layer.data)
-            logger.debug(
-                "Remap start layer=%r old_paths_len=%s new_paths_len=%s data_shape=%s frame_min=%s frame_max=%s",
-                getattr(layer, "name", str(layer)),
-                len(old_paths),
-                len(new_paths or []),
-                getattr(arr_before, "shape", None),
-                int(np.nanmin(arr_before[:, time_col])) if arr_before.size else None,
-                int(np.nanmax(arr_before[:, time_col])) if arr_before.size else None,
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                arr_before = np.asarray(layer.data)
+                logger.debug(
+                    "Remap start layer=%r old_paths_len=%s new_paths_len=%s data_shape=%s frame_min=%s frame_max=%s",
+                    getattr(layer, "name", str(layer)),
+                    len(old_paths),
+                    len(new_paths or []),
+                    getattr(arr_before, "shape", None),
+                    int(np.nanmin(arr_before[:, time_col])) if arr_before.size else None,
+                    int(np.nanmax(arr_before[:, time_col])) if arr_before.size else None,
+                )
 
             res = remap_layer_data_by_paths(
                 data=layer.data,
