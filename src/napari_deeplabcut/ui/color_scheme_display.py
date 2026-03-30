@@ -162,30 +162,6 @@ class ColorSchemeResolver:
         self._get_header_model = get_header_model
         self._config_header_cache: dict[str, DLCHeaderModel | None] = {}
 
-    def _is_effectively_visible(self) -> bool:
-        """
-        Best-effort visibility check for the docked panel content.
-
-        We want to no-op when the color scheme dock is hidden so frame stepping
-        and points edits do not keep resolving / repainting the legend.
-        """
-        if self._disposed:
-            return False
-
-        try:
-            if not self.isVisible():
-                return False
-        except RuntimeError:
-            return False
-
-        return True
-
-    def showEvent(self, event: QShowEvent):  # type: ignore[override]
-        super().showEvent(event)
-        # If we were hidden for a while, we may have skipped many updates.
-        # Refresh once when shown again.
-        self.schedule_update()
-
     def is_multianimal(self, layer: Points) -> bool:
         md = layer.metadata or {}
         header = self._get_header_model(md)
@@ -526,6 +502,30 @@ class ColorSchemePanel(QWidget):
             # Underlying C++ widget already deleted
             return False
 
+    def _is_effectively_visible(self) -> bool:
+        """
+        Best-effort visibility check for the docked panel content.
+
+        We want to no-op when the color scheme dock is hidden so frame stepping
+        and points edits do not keep resolving / repainting the legend.
+        """
+        if self._disposed:
+            return False
+
+        try:
+            if not self.isVisible():
+                return False
+        except RuntimeError:
+            return False
+
+        return True
+
+    def showEvent(self, event: QShowEvent):  # type: ignore[override]
+        super().showEvent(event)
+        # If we were hidden for a while, we may have skipped many updates.
+        # Refresh once when shown again.
+        self.schedule_update()
+
     def _connect(self, emitter, callback) -> None:
         """Connect and remember emitter/callback so we can disconnect later."""
         try:
@@ -564,10 +564,10 @@ class ColorSchemePanel(QWidget):
         super().closeEvent(event)
 
     def _connect_viewer_events(self) -> None:
-        self._connect(self.viewer.layers.selection.events.active, self._on_current_step)
+        self._connect(self.viewer.layers.selection.events.active, self.schedule_update)
         self._connect(self.viewer.layers.events.inserted, self._on_layers_changed)
         self._connect(self.viewer.layers.events.removed, self._on_layers_removed)
-        self._connect(self.viewer.dims.events.current_step, self.schedule_update)
+        self._connect(self.viewer.dims.events.current_step, self._on_current_step)
 
         for layer in list(self.viewer.layers):
             self._maybe_wire_layer(layer)
@@ -592,6 +592,12 @@ class ColorSchemePanel(QWidget):
         self._maybe_wire_layer(layer)
         self.schedule_update()
 
+    def _on_layers_removed(self, event=None) -> None:
+        if self._disposed:
+            return
+        # We don't try to disconnect per-layer emitters defensively here; just refresh.
+        self.schedule_update()
+
     def _on_current_step(self, event=None) -> None:
         """
         Frame-step updates only matter in ACTIVE mode.
@@ -608,12 +614,6 @@ class ColorSchemePanel(QWidget):
         if self.show_config_keypoints:
             return
 
-        self.schedule_update()
-
-    def _on_layers_removed(self, event=None) -> None:
-        if self._disposed:
-            return
-        # We don't try to disconnect per-layer emitters defensively here; just refresh.
         self.schedule_update()
 
     def _maybe_wire_layer(self, layer) -> None:
@@ -649,7 +649,7 @@ class ColorSchemePanel(QWidget):
             self._connect(emitter, self.schedule_update)
 
     def schedule_update(self, event=None) -> None:
-        """Debounced update to avoid refresh issues."""
+        """Debounced update to avoid refresh storms."""
         if self._disposed:
             return
 
