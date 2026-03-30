@@ -35,6 +35,7 @@ from pydantic import ValidationError
 from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, PointsMetadata
 from napari_deeplabcut.config.settings import DEFAULT_SINGLE_ANIMAL_CMAP
+from napari_deeplabcut.config.supported_files import SUPPORTED_IMAGES, SUPPORTED_VIDEOS
 from napari_deeplabcut.core import schemas as dlc_schemas
 from napari_deeplabcut.core.dataframes import (
     form_df_from_validated,
@@ -55,9 +56,6 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # Supported formats (shared by image/video readers)
 # -----------------------------------------------------------------------------
-# FIXME move to config/data_formats.py or similar if more formats are added
-SUPPORTED_IMAGES = (".jpg", ".jpeg", ".png")
-SUPPORTED_VIDEOS = (".mp4", ".mov", ".avi")
 _GLOB_MAGIC = set("*?[")
 _SUPPORTED_SUFFIXES = {ext.lower() for ext in SUPPORTED_IMAGES}
 
