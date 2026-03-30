@@ -246,7 +246,11 @@ def test_color_scheme_panel_multianimal_toggle_shows_active_then_full_config_ind
     controls_dock = viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
     viewer.open(str(config_path), plugin="napari-deeplabcut")
-    qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
+    qtbot.waitUntil(
+        lambda: any(isinstance(ly, Points) for ly in viewer.layers),
+        timeout=5_000,
+    )
+
     force_show(viewer.window._qt_window, qtbot)
     force_show(controls_dock, qtbot)
     force_show(controls, qtbot)
@@ -255,6 +259,13 @@ def test_color_scheme_panel_multianimal_toggle_shows_active_then_full_config_ind
 
     placeholder = next((ly for ly in viewer.layers if isinstance(ly, Points)), None)
     assert placeholder is not None
+
+    qtbot.waitUntil(lambda: placeholder in controls._stores, timeout=5_000)
+    assert placeholder in controls._stores
+
+    qtbot.waitUntil(lambda: controls.color_mode == "individual", timeout=5_000)
+    assert controls.color_mode == "individual"
+
     assert placeholder.data is None or len(placeholder.data) == 0
 
     store = controls._stores.get(placeholder)

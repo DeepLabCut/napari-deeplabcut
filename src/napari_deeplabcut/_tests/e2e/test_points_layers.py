@@ -181,7 +181,8 @@ def test_copy_paste_points_to_new_frame_does_not_crash_and_offsets_frame(
     layer = viewer.add_points(data, **md)
 
     assert isinstance(layer, Points)
-    assert getattr(layer, "_dlc_controls", None) is controls, "Layer was not wired by KeypointControls"
+    qtbot.waitUntil(lambda: layer in controls._stores, timeout=5_000)
+    assert layer in controls._stores
 
     # frame 0: select and copy
     viewer.dims.set_point(0, 0)
