@@ -513,8 +513,13 @@ class ColorSchemePanel(QWidget):
             return False
 
         try:
-            if not self.isVisible():
+            if self.isHidden():
                 return False
+            parent = self.parentWidget()
+            while parent is not None:
+                if parent.isHidden():
+                    return False
+                parent = parent.parentWidget()
         except RuntimeError:
             return False
 

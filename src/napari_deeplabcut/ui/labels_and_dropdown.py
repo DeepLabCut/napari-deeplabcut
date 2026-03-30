@@ -137,8 +137,12 @@ class KeypointsDropdownMenu(QWidget):
         """Set current keypoint to the first unlabeled one."""
         if self._locked:
             return
+
+        # Skip work for explicitly hidden/inactive menus, but do not require the
+        # widget to be shown yet: tests and some construction paths invoke this
+        # before a top-level show().
         try:
-            if not self.isVisible():
+            if self.isHidden():
                 return
         except RuntimeError:
             return
