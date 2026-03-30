@@ -203,6 +203,20 @@ def ensure_dlc_crop_layer(viewer) -> Shapes:
     return layer
 
 
+def _panel_is_displayed(panel) -> bool:
+    if panel is None:
+        return False
+    try:
+        if not panel.isVisible():
+            return False
+        parent = panel.parentWidget()
+        if parent is not None and not parent.isVisible():
+            return False
+    except Exception:
+        pass
+    return True
+
+
 def handle_apply_crop_toggled(viewer, panel, checked: bool) -> None:
     """
     When crop application is enabled, create/select the dedicated crop layer and
@@ -246,25 +260,10 @@ def _schedule_crop_refresh(panel, refresh_callback) -> None:
     timer.start()
 
 
-def sync_crop_layer_autorefresh(viewer, panel, refresh_callback) -> None:
-    """
-    Keep a debounced data-change listener attached only to the dedicated DLC crop layer.
-
-    This is intentionally a no-op in all other contexts:
-    - no dedicated crop layer -> nothing connected
-    - same layer already connected -> nothing changes
-    - crop layer removed/replaced -> disconnect old, connect new
-    """
-    current_layer = get_dlc_crop_layer(viewer)
-
+def _detach_crop_autorefresh(panel) -> None:
     prev_layer = getattr(panel, "_dlc_crop_refresh_layer", None)
     prev_handler = getattr(panel, "_dlc_crop_refresh_handler", None)
 
-    # Fast no-op path: already synced to the current dedicated crop layer
-    if current_layer is not None and prev_layer is current_layer and prev_handler is not None:
-        return
-
-    # Disconnect previous listener if present
     if prev_layer is not None and prev_handler is not None:
         try:
             prev_layer.events.data.disconnect(prev_handler)
@@ -279,11 +278,32 @@ def sync_crop_layer_autorefresh(viewer, panel, refresh_callback) -> None:
     panel._dlc_crop_refresh_handler = None
 
     timer = getattr(panel, "_dlc_crop_refresh_timer", None)
-    if current_layer is None and timer is not None:
+    if timer is not None:
         try:
             timer.stop()
         except Exception:
             pass
+
+
+def sync_crop_layer_autorefresh(viewer, panel, refresh_callback) -> None:
+    """
+    Keep a debounced data-change listener attached only to the dedicated DLC crop layer.
+
+    This is intentionally a no-op in all other contexts:
+    - no dedicated crop layer -> nothing connected
+    - same layer already connected -> nothing changes
+    - crop layer removed/replaced -> disconnect old, connect new
+    """
+    current_layer = get_dlc_crop_layer(viewer)
+    prev_layer = getattr(panel, "_dlc_crop_refresh_layer", None)
+    prev_handler = getattr(panel, "_dlc_crop_refresh_handler", None)
+
+    # Fast no-op path: already synced to the current dedicated crop layer
+    if current_layer is not None and prev_layer is current_layer and prev_handler is not None:
+        return
+
+    # Disconnect previous listener if present
+    _detach_crop_autorefresh(panel)
 
     if current_layer is None:
         return
@@ -862,6 +882,10 @@ def resolve_project_path_from_image_layer(layer: Image) -> str | None:
 def update_video_panel_context(viewer, panel) -> None:
     """Refresh lightweight user-facing context shown in the video action panel."""
     if panel is None:
+        return
+
+    if not _panel_is_displayed(panel):
+        _detach_crop_autorefresh(panel)
         return
 
     sync_crop_layer_autorefresh(
