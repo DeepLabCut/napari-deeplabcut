@@ -11,7 +11,7 @@ from .utils import _cycles_from_policy, _make_minimal_dlc_project, _scheme_from_
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_config_placeholder_points_layer_colors_after_first_keypoint_added(make_napari_viewer, qtbot, tmp_path):
+def test_config_placeholder_points_layer_colors_after_first_keypoint_added(viewer, qtbot, tmp_path):
     """
     E2E regression: a Points layer created from config.yaml starts empty (placeholder).
     When the user begins adding keypoints, the layer must switch into categorical
@@ -19,7 +19,6 @@ def test_config_placeholder_points_layer_colors_after_first_keypoint_added(make_
     """
     project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
-    viewer = make_napari_viewer()
     from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints
 
@@ -85,7 +84,7 @@ def test_config_placeholder_points_layer_colors_after_first_keypoint_added(make_
 
 @pytest.mark.usefixtures("qtbot")
 def test_config_placeholder_multianimal_colors_by_id_after_first_keypoint_added(
-    make_napari_viewer,
+    viewer,
     qtbot,
     multianimal_config_project,
 ):
@@ -96,7 +95,6 @@ def test_config_placeholder_multianimal_colors_by_id_after_first_keypoint_added(
     """
     _, config_path = multianimal_config_project
 
-    viewer = make_napari_viewer()
     from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints
 
@@ -226,7 +224,7 @@ def test_color_scheme_panel_toggle_shows_active_then_full_config_bodyparts(
 
 @pytest.mark.usefixtures("qtbot")
 def test_color_scheme_panel_multianimal_toggle_shows_active_then_full_config_individuals(
-    make_napari_viewer,
+    viewer,
     qtbot,
     multianimal_config_project,
 ):
@@ -240,8 +238,6 @@ def test_color_scheme_panel_multianimal_toggle_shows_active_then_full_config_ind
         * checked: show all configured individuals from config.yaml
     """
     _, config_path = multianimal_config_project
-
-    viewer = make_napari_viewer()
 
     from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_config_first_hazard_regression_no_silent_deletion(make_napari_viewer, qtbot, tmp_path, caplog):
+def test_config_first_hazard_regression_no_silent_deletion(viewer, qtbot, tmp_path, caplog):
     """
     Regression for the original report:
     Save the WRONG (placeholder) layer and still preserve previous labels due to merge-on-save.
@@ -26,7 +26,6 @@ def test_config_first_hazard_regression_no_silent_deletion(make_napari_viewer, q
     assert np.isfinite(_get_coord_from_df(pre, "bodypart1", "x"))
     assert np.isnan(_get_coord_from_df(pre, "bodypart2", "x"))
 
-    viewer = make_napari_viewer()
     from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints
 
@@ -70,7 +69,7 @@ def test_config_first_hazard_regression_no_silent_deletion(make_napari_viewer, q
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+def test_no_overwrite_warning_when_only_filling_nans(viewer, qtbot, tmp_path, overwrite_confirm):
     """
     Adding new labels (filling NaNs) must not prompt overwrite confirmation.
     """
@@ -78,7 +77,6 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
 
     _, _, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
-    viewer = make_napari_viewer()
     from napari_deeplabcut._widgets import KeypointControls
 
     controls = KeypointControls(viewer)
@@ -142,7 +140,7 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_overwrite_warning_triggers_on_conflict(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+def test_overwrite_warning_triggers_on_conflict(viewer, qtbot, tmp_path, overwrite_confirm):
     """
     Modifying an existing non-NaN label must trigger overwrite confirmation.
     """
@@ -150,7 +148,6 @@ def test_overwrite_warning_triggers_on_conflict(make_napari_viewer, qtbot, tmp_p
 
     project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
-    viewer = make_napari_viewer()
     from napari_deeplabcut._widgets import KeypointControls
 
     controls = KeypointControls(viewer)
@@ -180,7 +177,7 @@ def test_overwrite_warning_triggers_on_conflict(make_napari_viewer, qtbot, tmp_p
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_overwrite_warning_cancel_aborts_write(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+def test_overwrite_warning_cancel_aborts_write(viewer, qtbot, tmp_path, overwrite_confirm):
     """
     If overwrite confirmation is requested and user cancels, file must remain unchanged.
     """
@@ -192,7 +189,6 @@ def test_overwrite_warning_cancel_aborts_write(make_napari_viewer, qtbot, tmp_pa
     b1x_pre = _get_coord_from_df(pre, "bodypart1", "x")
     b1y_pre = _get_coord_from_df(pre, "bodypart1", "y")
 
-    viewer = make_napari_viewer()
     from napari_deeplabcut._widgets import KeypointControls
 
     controls = KeypointControls(viewer)

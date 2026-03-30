@@ -6,12 +6,11 @@ from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_on_insert_empty_points_layer_does_not_crash(make_napari_viewer, make_real_header_factory):
+def test_on_insert_empty_points_layer_does_not_crash(viewer, make_real_header_factory):
     """
     Contract: inserting an empty Points layer must not crash.
     This guards against KeyError: nan coming from napari cycle colormap logic.
     """
-    viewer = make_napari_viewer()
 
     from napari_deeplabcut._widgets import KeypointControls
 
@@ -36,12 +35,11 @@ def test_on_insert_empty_points_layer_does_not_crash(make_napari_viewer, make_re
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_on_insert_empty_points_layer_does_not_enable_cycle_mode(make_napari_viewer, make_real_header_factory):
+def test_on_insert_empty_points_layer_does_not_enable_cycle_mode(viewer, make_real_header_factory):
     """
     Contract: for empty layers, widget should not set face_color_mode='cycle'
     (or should otherwise avoid the cycle colormap path that crashes on nan).
     """
-    viewer = make_napari_viewer()
     from napari_deeplabcut._widgets import KeypointControls
 
     controls = KeypointControls(viewer)
@@ -66,12 +64,11 @@ def test_on_insert_empty_points_layer_does_not_enable_cycle_mode(make_napari_vie
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_adopt_existing_empty_points_layer_does_not_crash(make_napari_viewer, make_real_header_factory):
+def test_adopt_existing_empty_points_layer_does_not_crash(viewer, make_real_header_factory):
     """
     Contract: adoption path must not crash for empty points layers.
     This exercises _adopt_existing_layers -> _handle_existing_points_layer.
     """
-    viewer = make_napari_viewer()
 
     # Add layer BEFORE creating the widget (forces adoption path)
     header = make_real_header_factory(individuals=("animal1",))
@@ -96,12 +93,11 @@ def test_adopt_existing_empty_points_layer_does_not_crash(make_napari_viewer, ma
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_layer_insert_does_not_crash_when_current_property_is_nan(make_napari_viewer, make_real_header_factory):
+def test_layer_insert_does_not_crash_when_current_property_is_nan(viewer, make_real_header_factory):
     """
     Contract: even if a property value is NaN (bad input), widget must not crash.
     It may fall back to direct mode or sanitize the property.
     """
-    viewer = make_napari_viewer()
 
     from napari_deeplabcut._widgets import KeypointControls
 
@@ -133,7 +129,7 @@ def test_layer_insert_does_not_crash_when_current_property_is_nan(make_napari_vi
 
 @pytest.mark.usefixtures("qtbot")
 def test_copy_paste_points_to_new_frame_does_not_crash_and_offsets_frame(
-    make_napari_viewer,
+    viewer,
     make_real_header_factory,
     qtbot,
 ):
@@ -151,8 +147,6 @@ def test_copy_paste_points_to_new_frame_does_not_crash_and_offsets_frame(
     - pasted points must appear on the current frame
     - point properties (e.g. labels) must be preserved
     """
-    viewer = make_napari_viewer()
-
     from napari_deeplabcut._widgets import KeypointControls
 
     controls = KeypointControls(viewer)
@@ -221,7 +215,7 @@ def test_copy_paste_points_to_new_frame_does_not_crash_and_offsets_frame(
 
 @pytest.mark.usefixtures("qtbot")
 def test_copy_paste_same_frame_does_not_duplicate_existing_keypoints(
-    make_napari_viewer,
+    viewer,
     make_real_header_factory,
     qtbot,
 ):
@@ -230,8 +224,6 @@ def test_copy_paste_same_frame_does_not_duplicate_existing_keypoints(
     If the copied keypoints are already annotated on the current frame,
     DLC's patched paste should not duplicate them.
     """
-    viewer = make_napari_viewer()
-
     from napari_deeplabcut._widgets import KeypointControls
 
     controls = KeypointControls(viewer)
