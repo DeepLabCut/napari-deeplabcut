@@ -47,7 +47,7 @@ from napari_deeplabcut.core.dataframes import (
 )
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
-from napari_deeplabcut.core.metadata import attach_source_and_io, parse_points_metadata
+from napari_deeplabcut.core.metadata import attach_source_and_io_to_layer_kwargs, parse_points_metadata
 from napari_deeplabcut.core.project_paths import canonicalize_path, infer_dlc_project_from_points_meta
 from napari_deeplabcut.core.provenance import resolve_output_path_from_metadata
 
@@ -109,7 +109,7 @@ def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
 # KEYPOINTS / ANNOTATIONS (HDF5)
 # =============================================================================
 # NOTE: This reader returns a napari Points layer (data + metadata + "points")
-# and attaches provenance via attach_source_and_io.
+# and attaches provenance via attach_source_and_io_to_layer_kwargs.
 
 
 def read_hdf(filename: str) -> list[LayerData]:
@@ -197,12 +197,12 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     if kind is not None:
         meta = layer_props.setdefault("metadata", {})
         # Keep legacy source fields too
-        attach_source_and_io(layer_props, file)
+        attach_source_and_io_to_layer_kwargs(layer_props, file)
         # Override kind in io with explicit kind arg
         if isinstance(meta.get("io"), dict):
             meta["io"]["kind"] = kind  # stored as actual enum, not value
     else:
-        attach_source_and_io(layer_props, file)
+        attach_source_and_io_to_layer_kwargs(layer_props, file)
 
     return [(data, layer_props, "points")]
 

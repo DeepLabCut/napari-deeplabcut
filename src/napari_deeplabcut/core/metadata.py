@@ -416,10 +416,8 @@ def require_unique_target(candidates: list[Path], *, context: str = "save target
 # -----------------------------------------------------------------------------
 # Provenance attachment (napari metadata glue)
 # -----------------------------------------------------------------------------
-
-
-def attach_source_and_io(
-    metadata: dict[str, Any],
+def attach_source_and_io_to_layer_kwargs(
+    layer_kwargs: dict[str, Any],
     file_path: Path,
     *,
     kind: AnnotationKind | None = None,
@@ -436,8 +434,20 @@ def attach_source_and_io(
 
     # FUTURE NOTE hardcoded DLC structure:
     # kind inference relies on discovery filename patterns (CollectedData*, machinelabels*).
+
+    Notes
+    -----
+    This function does not expect ``layer.metadata`` directly.
+    It expects the middle dict of a napari LayerData tuple, e.g.:
+
+        (data, layer_kwargs, "points")
+
+    and writes into:
+
+        layer_kwargs["metadata"]
     """
-    meta = metadata.setdefault("metadata", {})
+
+    meta = layer_kwargs.setdefault("metadata", {})
 
     # Legacy migration fields
     try:

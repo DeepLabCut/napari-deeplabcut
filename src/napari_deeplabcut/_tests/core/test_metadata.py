@@ -374,11 +374,11 @@ def test_prepare_points_payload_migrates_legacy_source_h5(monkeypatch):
 
 
 # -----------------------------------------------------------------------------
-# attach_source_and_io
+# attach_source_and_io_to_layer_kwargs
 # -----------------------------------------------------------------------------
 
 
-def test_attach_source_and_io_sets_legacy_fields_and_io(monkeypatch, tmp_path: Path):
+def test_attach_source_and_io_to_layer_kwargs_sets_legacy_fields_and_io(monkeypatch, tmp_path: Path):
     file_path = tmp_path / "CollectedData_Jane.h5"
     file_path.touch()
 
@@ -386,7 +386,7 @@ def test_attach_source_and_io_sets_legacy_fields_and_io(monkeypatch, tmp_path: P
     monkeypatch.setattr(metadata_mod, "infer_annotation_kind_for_file", lambda p: AnnotationKind.GT)
 
     metadata = {}
-    metadata_mod.attach_source_and_io(metadata, file_path)
+    metadata_mod.attach_source_and_io_to_layer_kwargs(metadata, file_path)
 
     inner = metadata["metadata"]
     assert inner["source_h5_name"] == "CollectedData_Jane.h5"
