@@ -12,8 +12,10 @@ Includes:
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
+import os
 from collections.abc import Callable
 from importlib import resources
 from pathlib import Path
@@ -56,6 +58,12 @@ logger = logging.getLogger(__name__)
 # FIXME move to config/data_formats.py or similar if more formats are added
 SUPPORTED_IMAGES = (".jpg", ".jpeg", ".png")
 SUPPORTED_VIDEOS = (".mp4", ".mov", ".avi")
+_GLOB_MAGIC = set("*?[")
+_SUPPORTED_SUFFIXES = {ext.lower() for ext in SUPPORTED_IMAGES}
+
+
+def _has_glob_magic(name: str) -> bool:
+    return any(ch in name for ch in _GLOB_MAGIC)
 
 
 # =============================================================================
@@ -496,22 +504,68 @@ def _normalize_to_rgb(arr: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
 
 
-def _expand_image_paths(path: str | Path | list[str | Path] | tuple[str | Path, ...]) -> list[Path]:
-    # Normalize input to list[Path]
-    raw_paths = [Path(p) for p in path] if isinstance(path, (list, tuple)) else [Path(path)]
+# FIXME remove later
+# def _expand_image_paths(path: str | Path | list[str | Path] | tuple[str | Path, ...]) -> list[Path]:
+#     # Normalize input to list[Path]
+#     raw_paths = [Path(p) for p in path] if isinstance(path, (list, tuple)) else [Path(path)]
 
+#     expanded: list[Path] = []
+#     for p in tqdm(raw_paths, desc="Expanding image paths", leave=False, unit="files"):
+#         if p.is_dir() and p.suffix.lower() != ".zarr":
+#             file_matches: list[Path] = []
+#             for ext in SUPPORTED_IMAGES:
+#                 file_matches.extend(p.glob(f"*{ext}"))
+#             expanded.extend(x for x in natsorted(file_matches, key=str) if x.is_file())
+#         else:
+#             matches = list(p.parent.glob(p.name))
+#             expanded.extend(matches or [p])
+
+#     return [p for p in expanded if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGES]
+
+
+def _expand_image_paths(path: str | Path | list[str | Path] | tuple[str | Path, ...]) -> list[Path]:
+    raw_paths = [Path(p) for p in path] if isinstance(path, (list, tuple)) else [Path(path)]
     expanded: list[Path] = []
+
     for p in raw_paths:
         if p.is_dir() and p.suffix.lower() != ".zarr":
-            file_matches: list[Path] = []
-            for ext in SUPPORTED_IMAGES:
-                file_matches.extend(p.glob(f"*{ext}"))
-            expanded.extend(x for x in natsorted(file_matches, key=str) if x.is_file())
-        else:
-            matches = list(p.parent.glob(p.name))
-            expanded.extend(matches or [p])
+            try:
+                with os.scandir(p) as it:
+                    files = [
+                        Path(entry.path)
+                        for entry in it
+                        if entry.is_file() and Path(entry.name).suffix.lower() in _SUPPORTED_SUFFIXES
+                    ]
+            except OSError:
+                continue
 
-    return [p for p in expanded if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGES]
+            files.sort(key=lambda q: q.name)
+            expanded.extend(files)
+            continue
+
+        if not _has_glob_magic(p.name):
+            if p.is_file() and p.suffix.lower() in _SUPPORTED_SUFFIXES:
+                expanded.append(p)
+            continue
+
+        parent = p.parent if str(p.parent) else Path(".")
+        pattern = p.name
+        try:
+            with os.scandir(parent) as it:
+                matches = [
+                    Path(entry.path)
+                    for entry in it
+                    if entry.is_file()
+                    and fnmatch.fnmatchcase(entry.name, pattern)
+                    and Path(entry.name).suffix.lower() in _SUPPORTED_SUFFIXES
+                ]
+        except OSError:
+            continue
+
+        matches.sort(key=lambda q: q.name)
+        expanded.extend(matches)
+
+    return expanded
 
 
 # Lazy image reader that supports directories and lists of files
