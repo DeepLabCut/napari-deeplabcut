@@ -6,6 +6,7 @@ from napari.layers import Points
 
 from napari_deeplabcut.config.models import DLCHeaderModel
 
+from ..conftest import force_show
 from .utils import _cycles_from_policy, _make_minimal_dlc_project, _scheme_from_policy
 
 
@@ -159,7 +160,7 @@ def test_config_placeholder_multianimal_colors_by_id_after_first_keypoint_added(
 
 @pytest.mark.usefixtures("qtbot")
 def test_color_scheme_panel_toggle_shows_active_then_full_config_bodyparts(
-    make_napari_viewer,
+    viewer,
     qtbot,
     tmp_path,
 ):
@@ -173,13 +174,17 @@ def test_color_scheme_panel_toggle_shows_active_then_full_config_bodyparts(
     """
     project, config_path, labeled_folder, _h5_path = _make_minimal_dlc_project(tmp_path)
 
-    viewer = make_napari_viewer()
-
     from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints
 
     controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+    controls_dock = viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+    # Force-show the viewer hierarchy and relevant docks/panels.
+    force_show(viewer.window._qt_window, qtbot)
+    force_show(controls_dock, qtbot)
+    force_show(controls, qtbot)
+    force_show(controls._color_scheme_display, qtbot)
+    force_show(controls._color_scheme_panel, qtbot)
 
     # 1) Open config first -> placeholder Points layer
     viewer.open(str(config_path), plugin="napari-deeplabcut")
@@ -242,10 +247,15 @@ def test_color_scheme_panel_multianimal_toggle_shows_active_then_full_config_ind
     from napari_deeplabcut.core import keypoints
 
     controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+    controls_dock = viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
     viewer.open(str(config_path), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
+    force_show(viewer.window._qt_window, qtbot)
+    force_show(controls_dock, qtbot)
+    force_show(controls, qtbot)
+    force_show(controls._color_scheme_display, qtbot)
+    force_show(controls._color_scheme_panel, qtbot)
 
     placeholder = next((ly for ly in viewer.layers if isinstance(ly, Points)), None)
     assert placeholder is not None

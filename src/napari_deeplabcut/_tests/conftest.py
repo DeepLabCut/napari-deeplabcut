@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import pytest
-from qtpy.QtWidgets import QDockWidget
+from qtpy.QtWidgets import QApplication, QDockWidget
 from skimage.io import imsave
 
 from napari_deeplabcut.config.models import DLCHeaderModel
@@ -25,6 +25,34 @@ os.environ["NAPARI_ASYNC"] = "0"  # avoid async teardown surprises in tests
 # os.environ["PYTEST_QT_API"] = "pyqt6" # only for local testing with pyqt6, we use pyside6 otherwise
 logging.getLogger("napari_deeplabcut").propagate = True
 logging.getLogger("napari-deeplabcut").propagate = True
+
+
+def force_show(widget, qtbot, *, process_ms: int = 50):
+    """
+    Best-effort show of a widget and all its Qt parents, even under
+    QT_QPA_PLATFORM=offscreen.
+
+    This does NOT require real screen exposure; it only ensures the widget
+    is no longer hidden and that Qt processes the resulting show events.
+    """
+    chain = []
+    w = widget
+    while w is not None:
+        chain.append(w)
+        w = w.parentWidget()
+
+    # Show from top-most parent down so child visibility can resolve.
+    for w in reversed(chain):
+        try:
+            w.show()
+        except RuntimeError:
+            pass
+
+    QApplication.processEvents()
+    qtbot.wait(process_ms)
+    QApplication.processEvents()
+
+    return widget
 
 
 @pytest.fixture(autouse=True)

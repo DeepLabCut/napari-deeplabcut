@@ -18,6 +18,8 @@ from napari_deeplabcut.ui.dialogs import ShortcutRow
 from napari_deeplabcut.ui.labels_and_dropdown import KeypointsDropdownMenu, LabelPair
 from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
+from .conftest import force_show
+
 
 def test_guess_continuous():
     import numpy as np
@@ -195,6 +197,7 @@ def test_keypoints_dropdown_menu_updates_from_store_current_properties(store, qt
 def test_keypoints_dropdown_menu_smart_reset(store, qtbot):
     widget = KeypointsDropdownMenu(store)
     qtbot.add_widget(widget)
+    force_show(widget, qtbot)
     label_menu = widget.menus["label"]
     label_menu.update_to("kpt_2")
     widget._locked = True
