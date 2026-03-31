@@ -215,7 +215,7 @@ class KeypointControls(QWidget):
 
         grid = QGridLayout()
 
-        self._confirm_overwrite_cb = QCheckBox("Confirm overwrite saves", parent=self)
+        self._confirm_overwrite_cb = QCheckBox("Warn on overwrite", parent=self)
         self._confirm_overwrite_cb.setToolTip(
             "When enabled, saving a layer that would overwrite existing keypoints will show a confirmation dialog."
         )
