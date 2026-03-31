@@ -139,6 +139,27 @@ def viewer(make_napari_viewer_proxy):
 
 
 @pytest.fixture
+def keypoint_controls_and_dock(viewer):
+    dock, controls = viewer.window.add_plugin_dock_widget(
+        "napari-deeplabcut",
+        "Keypoint controls",
+    )
+    return controls, dock
+
+
+@pytest.fixture
+def keypoint_controls(keypoint_controls_and_dock):
+    controls, _dock = keypoint_controls_and_dock
+    return controls
+
+
+@pytest.fixture
+def keypoint_controls_dock(keypoint_controls_and_dock):
+    _controls, dock = keypoint_controls_and_dock
+    return dock
+
+
+@pytest.fixture
 def fake_keypoints():
     n_rows = 10
     n_animals = 2
