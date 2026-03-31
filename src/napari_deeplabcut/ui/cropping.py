@@ -917,14 +917,14 @@ def update_video_panel_context(viewer, panel) -> None:
         )
         return
 
-    viewer_crop_text = str(crop_spec.viewer_crop.values)
+    str(crop_spec.viewer_crop.values)
     config_crop_text = str(crop_spec.config_crop.values)
 
     panel.set_context_text(
         f"{frame_text}\n"
         f"Output folder: {root_text}\n"
         f"Crop source: {crop_source}\n"
-        f"Viewer crop: {viewer_crop_text}\n"
+        # f"Viewer crop: {viewer_crop_text}\n" # TMI ?
         f"Config crop: {config_crop_text}"
     )
 
