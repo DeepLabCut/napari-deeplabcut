@@ -310,11 +310,10 @@ class Tutorial(QDialog):
     def __init__(self, parent):
         super().__init__(parent=parent)
         self.setParent(parent)
-        self.setWindowTitle("Tutorial")
+        self.setWindowTitle("💡Tutorial")
         self.setModal(True)
-        self.setStyleSheet("background:#361AE5")
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setWindowOpacity(0.95)
+        self.setWindowOpacity(0.96)
         self.setWindowFlags(self.windowFlags() | Qt.WindowCloseButtonHint)
 
         self._current_tip = -1
@@ -353,28 +352,93 @@ class Tutorial(QDialog):
             ),
         ]
 
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #1E1F26;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 14px;
+            }
+            QLabel {
+                color: #F5F7FF;
+            }
+            QLabel#messageLabel {
+                background: #2A2D38;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 12px;
+                padding: 18px 20px;
+                font-size: 14px;
+                line-height: 1.45em;
+            }
+            QLabel#countLabel {
+                color: #B8BED3;
+                font-size: 12px;
+                padding-left: 2px;
+            }
+            QPushButton {
+                background: #34394A;
+                color: white;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 8px;
+                min-width: 30px;
+                min-height: 30px;
+                padding: 2px 8px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #42485C;
+            }
+            QPushButton:pressed {
+                background: #2D3140;
+            }
+            QPushButton:disabled {
+                background: #262935;
+                color: #7E859C;
+                border: 1px solid rgba(255, 255, 255, 0.05);
+            }
+            """
+        )
+
         vlayout = QVBoxLayout()
-        self.message = QLabel("💡\n\nLet's get started with a quick walkthrough!")
+        vlayout.setContentsMargins(14, 14, 14, 12)
+        vlayout.setSpacing(10)
+
+        self.message = QLabel("Let's get started with a quick walkthrough!")
+        self.message.setObjectName("messageLabel")
+        self.message.setWordWrap(True)
         self.message.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
         self.message.setOpenExternalLinks(True)
+        self.message.setMinimumWidth(360)
+        self.message.setMaximumWidth(460)
+        self.message.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         vlayout.addWidget(self.message)
 
         nav_layout = QHBoxLayout()
-        self.prev_button = QPushButton("<")
+        nav_layout.setSpacing(6)
+
+        self.prev_button = QPushButton("←")
         self.prev_button.clicked.connect(self.prev_tip)
         nav_layout.addWidget(self.prev_button)
-        self.next_button = QPushButton(">")
+
+        self.next_button = QPushButton("→")
         self.next_button.clicked.connect(self.next_tip)
         nav_layout.addWidget(self.next_button)
 
-        self.update_nav_buttons()
+        nav_layout.addStretch(1)
 
-        hlayout = QHBoxLayout()
         self.count = QLabel("")
-        hlayout.addWidget(self.count)
-        hlayout.addLayout(nav_layout)
-        vlayout.addLayout(hlayout)
+        self.count.setObjectName("countLabel")
+
+        footer = QHBoxLayout()
+        footer.setContentsMargins(2, 0, 2, 0)
+        footer.addWidget(self.count)
+        footer.addStretch(1)
+        footer.addLayout(nav_layout)
+
+        vlayout.addLayout(footer)
         self.setLayout(vlayout)
+
+        self.update_nav_buttons()
 
     def prev_tip(self):
         self._current_tip = (self._current_tip - 1) % len(self._tips)
@@ -389,11 +453,8 @@ class Tutorial(QDialog):
     def update_tip(self):
         tip = self._tips[self._current_tip]
         msg = tip.msg
-        # No emoji in the last tip otherwise the hyperlink breaks
-        if self._current_tip < len(self._tips) - 1:
-            msg = "💡\n\n" + msg
         self.message.setText(msg)
-        self.count.setText(f"Tip {self._current_tip + 1}|{len(self._tips)}")
+        self.count.setText(f"Tip {self._current_tip + 1} of {len(self._tips)}")
         self.adjustSize()
 
         xrel, yrel = tip.pos
