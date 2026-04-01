@@ -3,6 +3,7 @@ from __future__ import annotations
 from qtpy.QtCore import QSignalBlocker, Qt, Signal
 from qtpy.QtWidgets import (
     QFormLayout,
+    QGraphicsOpacityEffect,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -38,6 +39,8 @@ class LayerStatusPanel(QGroupBox):
         self._size_slider.setSingleStep(1)
         self._size_slider.setPageStep(2)
         self._size_slider.setValue(6)
+        self._size_opacity = QGraphicsOpacityEffect(self._size_slider)
+        self._size_slider.setGraphicsEffect(self._size_opacity)
 
         self._size_value = QLabel("6")
         self._size_value.setMinimumWidth(28)
@@ -92,6 +95,9 @@ class LayerStatusPanel(QGroupBox):
         self._size_slider.setEnabled(enabled)
         self._size_value.setEnabled(enabled)
 
+        opacity = 1.0 if enabled else 0.35
+        self._size_opacity.setOpacity(opacity)
+
         tooltip = (
             "Point size for the active DLC keypoints layer. Saved to config.yaml as dotsize when changed."
             if enabled
@@ -128,7 +134,7 @@ class LayerStatusPanel(QGroupBox):
 
         self._progress_value.setText(f"{labeled_percent:.1f}% labeled")
         self._progress_value.setToolTip(
-            f"{labeled_percent:.1f}% labeled, {remaining_percent:.1f}% remaining\n\n"
+            f"{labeled_percent:.1f}% labeled, {remaining_percent:.1f}% remaining\n"
             f"{labeled_points}/{total_points} of all possible points labeled • {breakdown}"
         )
 
