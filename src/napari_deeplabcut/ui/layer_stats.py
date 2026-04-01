@@ -66,14 +66,20 @@ class LayerStatusPanel(QGroupBox):
         wrapper = QVBoxLayout(self)
         wrapper.addLayout(form)
 
-        self._size_slider.valueChanged.connect(self._on_slider_changed)
-        self._size_slider.sliderReleased.connect(self._emit_commit)
+        self._size_slider.setTracking(False)
+
+        self._size_slider.sliderMoved.connect(self._on_slider_moved_preview)
+        self._size_slider.valueChanged.connect(self._on_value_changed_commit)
 
         self.set_point_size_enabled(False, reason="Select a DLC keypoints layer to edit point size.")
 
-    def _on_slider_changed(self, value: int) -> None:
+    def _on_slider_moved_preview(self, value: int) -> None:
         self._size_value.setText(str(int(value)))
-        self.point_size_changed.emit(int(value))
+        self.point_size_changed.emit(int(value))  # visual only
+
+    def _on_value_changed_commit(self, value: int) -> None:
+        self._size_value.setText(str(int(value)))
+        self.point_size_commit_requested.emit(int(value))  # save / persist
 
     def _emit_commit(self) -> None:
         self.point_size_commit_requested.emit(self.point_size())
