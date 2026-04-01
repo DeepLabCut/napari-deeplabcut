@@ -3,16 +3,21 @@ from __future__ import annotations
 
 import html
 from collections import defaultdict, namedtuple
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
 
 from napari.layers import Points
 from qtpy.QtCore import QPoint, Qt
 from qtpy.QtWidgets import (
     QDialog,
+    QFileDialog,
     QFrame,
     QGraphicsOpacityEffect,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -402,6 +407,153 @@ class Tutorial(QDialog):
     def update_nav_buttons(self):
         self.prev_button.setEnabled(self._current_tip > 0)
         self.next_button.setEnabled(self._current_tip < len(self._tips) - 1)
+
+
+# --------------------------------------------------------------------------------
+# Headless labeled data resolved to existing config.yaml project dialog
+# --------------------------------------------------------------------------------
+class ProjectConfigPromptAction(str, Enum):
+    ASSOCIATE = "associate"
+    SKIP = "skip"
+    CANCEL = "cancel"
+
+
+@dataclass(frozen=True)
+class ProjectConfigPromptResult:
+    action: ProjectConfigPromptAction
+    config_path: str | None = None
+
+
+def prompt_for_project_config_for_save(
+    parent,
+    *,
+    initial_dir: str | None = None,
+) -> ProjectConfigPromptResult:
+    """
+    Ask the user whether to associate the current labeled folder with an
+    existing DLC project.
+
+    Returns
+    -------
+    ProjectConfigPromptResult
+        - ASSOCIATE: user selected a config.yaml
+        - SKIP: user explicitly chose not to associate, but wants to continue
+        - CANCEL: user cancelled the flow and the caller should abort save
+    """
+    msg = QMessageBox(parent)
+    msg.setIcon(QMessageBox.Question)
+    msg.setWindowTitle("Associate folder with DLC project?")
+    msg.setText(
+        "No DLC project root could be inferred for this layer.\n\n"
+        "Do you want to choose a config.yaml so this labeled folder can be saved "
+        "using DeepLabCut's standard dataset paths?\n\n"
+        "Important: the current folder name will become the DLC dataset name:\n"
+        "labeled-data/<current-folder-name>/...\n\n"
+        "This will not move files on disk or edit config.yaml."
+    )
+
+    yes_btn = msg.addButton("Choose config.yaml", QMessageBox.YesRole)
+    no_btn = msg.addButton("Continue without association", QMessageBox.NoRole)
+    msg.addButton(QMessageBox.Cancel)
+
+    msg.setDefaultButton(yes_btn)
+    result = msg.exec_()
+
+    clicked = msg.clickedButton()
+
+    # Explicitly handle None or rejected dialog result
+    if clicked is None or result == QMessageBox.Rejected:
+        return ProjectConfigPromptResult(ProjectConfigPromptAction.CANCEL)
+
+    if clicked is no_btn:
+        return ProjectConfigPromptResult(ProjectConfigPromptAction.SKIP)
+
+    filename, _ = QFileDialog.getOpenFileName(
+        parent,
+        "Choose config.yaml",
+        dir=initial_dir or "",
+        filter="DeepLabCut config (config.yaml)",
+    )
+    if not filename:
+        return ProjectConfigPromptResult(ProjectConfigPromptAction.CANCEL)
+
+    return ProjectConfigPromptResult(
+        ProjectConfigPromptAction.ASSOCIATE,
+        config_path=filename,
+    )
+
+
+def maybe_confirm_dataset_path_rewrite(
+    parent,
+    *,
+    project_root: str | Path,
+    dataset_name: str,
+    n_paths: int,
+    n_unresolved: int,
+) -> bool:
+    """
+    Summarize the project-association rewrite before saving.
+    """
+    n_rewritten = n_paths - n_unresolved
+    if n_paths == 0:
+        return True
+
+    target_folder = Path(project_root) / "labeled-data" / dataset_name
+
+    dataset_note = (
+        "The current folder name will become the DLC dataset name:\n"
+        f"  {dataset_name}\n\n"
+        "Paths will be written in the form:\n"
+        f"  labeled-data/{dataset_name}/<image>\n\n"
+    )
+
+    if n_unresolved == 0:
+        text = (
+            f"This save will associate the current folder with the DLC project:\n\n"
+            f"{project_root}\n\n"
+            f"Target dataset folder:\n{target_folder}\n\n"
+            f"{dataset_note}"
+            f"All {n_rewritten} path(s) can be written in DLC dataset form.\n\n"
+            "Continue?"
+        )
+    else:
+        text = (
+            f"This save will associate the current folder with the DLC project:\n\n"
+            f"{project_root}\n\n"
+            f"Target dataset folder:\n{target_folder}\n\n"
+            f"{dataset_note}"
+            f"{n_rewritten} path(s) will be written in DLC dataset form.\n"
+            f"{n_unresolved} path(s) could not be safely coerced and will be kept as-is.\n\n"
+            "Continue?"
+        )
+
+    choice = QMessageBox.question(
+        parent,
+        "Confirm DLC project association",
+        text,
+        QMessageBox.Yes | QMessageBox.No,
+    )
+    return choice == QMessageBox.Yes
+
+
+def warn_existing_dataset_folder_conflict(
+    parent,
+    *,
+    target_folder: str | Path,
+) -> None:
+    """
+    Explain why project-association save is refused when the target dataset folder
+    already exists and contains files.
+    """
+    QMessageBox.warning(
+        parent,
+        "Cannot associate with existing dataset folder",
+        "The target dataset folder already exists and contains files:\n\n"
+        f"{target_folder}\n\n"
+        "To avoid colliding with an existing DeepLabCut dataset, this operation was refused.\n\n"
+        "If this folder is the intended target, move or rename the current labeled folder first, "
+        "or, if desired, clear the target dataset folder before retrying.",
+    )
 
 
 # --------------------------------------------------------------------------------------

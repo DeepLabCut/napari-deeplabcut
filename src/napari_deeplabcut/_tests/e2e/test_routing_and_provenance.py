@@ -20,6 +20,22 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 
+@pytest.fixture
+def forbid_project_config_dialog(monkeypatch):
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
+        lambda *args, **kwargs: pytest.fail("Unexpected project-config dialog."),
+    )
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.ui_dialogs.maybe_confirm_dataset_path_rewrite",
+        lambda *args, **kwargs: pytest.fail("Unexpected dataset path rewrite confirmation."),
+    )
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.ui_dialogs.warn_existing_dataset_folder_conflict",
+        lambda *args, **kwargs: pytest.fail("Unexpected dataset-folder conflict warning."),
+    )
+
+
 @pytest.mark.usefixtures("qtbot")
 def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
     """
@@ -316,7 +332,9 @@ def test_config_first_save_writes_gt_into_dataset_folder(make_napari_viewer, qtb
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_promotion_first_save_prompts_and_creates_sidecar(make_napari_viewer, qtbot, tmp_path, inputdialog):
+def test_promotion_first_save_prompts_and_creates_sidecar(
+    make_napari_viewer, qtbot, tmp_path, inputdialog, forbid_project_config_dialog
+):
     """
     First save on a machine/prediction layer (no config.yaml, no sidecar):
     - prompts for scorer
@@ -381,7 +399,9 @@ def test_promotion_first_save_prompts_and_creates_sidecar(make_napari_viewer, qt
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_promotion_second_save_uses_sidecar_no_prompt(make_napari_viewer, qtbot, tmp_path, inputdialog):
+def test_promotion_second_save_uses_sidecar_no_prompt(
+    make_napari_viewer, qtbot, tmp_path, inputdialog, forbid_project_config_dialog
+):
     """
     After sidecar exists, saving again must not prompt:
     - QInputDialog.getText not called
@@ -428,3 +448,234 @@ def test_promotion_second_save_uses_sidecar_no_prompt(make_napari_viewer, qtbot,
 
     machine_post = pd.read_hdf(machine_path, key="keypoints")
     pd.testing.assert_frame_equal(machine_pre, machine_post)
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_dlc_row_keys(
+    make_napari_viewer,
+    qtbot,
+    tmp_path,
+    monkeypatch,
+    overwrite_confirm,
+):
+    """
+    Contract: a project-less labeled folder can be associated with a chosen DLC
+    project at save time by rewriting safe paths to canonical DLC row keys.
+
+    Goals
+    -----
+    - Use current external folder name as the target dataset name.
+    - Save safe paths as labeled-data/<dataset>/<image>.
+    - Use the same normalized metadata for overwrite preflight and actual write.
+    - Persist the improved metadata on the live layer after successful save.
+
+    Non-goals
+    ---------
+    - Do NOT require the current files to already be inside the selected project.
+    - Do NOT coerce nested/multi-folder layouts into DLC row keys.
+    - Do NOT rewrite unrelated outside paths.
+    """
+    overwrite_confirm.forbid()
+
+    project, config_path, _project_dataset_folder = _make_project_config_and_frames_no_gt(tmp_path)
+
+    # External project-less folder that the user labeled outside the project.
+    external_folder = tmp_path / "session_external"
+    external_folder.mkdir()
+
+    inside_abs = external_folder / "img001.png"
+    inside_abs.write_bytes(b"placeholder")
+    dataset = external_folder.name
+
+    outside_dir = tmp_path / "external-images"
+    outside_dir.mkdir()
+    outside_img = outside_dir / "img999.png"
+    outside_img.write_bytes(b"placeholder")
+
+    viewer = make_napari_viewer()
+    from napari_deeplabcut._widgets import KeypointControls
+    from napari_deeplabcut.core import keypoints
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    # Open config first -> placeholder points layer
+    viewer.open(str(config_path), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
+
+    points = next(ly for ly in viewer.layers if isinstance(ly, Points))
+    store = controls._stores.get(points)
+    assert store is not None
+
+    # Simulate project-less folder metadata:
+    points.metadata = dict(points.metadata or {})
+    points.metadata["root"] = str(external_folder)
+    points.metadata["paths"] = [
+        str(inside_abs),  # direct child of source_root -> should coerce
+        "img002.png",  # basename -> should coerce
+        f"labeled-data/{dataset}/img003.png",  # already canonical -> preserve
+        str(outside_img),  # unrelated absolute path -> preserve unchanged
+    ]
+    points.metadata.pop("project", None)
+
+    store.current_keypoint = keypoints.Keypoint("bodypart1", "")
+    points.add(np.array([0.0, 11.0, 22.0], dtype=float))
+
+    from napari_deeplabcut.ui import dialogs as ui_dialogs
+
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
+        lambda *args, **kwargs: ui_dialogs.ProjectConfigPromptResult(
+            action=ui_dialogs.ProjectConfigPromptAction.ASSOCIATE,
+            config_path=str(config_path),
+        ),
+    )
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.ui_dialogs.maybe_confirm_dataset_path_rewrite",
+        lambda *args, **kwargs: True,
+    )
+
+    import napari_deeplabcut.core.conflicts as conflicts
+
+    real_compute = conflicts.compute_overwrite_report_for_points_save
+    captured = {}
+
+    def _wrapped_compute(data, attributes):
+        captured["attributes"] = attributes
+        return real_compute(data, attributes)
+
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.compute_overwrite_report_for_points_save",
+        _wrapped_compute,
+    )
+
+    viewer.layers.selection.active = points
+    controls.viewer.layers.selection.active = points
+    controls.viewer.layers.selection.select_only(points)
+
+    controls._save_layers_dialog(selected=True)
+    qtbot.wait(300)
+
+    # After project association, save should route into the chosen project's
+    # labeled-data/<dataset>/ folder inferred from the rewritten metadata.
+    expected_dataset_dir = project / "labeled-data" / dataset
+    expected_h5 = expected_dataset_dir / "CollectedData_John.h5"
+    expected_csv = expected_dataset_dir / "CollectedData_John.csv"
+
+    assert expected_h5.exists()
+    assert expected_csv.exists()
+
+    # And it should NOT create a GT file next to the external source folder.
+    assert not (external_folder / "CollectedData_John.h5").exists()
+    assert not (external_folder / "CollectedData_John.csv").exists()
+
+    expected_paths = [
+        f"labeled-data/{dataset}/{inside_abs.name}",
+        f"labeled-data/{dataset}/img002.png",
+        f"labeled-data/{dataset}/img003.png",
+        outside_img.as_posix(),
+    ]
+
+    # Preflight saw normalized metadata
+    assert captured["attributes"]["metadata"]["project"] == str(project)
+    assert captured["attributes"]["metadata"]["paths"] == expected_paths
+
+    # Live layer metadata persisted the successful normalization
+    assert points.metadata["project"] == str(project)
+    assert points.metadata["paths"] == expected_paths
+
+    # H5 row index contains canonical DLC row keys for the safe cases
+    df = pd.read_hdf(expected_h5, key="keypoints")
+    if isinstance(df.index, pd.MultiIndex):
+        observed_rows = ["/".join(map(str, idx)) for idx in df.index]
+    else:
+        observed_rows = [str(idx).replace("\\", "/") for idx in df.index]
+
+    assert f"labeled-data/{dataset}/{inside_abs.name}" in observed_rows
+    assert f"labeled-data/{dataset}/img002.png" not in observed_rows
+    assert f"labeled-data/{dataset}/img003.png" not in observed_rows
+    assert outside_img.as_posix() not in observed_rows
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_projectless_folder_save_refuses_when_target_dataset_folder_already_contains_files(
+    make_napari_viewer,
+    qtbot,
+    tmp_path,
+    monkeypatch,
+    overwrite_confirm,
+):
+    """
+    Contract: project-association save must refuse if the target dataset folder
+    already exists in the chosen project and contains files.
+    """
+    overwrite_confirm.forbid()
+
+    project, config_path, existing_project_dataset = _make_project_config_and_frames_no_gt(tmp_path)
+    dataset = existing_project_dataset.name
+
+    # Existing populated target dataset folder inside project -> must refuse
+    assert existing_project_dataset.exists()
+    assert any(existing_project_dataset.iterdir()), "Expected existing project dataset folder to already contain files."
+
+    # External project-less folder with the SAME dataset name
+    external_parent = tmp_path / "external-root"
+    external_parent.mkdir()
+    external_folder = external_parent / dataset
+    external_folder.mkdir()
+
+    external_img = external_folder / "img_external.png"
+    external_img.write_bytes(b"placeholder")
+
+    viewer = make_napari_viewer()
+    from napari_deeplabcut._widgets import KeypointControls
+    from napari_deeplabcut.core import keypoints
+
+    controls = KeypointControls(viewer)
+    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+
+    viewer.open(str(config_path), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
+
+    points = next(ly for ly in viewer.layers if isinstance(ly, Points))
+    store = controls._stores.get(points)
+    assert store is not None
+
+    points.metadata = dict(points.metadata or {})
+    points.metadata["root"] = str(external_folder)
+    points.metadata["paths"] = [str(external_img)]
+    points.metadata.pop("project", None)
+
+    store.current_keypoint = keypoints.Keypoint("bodypart1", "")
+    points.add(np.array([0.0, 11.0, 22.0], dtype=float))
+
+    warned = {}
+
+    from napari_deeplabcut.ui import dialogs as ui_dialogs
+
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
+        lambda *args, **kwargs: ui_dialogs.ProjectConfigPromptResult(
+            action=ui_dialogs.ProjectConfigPromptAction.ASSOCIATE,
+            config_path=str(config_path),
+        ),
+    )
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.ui_dialogs.warn_existing_dataset_folder_conflict",
+        lambda *args, **kwargs: warned.setdefault("called", True),
+    )
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.ui_dialogs.maybe_confirm_dataset_path_rewrite",
+        lambda *args, **kwargs: True,
+    )
+
+    viewer.layers.selection.active = points
+    controls.viewer.layers.selection.select_only(points)
+
+    controls._save_layers_dialog(selected=True)
+    qtbot.wait(200)
+
+    assert warned.get("called", False), "Expected conflict warning for populated target dataset folder."
+
+    # No GT should be created in the external folder because association was refused.
+    assert not (external_folder / "CollectedData_John.h5").exists()

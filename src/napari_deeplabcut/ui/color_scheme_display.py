@@ -23,6 +23,7 @@ from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.config.settings import DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP, DEFAULT_SINGLE_ANIMAL_CMAP
 from napari_deeplabcut.core import keypoints
 from napari_deeplabcut.core.keypoints import build_color_cycles
+from napari_deeplabcut.core.project_paths import infer_dlc_project
 from napari_deeplabcut.ui.labels_and_dropdown import LabelPair
 
 logger = logging.getLogger(__name__)
@@ -284,38 +285,21 @@ class ColorSchemeResolver:
     def _resolve_project_config_path(self, layer: Points) -> Path | None:
         """
         Best-effort resolution of the DeepLabCut config.yaml for a layer.
-
-        Resolution order:
-        1) metadata['project'] / config.yaml
-        2) misc.find_project_config_path(project/root/source_h5)
         """
         md = layer.metadata or {}
 
-        # 1) direct project metadata
-        project = md.get("project")
-        if isinstance(project, str) and project:
-            cfg = Path(project) / "config.yaml"
-            if cfg.is_file():
-                return cfg
-
-        # 2) best-effort search from available anchors
-        anchors: list[str] = []
-        for key in ("project", "root", "source_h5"):
-            val = md.get(key)
-            if isinstance(val, str) and val:
-                anchors.append(val)
-
-        for anchor in anchors:
-            try:
-                cfg_path = misc.find_project_config_path(anchor)
-                if cfg_path:
-                    p = Path(cfg_path)
-                    if p.is_file():
-                        return p
-            except Exception:
-                logger.debug("Could not resolve config from anchor=%r", anchor, exc_info=True)
-
-        return None
+        ctx = infer_dlc_project(
+            anchor_candidates=[
+                md.get("project"),
+                md.get("root"),
+                md.get("source_h5"),
+            ],
+            dataset_candidates=[],
+            explicit_root=None,
+            prefer_project_root=True,
+            max_levels=5,
+        )
+        return ctx.config_path
 
     def _load_config_header(self, config_path: Path) -> DLCHeaderModel | None:
         """Load DLCHeaderModel from config.yaml with caching."""
