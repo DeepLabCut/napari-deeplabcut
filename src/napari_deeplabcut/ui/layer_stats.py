@@ -56,7 +56,7 @@ class LayerStatusPanel(QGroupBox):
         form = QFormLayout()
         form.addRow("Folder", self._folder_value)
         form.addRow("Progress", self._progress_value)
-        form.addRow("Point size", size_row)
+        form.addRow("Points size", size_row)
 
         wrapper = QVBoxLayout(self)
         wrapper.addLayout(form)
@@ -85,19 +85,21 @@ class LayerStatusPanel(QGroupBox):
 
     def set_point_size_enabled(self, enabled: bool, *, reason: str | None = None) -> None:
         enabled = bool(enabled)
+
+        # Disable the entire container so both slider and label get proper native disabled styling
+        self._size_controls.setEnabled(enabled)
         self._size_slider.setEnabled(enabled)
         self._size_value.setEnabled(enabled)
 
-        if enabled:
-            tooltip = "Point size for the active DLC keypoints layer. Saved to config.yaml as dotsize when changed."
-            self._size_slider.setToolTip(tooltip)
-            self._size_value.setToolTip(tooltip)
-            self._size_value.setStyleSheet("")
-        else:
-            tooltip = reason or "Select a DLC keypoints layer to edit point size."
-            self._size_slider.setToolTip(tooltip)
-            self._size_value.setToolTip(tooltip)
-            self._size_value.setStyleSheet("color: palette(mid);")
+        tooltip = (
+            "Point size for the active DLC keypoints layer. Saved to config.yaml as dotsize when changed."
+            if enabled
+            else (reason or "Select a DLC keypoints layer to edit point size.")
+        )
+
+        self._size_controls.setToolTip(tooltip)
+        self._size_slider.setToolTip(tooltip)
+        self._size_value.setToolTip(tooltip)
 
     def set_folder_name(self, folder_name: str) -> None:
         self._folder_value.setText(folder_name or "—")
@@ -129,7 +131,7 @@ class LayerStatusPanel(QGroupBox):
     def set_no_active_points_layer(self) -> None:
         self._progress_value.setText("No active keypoints layer")
         self._progress_value.setToolTip("")
-        self.set_point_size_enabled(False, reason="Select a DLC keypoints layer to edit point size.")
+        self.set_point_size_enabled(False, reason="Select a DLC keypoints layer to edit global points size.")
 
     def set_invalid_points_layer(self) -> None:
         self._progress_value.setText("Active layer is not a DLC keypoints layer")
