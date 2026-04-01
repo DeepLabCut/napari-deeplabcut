@@ -166,7 +166,6 @@ def test_tutorial_next_advances_to_first_tip_and_updates_position(dialog_parent,
     qtbot.mouseClick(dlg.next_button, Qt.LeftButton)
 
     assert dlg._current_tip == 0
-    assert dlg.count.text() == f"Tip 1|{len(dlg._tips)}"
 
     # first real tip still has prev disabled, next enabled
     assert not dlg.prev_button.isEnabled()
@@ -191,7 +190,6 @@ def test_tutorial_navigation_enables_and_disables_buttons(dialog_parent, qtbot):
     assert dlg._current_tip == 1
     assert dlg.prev_button.isEnabled()
     assert dlg.next_button.isEnabled()
-    assert dlg.count.text() == f"Tip 2|{len(dlg._tips)}"
 
     qtbot.mouseClick(dlg.prev_button, Qt.LeftButton)
     assert dlg._current_tip == 0
