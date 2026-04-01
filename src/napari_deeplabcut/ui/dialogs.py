@@ -454,7 +454,7 @@ class Tutorial(QDialog):
         tip = self._tips[self._current_tip]
         msg = tip.msg
         self.message.setText(msg)
-        self.count.setText(f"Tip {self._current_tip + 1} of {len(self._tips)}")
+        self.count.setText(f"Tip {self._current_tip + 1}|{len(self._tips)}")
         self.adjustSize()
 
         xrel, yrel = tip.pos

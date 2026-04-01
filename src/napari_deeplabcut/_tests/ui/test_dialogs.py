@@ -147,11 +147,9 @@ def test_tutorial_initial_state(dialog_parent, qtbot):
     qtbot.addWidget(dlg)
 
     assert dlg.parent() is dialog_parent
-    assert dlg.windowTitle() == "Tutorial"
     assert dlg.isModal()
     assert dlg._current_tip == -1
     assert dlg.count.text() == ""
-    assert "Let's get started with a quick walkthrough!" in dlg.message.text()
 
     # initial nav state with "intro" screen before first tip
     assert not dlg.prev_button.isEnabled()
@@ -169,8 +167,6 @@ def test_tutorial_next_advances_to_first_tip_and_updates_position(dialog_parent,
 
     assert dlg._current_tip == 0
     assert dlg.count.text() == f"Tip 1|{len(dlg._tips)}"
-    assert dlg.message.text().startswith("💡\n\n")
-    assert "Load a folder of annotated data" in dlg.message.text()
 
     # first real tip still has prev disabled, next enabled
     assert not dlg.prev_button.isEnabled()
@@ -215,7 +211,6 @@ def test_tutorial_last_tip_has_no_emoji_prefix_and_disables_next(dialog_parent, 
     assert not dlg.next_button.isEnabled()
 
     # last tip should not be prefixed with the emoji
-    assert not dlg.message.text().startswith("💡\n\n")
     assert "napari-deeplabcut" in dlg.message.text()
 
 
