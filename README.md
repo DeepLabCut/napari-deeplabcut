@@ -119,7 +119,7 @@ Additional dock controls include:
 Use:
 
 > **File → Save Selected Layer(s)...**
->
+
 or the shortcut:
 
 ```text
