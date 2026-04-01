@@ -18,9 +18,6 @@ class LayerStatusPanel(QGroupBox):
     - current folder name
     - labeling progress
     - point size control (slider)
-
-    Public API is intentionally small/stable so KeypointControls can use it
-    without caring about the exact Qt widget type.
     """
 
     point_size_changed = Signal(int)
@@ -43,20 +40,25 @@ class LayerStatusPanel(QGroupBox):
         self._size_slider.setValue(6)
 
         self._size_value = QLabel("6")
-        self._size_value.setToolTip(
-            "Global point size for all keypoints layers. Saved to config.yaml as dotsize when changed."
-        )
         self._size_value.setMinimumWidth(28)
         self._size_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        size_row = QHBoxLayout()
+        # Dedicated container for the whole size-control row
+        self._size_controls = QWidget(self)
+        size_row = QHBoxLayout(self._size_controls)
+        size_row.setContentsMargins(0, 0, 0, 0)
         size_row.addWidget(self._size_slider, stretch=1)
         size_row.addWidget(self._size_value, stretch=0)
+
+        size_tooltip = "Point size for the active DLC keypoints layer. Saved to config.yaml as dotsize when changed."
+        self._size_slider.setToolTip(size_tooltip)
+        self._size_value.setToolTip(size_tooltip)
+        self._size_controls.setToolTip(size_tooltip)
 
         form = QFormLayout()
         form.addRow("Folder", self._folder_value)
         form.addRow("Progress", self._progress_value)
-        form.addRow("Points size", size_row)
+        form.addRow("Point size", self._size_controls)
 
         wrapper = QVBoxLayout(self)
         wrapper.addLayout(form)
@@ -64,8 +66,7 @@ class LayerStatusPanel(QGroupBox):
         self._size_slider.valueChanged.connect(self._on_slider_changed)
         self._size_slider.sliderReleased.connect(self._emit_commit)
 
-        # initialize default enabled appearance
-        self.set_point_size_enabled(False)
+        self.set_point_size_enabled(False, reason="Select a DLC keypoints layer to edit point size.")
 
     def _on_slider_changed(self, value: int) -> None:
         self._size_value.setText(str(int(value)))
@@ -126,12 +127,15 @@ class LayerStatusPanel(QGroupBox):
             breakdown = f"{frame_count} frames × {bodypart_count} bodyparts × {individual_count} individuals"
 
         self._progress_value.setText(f"{labeled_percent:.1f}% labeled")
-        self._progress_value.setToolTip(f"{labeled_points}/{total_points} of all possible points labeled • {breakdown}")
+        self._progress_value.setToolTip(
+            f"{labeled_percent:.1f}% labeled, {remaining_percent:.1f}% remaining\n\n"
+            f"{labeled_points}/{total_points} of all possible points labeled • {breakdown}"
+        )
 
     def set_no_active_points_layer(self) -> None:
         self._progress_value.setText("No active keypoints layer")
         self._progress_value.setToolTip("")
-        self.set_point_size_enabled(False, reason="Select a DLC keypoints layer to edit global points size.")
+        self.set_point_size_enabled(False, reason="Select a DLC keypoints layer to edit point size.")
 
     def set_invalid_points_layer(self) -> None:
         self._progress_value.setText("Active layer is not a DLC keypoints layer")
