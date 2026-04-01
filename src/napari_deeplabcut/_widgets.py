@@ -855,6 +855,21 @@ class KeypointControls(QWidget):
                     out,
                 )
 
+    def _resolve_config_path_for_layer(self, layer: Points | None) -> Path | None:
+        if layer is None:
+            return None
+
+        image_layer = find_relevant_image_layer(self.viewer)
+
+        return resolve_config_path_from_layer(
+            layer,
+            fallback_project=self._project_path,
+            fallback_root=self._image_meta.root,
+            image_layer=image_layer,
+            prefer_project_root=True,
+            max_levels=5,
+        )
+
     def _maybe_prepare_project_path_override_metadata(self, layer: Points) -> tuple[dict | None, bool]:
         """
         Optionally prepare save-time metadata by associating a project-less labeled
@@ -1002,7 +1017,7 @@ class KeypointControls(QWidget):
         set_uniform_point_size(layer, size)
         mark_layer_presentation_changed(layer)
 
-        config_path = resolve_config_path_from_layer(layer, fallback_project=self._project_path)
+        config_path = self._resolve_config_path_for_layer(layer)
         if config_path is not None:
             self._pending_config_point_size_write = (config_path, int(size))
             self._config_point_size_write_timer.start()
@@ -1017,7 +1032,7 @@ class KeypointControls(QWidget):
         if layer is None:
             return
 
-        config_path = resolve_config_path_from_layer(layer, fallback_project=self._project_path)
+        config_path = self._resolve_config_path_for_layer(layer)
         if config_path is None:
             logger.debug(
                 "No config.yaml could be resolved at commit time for active layer %r",
@@ -1029,7 +1044,7 @@ class KeypointControls(QWidget):
         self._flush_pending_point_size_config_write()
 
     def _maybe_initialize_layer_point_size_from_config(self, layer: Points) -> None:
-        config_path = resolve_config_path_from_layer(layer, fallback_project=self._project_path)
+        config_path = self._resolve_config_path_for_layer(layer)
         if config_path is None:
             return
 

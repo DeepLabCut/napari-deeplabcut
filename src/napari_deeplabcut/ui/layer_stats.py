@@ -104,9 +104,10 @@ class LayerStatusPanel(QGroupBox):
             breakdown = f"{frame_count} frames × {bodypart_count} bodyparts × {individual_count} individuals"
 
         self._progress_value.setText(
-            f"{labeled_percent:.1f}% labeled • {remaining_percent:.1f}% remaining "
-            f"({labeled_points}/{total_points} points = {breakdown})"
+            f"{labeled_percent:.1f}% labeled"  # • {remaining_percent:.1f}% remaining "
+            # f"({labeled_points}/{total_points} points = {breakdown})"
         )
+        self._progress_value.setToolTip(f"{labeled_points}/{total_points} points labeled • {breakdown}")
 
     def set_no_active_points_layer(self) -> None:
         self._progress_value.setText("No active keypoints layer")
