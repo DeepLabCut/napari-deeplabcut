@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_config_first_hazard_regression_no_silent_deletion(make_napari_viewer, qtbot, tmp_path, caplog):
+def test_config_first_hazard_regression_no_silent_deletion(viewer, keypoint_controls, qtbot, tmp_path, caplog):
     """
     Regression for the original report:
     Save the WRONG (placeholder) layer and still preserve previous labels due to merge-on-save.
@@ -26,12 +26,9 @@ def test_config_first_hazard_regression_no_silent_deletion(make_napari_viewer, q
     assert np.isfinite(_get_coord_from_df(pre, "bodypart1", "x"))
     assert np.isnan(_get_coord_from_df(pre, "bodypart2", "x"))
 
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints
 
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+    viewer.window.add_dock_widget(keypoint_controls, name="Keypoint controls", area="right")
 
     # Open config first -> placeholder Points layer exists
     viewer.open(str(config_path), plugin="napari-deeplabcut")
@@ -49,7 +46,7 @@ def test_config_first_hazard_regression_no_silent_deletion(make_napari_viewer, q
     # Placeholder should still be present for this regression to apply
     assert placeholder in viewer.layers
 
-    store = controls._stores.get(placeholder)
+    store = keypoint_controls._stores.get(placeholder)
     assert store is not None
 
     # Add a new bodypart2 point to placeholder using (frame, y, x)
@@ -70,7 +67,7 @@ def test_config_first_hazard_regression_no_silent_deletion(make_napari_viewer, q
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+def test_no_overwrite_warning_when_only_filling_nans(viewer, keypoint_controls, qtbot, tmp_path, overwrite_confirm):
     """
     Adding new labels (filling NaNs) must not prompt overwrite confirmation.
     """
@@ -78,11 +75,7 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
 
     _, _, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
-
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+    viewer.window.add_dock_widget(keypoint_controls, name="Keypoint controls", area="right")
 
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
@@ -126,7 +119,7 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
     logger.info("any NaNs in points.data = %s", np.isnan(points.data).any())
     logger.info("labels[:10] = %s", points.properties.get("label")[:10])
     logger.info("ids[:10] = %s", points.properties.get("id")[:10] if "id" in points.properties else None)
-    store = controls._stores.get(points)
+    store = keypoint_controls._stores.get(points)
     assert store is not None
 
     # Fill NaNs for bodypart2
@@ -142,33 +135,28 @@ def test_no_overwrite_warning_when_only_filling_nans(make_napari_viewer, qtbot, 
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_overwrite_warning_triggers_on_conflict(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+def test_overwrite_warning_triggers_on_conflict(viewer, keypoint_controls, qtbot, tmp_path, overwrite_confirm):
     """
     Modifying an existing non-NaN label must trigger overwrite confirmation.
     """
     overwrite_confirm.capture().reset_calls()
 
     project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
-
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
-
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+    viewer.window.add_dock_widget(keypoint_controls, name="Keypoint controls", area="right")
 
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
     qtbot.wait(200)
 
     points = _get_points_layer_with_data(viewer)
-    store = controls._stores.get(points)
+    store = keypoint_controls._stores.get(points)
     assert store is not None
 
     # Create conflict: overwrite bodypart1 from (10,20) -> (99,88)
     _set_or_add_bodypart_xy(points, store, "bodypart1", x=99.0, y=88.0)
 
     viewer.layers.selection.active = points
-    controls._save_layers_dialog(selected=True)
+    keypoint_controls._save_layers_dialog(selected=True)
     qtbot.wait(200)
 
     assert len(overwrite_confirm.calls) == 1, "Expected overwrite confirmation to be requested once."
@@ -180,7 +168,7 @@ def test_overwrite_warning_triggers_on_conflict(make_napari_viewer, qtbot, tmp_p
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_overwrite_warning_cancel_aborts_write(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+def test_overwrite_warning_cancel_aborts_write(viewer, keypoint_controls, qtbot, tmp_path, overwrite_confirm):
     """
     If overwrite confirmation is requested and user cancels, file must remain unchanged.
     """
@@ -192,25 +180,21 @@ def test_overwrite_warning_cancel_aborts_write(make_napari_viewer, qtbot, tmp_pa
     b1x_pre = _get_coord_from_df(pre, "bodypart1", "x")
     b1y_pre = _get_coord_from_df(pre, "bodypart1", "y")
 
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
-
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+    viewer.window.add_dock_widget(keypoint_controls, name="Keypoint controls", area="right")
 
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
     qtbot.wait(200)
 
     points = _get_points_layer_with_data(viewer)
-    store = controls._stores.get(points)
+    store = keypoint_controls._stores.get(points)
     assert store is not None
 
     _set_or_add_bodypart_xy(points, store, "bodypart1", x=456.0, y=123.0)
 
     viewer.layers.selection.active = points
     try:
-        controls._save_layers_dialog(selected=True)
+        keypoint_controls._save_layers_dialog(selected=True)
     except Exception:
         # Some napari/npe2 versions may raise when writer aborts; file integrity is what matters.
         pass

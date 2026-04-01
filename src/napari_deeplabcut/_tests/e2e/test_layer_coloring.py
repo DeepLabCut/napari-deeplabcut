@@ -3,14 +3,33 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from napari.layers import Points
+from qtpy.QtWidgets import QDockWidget
 
 from napari_deeplabcut.config.models import DLCHeaderModel
 
+from ..conftest import force_show
 from .utils import _cycles_from_policy, _make_minimal_dlc_project, _scheme_from_policy
 
 
+def _get_existing_keypoint_controls(viewer):
+    from napari_deeplabcut._widgets import KeypointControls
+
+    matches = list(viewer.window._qt_window.findChildren(KeypointControls))
+    assert matches, "Expected viewer fixture to provide a KeypointControls widget"
+    assert len(matches) == 1, f"Expected exactly one KeypointControls widget, found {len(matches)}"
+
+    controls = matches[0]
+
+    dock = controls.parentWidget()
+    while dock is not None and not isinstance(dock, QDockWidget):
+        dock = dock.parentWidget()
+
+    assert dock is not None, "Expected KeypointControls to be docked in a QDockWidget"
+    return controls, dock
+
+
 @pytest.mark.usefixtures("qtbot")
-def test_config_placeholder_points_layer_colors_after_first_keypoint_added(make_napari_viewer, qtbot, tmp_path):
+def test_config_placeholder_points_layer_colors_after_first_keypoint_added(viewer, qtbot, tmp_path):
     """
     E2E regression: a Points layer created from config.yaml starts empty (placeholder).
     When the user begins adding keypoints, the layer must switch into categorical
@@ -18,12 +37,9 @@ def test_config_placeholder_points_layer_colors_after_first_keypoint_added(make_
     """
     project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints
 
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+    controls, controls_dock = _get_existing_keypoint_controls(viewer)
 
     # 1) Open config.yaml -> creates placeholder Points layer (empty)
     viewer.open(str(config_path), plugin="napari-deeplabcut")
@@ -84,7 +100,7 @@ def test_config_placeholder_points_layer_colors_after_first_keypoint_added(make_
 
 @pytest.mark.usefixtures("qtbot")
 def test_config_placeholder_multianimal_colors_by_id_after_first_keypoint_added(
-    make_napari_viewer,
+    viewer,
     qtbot,
     multianimal_config_project,
 ):
@@ -95,12 +111,9 @@ def test_config_placeholder_multianimal_colors_by_id_after_first_keypoint_added(
     """
     _, config_path = multianimal_config_project
 
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints
 
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+    controls, controls_dock = _get_existing_keypoint_controls(viewer)
 
     # 1) Open config.yaml -> empty placeholder Points layer
     viewer.open(str(config_path), plugin="napari-deeplabcut")
@@ -159,7 +172,7 @@ def test_config_placeholder_multianimal_colors_by_id_after_first_keypoint_added(
 
 @pytest.mark.usefixtures("qtbot")
 def test_color_scheme_panel_toggle_shows_active_then_full_config_bodyparts(
-    make_napari_viewer,
+    viewer,
     qtbot,
     tmp_path,
 ):
@@ -173,13 +186,15 @@ def test_color_scheme_panel_toggle_shows_active_then_full_config_bodyparts(
     """
     project, config_path, labeled_folder, _h5_path = _make_minimal_dlc_project(tmp_path)
 
-    viewer = make_napari_viewer()
-
-    from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints
 
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+    controls, controls_dock = _get_existing_keypoint_controls(viewer)
+    # Force-show the viewer hierarchy and relevant docks/panels.
+    force_show(viewer.window._qt_window, qtbot)
+    force_show(controls_dock, qtbot)
+    force_show(controls, qtbot)
+    force_show(controls._color_scheme_display, qtbot)
+    force_show(controls._color_scheme_panel, qtbot)
 
     # 1) Open config first -> placeholder Points layer
     viewer.open(str(config_path), plugin="napari-deeplabcut")
@@ -221,7 +236,7 @@ def test_color_scheme_panel_toggle_shows_active_then_full_config_bodyparts(
 
 @pytest.mark.usefixtures("qtbot")
 def test_color_scheme_panel_multianimal_toggle_shows_active_then_full_config_individuals(
-    make_napari_viewer,
+    viewer,
     qtbot,
     multianimal_config_project,
 ):
@@ -229,33 +244,46 @@ def test_color_scheme_panel_multianimal_toggle_shows_active_then_full_config_ind
     E2E:
     - open multi-animal config first -> placeholder points layer
     - add one keypoint for animal1
-    - because KeypointControls switches multi-animal coloring to individual mode,
-      the color scheme panel should:
+    - because the first/real KeypointControls switches multi-animal coloring
+      to individual mode, the color scheme panel should:
         * unchecked: show only currently visible active individual(s)
         * checked: show all configured individuals from config.yaml
     """
     _, config_path = multianimal_config_project
 
-    viewer = make_napari_viewer()
-
-    from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints
 
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
+    controls, controls_dock = _get_existing_keypoint_controls(viewer)
 
+    force_show(viewer.window._qt_window, qtbot)
+    force_show(controls_dock, qtbot)
+    force_show(controls, qtbot)
+    force_show(controls._color_scheme_display, qtbot)
+    force_show(controls._color_scheme_panel, qtbot)
+
+    # Open config -> placeholder Points layer
     viewer.open(str(config_path), plugin="napari-deeplabcut")
-    qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
+    qtbot.waitUntil(
+        lambda: any(isinstance(ly, Points) for ly in viewer.layers),
+        timeout=5_000,
+    )
 
     placeholder = next((ly for ly in viewer.layers if isinstance(ly, Points)), None)
     assert placeholder is not None
     assert placeholder.data is None or len(placeholder.data) == 0
 
+    # Wait until the existing controls instance has wired the layer
+    qtbot.waitUntil(lambda: placeholder in controls._stores, timeout=5_000)
     store = controls._stores.get(placeholder)
     assert store is not None
 
-    # Multi-animal config should switch controls to individual mode on first wired store
+    # This assertion is now valid because we're using the controls instance
+    # that actually wired the layer.
+    qtbot.waitUntil(lambda: controls.color_mode == "individual", timeout=5_000)
     assert controls.color_mode == "individual"
+
+    # Make the placeholder the active target layer
+    viewer.layers.selection.active = placeholder
 
     # Add one keypoint for animal1
     store.current_keypoint = keypoints.Keypoint("bodypart1", "animal1")
@@ -263,6 +291,7 @@ def test_color_scheme_panel_multianimal_toggle_shows_active_then_full_config_ind
 
     qtbot.waitUntil(lambda: placeholder.data is not None and len(placeholder.data) == 1, timeout=2_000)
     qtbot.waitUntil(lambda: placeholder.face_color_mode == "cycle", timeout=5_000)
+    qtbot.waitUntil(lambda: placeholder._face.color_properties.name == "id", timeout=5_000)
 
     panel = controls._color_scheme_panel
 

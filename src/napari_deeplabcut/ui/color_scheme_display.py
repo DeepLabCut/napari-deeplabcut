@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 from napari.layers import Points
 from qtpy.QtCore import Qt, QTimer, Signal
+from qtpy.QtGui import QShowEvent
 from qtpy.QtWidgets import (
     QCheckBox,
     QScrollArea,
@@ -453,6 +454,7 @@ class ColorSchemePanel(QWidget):
     ):
         super().__init__(parent)
         self.viewer = viewer
+        self._last_scheme: dict[str, str] | None = None
         self._disposed = False
         self._wired_layers: set[int] = set()
         self._connections: list[tuple[object, object]] = []
@@ -500,6 +502,35 @@ class ColorSchemePanel(QWidget):
             # Underlying C++ widget already deleted
             return False
 
+    def _is_effectively_visible(self) -> bool:
+        """
+        Best-effort visibility check for the docked panel content.
+
+        We want to no-op when the color scheme dock is hidden so frame stepping
+        and points edits do not keep resolving / repainting the legend.
+        """
+        if self._disposed:
+            return False
+
+        try:
+            if self.isHidden():
+                return False
+            parent = self.parentWidget()
+            while parent is not None:
+                if parent.isHidden():
+                    return False
+                parent = parent.parentWidget()
+        except RuntimeError:
+            return False
+
+        return True
+
+    def showEvent(self, event: QShowEvent):  # type: ignore[override]
+        super().showEvent(event)
+        # If we were hidden for a while, we may have skipped many updates.
+        # Refresh once when shown again.
+        self.schedule_update()
+
     def _connect(self, emitter, callback) -> None:
         """Connect and remember emitter/callback so we can disconnect later."""
         try:
@@ -541,7 +572,7 @@ class ColorSchemePanel(QWidget):
         self._connect(self.viewer.layers.selection.events.active, self.schedule_update)
         self._connect(self.viewer.layers.events.inserted, self._on_layers_changed)
         self._connect(self.viewer.layers.events.removed, self._on_layers_removed)
-        self._connect(self.viewer.dims.events.current_step, self.schedule_update)
+        self._connect(self.viewer.dims.events.current_step, self._on_current_step)
 
         for layer in list(self.viewer.layers):
             self._maybe_wire_layer(layer)
@@ -570,6 +601,24 @@ class ColorSchemePanel(QWidget):
         if self._disposed:
             return
         # We don't try to disconnect per-layer emitters defensively here; just refresh.
+        self.schedule_update()
+
+    def _on_current_step(self, event=None) -> None:
+        """
+        Frame-step updates only matter in ACTIVE mode.
+
+        In CONFIG mode the legend reflects configured categories, not currently
+        visible categories, so current_step should be a no-op.
+        """
+        if self._disposed:
+            return
+
+        if not self._is_effectively_visible():
+            return
+
+        if self.show_config_keypoints:
+            return
+
         self.schedule_update()
 
     def _maybe_wire_layer(self, layer) -> None:
@@ -609,6 +658,14 @@ class ColorSchemePanel(QWidget):
         if self._disposed:
             return
 
+        if not self._is_effectively_visible():
+            try:
+                if self._update_timer.isActive():
+                    self._update_timer.stop()
+            except RuntimeError:
+                pass
+            return
+
         try:
             if self._update_timer.isActive():
                 return
@@ -626,6 +683,9 @@ class ColorSchemePanel(QWidget):
         if self._disposed:
             return
 
+        if not self._is_effectively_visible():
+            return
+
         try:
             scheme = self._resolver.resolve(show_config_keypoints=self.show_config_keypoints)
         except RuntimeError:
@@ -636,9 +696,13 @@ class ColorSchemePanel(QWidget):
             return
 
         try:
-            self.display.reset()
+            if scheme == self._last_scheme:
+                return
+            self._last_scheme = dict(scheme)
             if scheme:
                 self.display.update_color_scheme(scheme)
+            else:
+                self.display.reset()
         except RuntimeError:
             # display already deleted
             return

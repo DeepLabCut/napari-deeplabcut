@@ -137,13 +137,32 @@ class KeypointsDropdownMenu(QWidget):
         """Set current keypoint to the first unlabeled one."""
         if self._locked:
             return
+
+        # Skip work for explicitly hidden/inactive menus, but do not require the
+        # widget to be shown yet: tests and some construction paths invoke this
+        # before a top-level show().
+        try:
+            if self.isHidden():
+                return
+        except RuntimeError:
+            return
+
+        keypoints_ = getattr(self.store, "_keypoints", None) or []
+        if not keypoints_:
+            return
+
         unannotated = ""
         already_annotated = self.store.annotated_keypoints
-        for keypoint in self.store._keypoints:
+        for keypoint in keypoints_:
             if keypoint not in already_annotated:
                 unannotated = keypoint
                 break
-        self.store.current_keypoint = unannotated if unannotated else self.store._keypoints[0]
+
+        target = unannotated if unannotated else keypoints_[0]
+
+        # Avoid redundant setter/event churn on every frame step.
+        if self.store.current_keypoint != target:
+            self.store.current_keypoint = target
 
 
 class ClickableLabel(QLabel):

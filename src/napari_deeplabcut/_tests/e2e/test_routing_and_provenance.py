@@ -37,7 +37,9 @@ def forbid_project_config_dialog(monkeypatch):
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+def test_save_routes_to_correct_gt_when_multiple_gt_exist(
+    viewer, keypoint_controls, qtbot, tmp_path, overwrite_confirm
+):
     """
     Contract: Saving a Points layer must write back ONLY to the file it came from.
     No 'first CollectedData*.h5' selection when multiple exist.
@@ -50,13 +52,6 @@ def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qt
     gt_a, gt_b = gt_paths
 
     before = {p: _snapshot_coords(p) for p in gt_paths}
-
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
-
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
-
     # Open both GT files explicitly so we get two Points layers
     viewer.open(str(gt_a), plugin="napari-deeplabcut")
     viewer.open(str(gt_b), plugin="napari-deeplabcut")
@@ -67,7 +62,7 @@ def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qt
     points_b = next((ly for ly in viewer.layers if isinstance(ly, Points) and ly.name == gt_b.stem), None)
     assert points_b is not None, f"Expected a Points layer named {gt_b.stem}"
 
-    store_b = controls._stores.get(points_b)
+    store_b = keypoint_controls._stores.get(points_b)
     assert store_b is not None
 
     # Fill NaNs for bodypart2 in B only (no overwrite dialog)
@@ -93,7 +88,7 @@ def test_save_routes_to_correct_gt_when_multiple_gt_exist(make_napari_viewer, qt
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_machine_layer_does_not_modify_gt_on_save(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+def test_machine_layer_does_not_modify_gt_on_save(viewer, keypoint_controls, qtbot, tmp_path, overwrite_confirm):
     """
     Contract: machine outputs must never save to their own file.
     Users must explicitly provide a scorer name that is then used to save the h5.
@@ -107,12 +102,6 @@ def test_machine_layer_does_not_modify_gt_on_save(make_napari_viewer, qtbot, tmp
 
     before = {p: _snapshot_coords(p) for p in gt_paths + [machine_path]}
 
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
-
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
-
     viewer.open(str(machine_path), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: len([ly for ly in viewer.layers if isinstance(ly, Points)]) >= 1, timeout=10_000)
     qtbot.wait(200)
@@ -120,7 +109,7 @@ def test_machine_layer_does_not_modify_gt_on_save(make_napari_viewer, qtbot, tmp
     machine_layer = next((ly for ly in viewer.layers if isinstance(ly, Points) and ly.name == machine_path.stem), None)
     assert machine_layer is not None
 
-    store = controls._stores.get(machine_layer)
+    store = keypoint_controls._stores.get(machine_layer)
     assert store is not None
 
     # Fill NaNs in machine file (no overwrite prompt)
@@ -142,7 +131,7 @@ def test_machine_layer_does_not_modify_gt_on_save(make_napari_viewer, qtbot, tmp
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_layer_rename_does_not_change_save_target(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+def test_layer_rename_does_not_change_save_target(viewer, keypoint_controls, qtbot, tmp_path, overwrite_confirm):
     """
     Contract: layer renaming must not redirect output or create new file.
     """
@@ -155,19 +144,13 @@ def test_layer_rename_does_not_change_save_target(make_napari_viewer, qtbot, tmp
 
     before = {p: _snapshot_coords(p) for p in gt_paths}
 
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
-
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
-
     viewer.open(str(gt_a), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: len([ly for ly in viewer.layers if isinstance(ly, Points)]) >= 1, timeout=10_000)
     qtbot.wait(200)
 
     layer = next((ly for ly in viewer.layers if isinstance(ly, Points) and ly.name == gt_a.stem), None)
     assert layer is not None
-    store = controls._stores.get(layer)
+    store = keypoint_controls._stores.get(layer)
     assert store is not None
 
     # Rename in UI
@@ -189,7 +172,7 @@ def test_layer_rename_does_not_change_save_target(make_napari_viewer, qtbot, tmp
 
 @pytest.mark.usefixtures("qtbot")
 def test_ambiguous_placeholder_save_aborts_when_multiple_gt_exist(
-    make_napari_viewer, qtbot, tmp_path, overwrite_confirm
+    viewer, keypoint_controls, qtbot, tmp_path, overwrite_confirm
 ):
     """
     Contract: If provenance is missing and multiple candidate GT files exist,
@@ -203,12 +186,7 @@ def test_ambiguous_placeholder_save_aborts_when_multiple_gt_exist(
 
     before = {p: _snapshot_coords(p) for p in gt_paths}
 
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints
-
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
     # Open config first => placeholder points layer
     viewer.open(str(config_path), plugin="napari-deeplabcut")
@@ -225,7 +203,7 @@ def test_ambiguous_placeholder_save_aborts_when_multiple_gt_exist(
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
     qtbot.wait(200)
 
-    store = controls._stores.get(placeholder)
+    store = keypoint_controls._stores.get(placeholder)
     assert store is not None
 
     # Add a point to placeholder
@@ -247,7 +225,7 @@ def test_ambiguous_placeholder_save_aborts_when_multiple_gt_exist(
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_folder_open_loads_all_h5_when_multiple_exist(make_napari_viewer, qtbot, tmp_path):
+def test_folder_open_loads_all_h5_when_multiple_exist(viewer, qtbot, tmp_path):
     """
     Contract: Opening a labeled-data folder with multiple H5 files should not
     silently pick the first one. Preferred policy: load all as separate Points layers.
@@ -255,8 +233,6 @@ def test_folder_open_loads_all_h5_when_multiple_exist(make_napari_viewer, qtbot,
     project, config_path, labeled_folder, gt_paths, machine_path = _make_dlc_project_with_multiple_gt(
         tmp_path, scorers=("John", "Jane"), with_machine=True
     )
-
-    viewer = make_napari_viewer()
 
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)  # images + points at least
@@ -286,7 +262,7 @@ def test_folder_open_loads_all_h5_when_multiple_exist(make_napari_viewer, qtbot,
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_config_first_save_writes_gt_into_dataset_folder(make_napari_viewer, qtbot, tmp_path, overwrite_confirm):
+def test_config_first_save_writes_gt_into_dataset_folder(viewer, keypoint_controls, qtbot, tmp_path, overwrite_confirm):
     """
     Regression: config-first workflow must save CollectedData_<scorer>.h5 inside
     project/labeled-data/<dataset>/, not next to config.yaml.
@@ -294,12 +270,6 @@ def test_config_first_save_writes_gt_into_dataset_folder(make_napari_viewer, qtb
     overwrite_confirm.forbid()
 
     project, config_path, labeled_folder = _make_project_config_and_frames_no_gt(tmp_path)
-
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
-
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
     # Open config first -> placeholder points layer
     viewer.open(str(config_path), plugin="napari-deeplabcut")
@@ -314,7 +284,7 @@ def test_config_first_save_writes_gt_into_dataset_folder(make_napari_viewer, qtb
     assert pts_layers, "Expected a Points layer from config.yaml"
 
     points = pts_layers[0]
-    store = controls._stores.get(points)
+    store = keypoint_controls._stores.get(points)
     assert store is not None
 
     # Add a point and save
@@ -333,7 +303,7 @@ def test_config_first_save_writes_gt_into_dataset_folder(make_napari_viewer, qtb
 
 @pytest.mark.usefixtures("qtbot")
 def test_promotion_first_save_prompts_and_creates_sidecar(
-    make_napari_viewer, qtbot, tmp_path, inputdialog, forbid_project_config_dialog
+    viewer, keypoint_controls, qtbot, tmp_path, inputdialog, forbid_project_config_dialog
 ):
     """
     First save on a machine/prediction layer (no config.yaml, no sidecar):
@@ -347,12 +317,6 @@ def test_promotion_first_save_prompts_and_creates_sidecar(
     machine_path = labeled_folder / "machinelabels-iter0.h5"
     machine_pre = pd.read_hdf(machine_path, key="keypoints")
 
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
-
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
-
     # Open folder
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
@@ -364,7 +328,7 @@ def test_promotion_first_save_prompts_and_creates_sidecar(
     machine_layer = next(p for p in pts_layers if p.name == "machinelabels-iter0")
 
     # Edit: add bodypart2 (use helper that works across versions)
-    store = controls._stores.get(machine_layer)
+    store = keypoint_controls._stores.get(machine_layer)
     assert store is not None
     _set_or_add_bodypart_xy(machine_layer, store, "bodypart2", x=44.0, y=33.0)
 
@@ -373,14 +337,14 @@ def test_promotion_first_save_prompts_and_creates_sidecar(
 
     # Save via the widget path (ensures prompt runs)
     viewer.layers.selection.active = machine_layer
-    controls.viewer.layers.selection.active = machine_layer
-    controls.viewer.layers.selection.select_only(machine_layer)
+    keypoint_controls.viewer.layers.selection.active = machine_layer
+    keypoint_controls.viewer.layers.selection.select_only(machine_layer)
 
     assert "io" in machine_layer.metadata
     assert machine_layer.metadata["io"].get("kind") in ("machine", AnnotationKind.MACHINE)
 
     # Call your menu-hooked save action (this hits promotion logic)
-    controls._save_layers_dialog(selected=True)
+    keypoint_controls._save_layers_dialog(selected=True)
     qtbot.wait(200)
     assert "save_target" in machine_layer.metadata, machine_layer.metadata.keys()
 
@@ -400,7 +364,7 @@ def test_promotion_first_save_prompts_and_creates_sidecar(
 
 @pytest.mark.usefixtures("qtbot")
 def test_promotion_second_save_uses_sidecar_no_prompt(
-    make_napari_viewer, qtbot, tmp_path, inputdialog, forbid_project_config_dialog
+    viewer, keypoint_controls, qtbot, tmp_path, inputdialog, forbid_project_config_dialog
 ):
     """
     After sidecar exists, saving again must not prompt:
@@ -417,10 +381,7 @@ def test_promotion_second_save_uses_sidecar_no_prompt(
     machine_path = labeled_folder / "machinelabels-iter0.h5"
     machine_pre = pd.read_hdf(machine_path, key="keypoints")
 
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
-
-    controls = KeypointControls(viewer)
+    controls = keypoint_controls
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
@@ -452,7 +413,8 @@ def test_promotion_second_save_uses_sidecar_no_prompt(
 
 @pytest.mark.usefixtures("qtbot")
 def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_dlc_row_keys(
-    make_napari_viewer,
+    viewer,
+    keypoint_controls,
     qtbot,
     tmp_path,
     monkeypatch,
@@ -492,19 +454,14 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     outside_img = outside_dir / "img999.png"
     outside_img.write_bytes(b"placeholder")
 
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints
-
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
     # Open config first -> placeholder points layer
     viewer.open(str(config_path), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
 
     points = next(ly for ly in viewer.layers if isinstance(ly, Points))
-    store = controls._stores.get(points)
+    store = keypoint_controls._stores.get(points)
     assert store is not None
 
     # Simulate project-less folder metadata:
@@ -550,10 +507,10 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     )
 
     viewer.layers.selection.active = points
-    controls.viewer.layers.selection.active = points
-    controls.viewer.layers.selection.select_only(points)
+    keypoint_controls.viewer.layers.selection.active = points
+    keypoint_controls.viewer.layers.selection.select_only(points)
 
-    controls._save_layers_dialog(selected=True)
+    keypoint_controls._save_layers_dialog(selected=True)
     qtbot.wait(300)
 
     # After project association, save should route into the chosen project's
@@ -599,7 +556,8 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
 
 @pytest.mark.usefixtures("qtbot")
 def test_projectless_folder_save_refuses_when_target_dataset_folder_already_contains_files(
-    make_napari_viewer,
+    viewer,
+    keypoint_controls,
     qtbot,
     tmp_path,
     monkeypatch,
@@ -627,18 +585,13 @@ def test_projectless_folder_save_refuses_when_target_dataset_folder_already_cont
     external_img = external_folder / "img_external.png"
     external_img.write_bytes(b"placeholder")
 
-    viewer = make_napari_viewer()
-    from napari_deeplabcut._widgets import KeypointControls
     from napari_deeplabcut.core import keypoints
-
-    controls = KeypointControls(viewer)
-    viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
 
     viewer.open(str(config_path), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
 
     points = next(ly for ly in viewer.layers if isinstance(ly, Points))
-    store = controls._stores.get(points)
+    store = keypoint_controls._stores.get(points)
     assert store is not None
 
     points.metadata = dict(points.metadata or {})
@@ -669,10 +622,10 @@ def test_projectless_folder_save_refuses_when_target_dataset_folder_already_cont
         lambda *args, **kwargs: True,
     )
 
-    viewer.layers.selection.active = points
-    controls.viewer.layers.selection.select_only(points)
+    keypoint_controls.viewer.layers.selection.active = points
+    keypoint_controls.viewer.layers.selection.select_only(points)
 
-    controls._save_layers_dialog(selected=True)
+    keypoint_controls._save_layers_dialog(selected=True)
     qtbot.wait(200)
 
     assert warned.get("called", False), "Expected conflict warning for populated target dataset folder."

@@ -45,7 +45,7 @@ email = "admin@deeplabcut.org"
 [project.entry-points."napari.manifest"]
 napari-deeplabcut = "napari_deeplabcut:napari.yaml"
 [project.optional-dependencies]
-testing = [
+dev = [
   "pillow",
   "pytest",
   "pytest-cov",

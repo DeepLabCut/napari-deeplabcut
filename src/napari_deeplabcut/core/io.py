@@ -12,8 +12,10 @@ Includes:
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
+import os
 from collections.abc import Callable
 from importlib import resources
 from pathlib import Path
@@ -33,6 +35,7 @@ from pydantic import ValidationError
 from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, PointsMetadata
 from napari_deeplabcut.config.settings import DEFAULT_SINGLE_ANIMAL_CMAP
+from napari_deeplabcut.config.supported_files import SUPPORTED_IMAGES, SUPPORTED_VIDEOS
 from napari_deeplabcut.core import schemas as dlc_schemas
 from napari_deeplabcut.core.dataframes import (
     form_df_from_validated,
@@ -44,7 +47,7 @@ from napari_deeplabcut.core.dataframes import (
 )
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
-from napari_deeplabcut.core.metadata import attach_source_and_io, parse_points_metadata
+from napari_deeplabcut.core.metadata import attach_source_and_io_to_layer_kwargs, parse_points_metadata
 from napari_deeplabcut.core.project_paths import canonicalize_path, infer_dlc_project_from_points_meta
 from napari_deeplabcut.core.provenance import resolve_output_path_from_metadata
 
@@ -53,9 +56,12 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # Supported formats (shared by image/video readers)
 # -----------------------------------------------------------------------------
-# FIXME move to config/data_formats.py or similar if more formats are added
-SUPPORTED_IMAGES = (".jpg", ".jpeg", ".png")
-SUPPORTED_VIDEOS = (".mp4", ".mov", ".avi")
+_GLOB_MAGIC = set("*?[")
+_SUPPORTED_SUFFIXES = {ext.lower() for ext in SUPPORTED_IMAGES}
+
+
+def _has_glob_magic(name: str) -> bool:
+    return any(ch in name for ch in _GLOB_MAGIC)
 
 
 # =============================================================================
@@ -103,7 +109,7 @@ def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
 # KEYPOINTS / ANNOTATIONS (HDF5)
 # =============================================================================
 # NOTE: This reader returns a napari Points layer (data + metadata + "points")
-# and attaches provenance via attach_source_and_io.
+# and attaches provenance via attach_source_and_io_to_layer_kwargs.
 
 
 def read_hdf(filename: str) -> list[LayerData]:
@@ -191,12 +197,12 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     if kind is not None:
         meta = layer_props.setdefault("metadata", {})
         # Keep legacy source fields too
-        attach_source_and_io(layer_props, file)
+        attach_source_and_io_to_layer_kwargs(layer_props, file)
         # Override kind in io with explicit kind arg
         if isinstance(meta.get("io"), dict):
             meta["io"]["kind"] = kind  # stored as actual enum, not value
     else:
-        attach_source_and_io(layer_props, file)
+        attach_source_and_io_to_layer_kwargs(layer_props, file)
 
     return [(data, layer_props, "points")]
 
@@ -496,22 +502,68 @@ def _normalize_to_rgb(arr: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
 
 
-def _expand_image_paths(path: str | Path | list[str | Path] | tuple[str | Path, ...]) -> list[Path]:
-    # Normalize input to list[Path]
-    raw_paths = [Path(p) for p in path] if isinstance(path, (list, tuple)) else [Path(path)]
+# FIXME remove later
+# def _expand_image_paths(path: str | Path | list[str | Path] | tuple[str | Path, ...]) -> list[Path]:
+#     # Normalize input to list[Path]
+#     raw_paths = [Path(p) for p in path] if isinstance(path, (list, tuple)) else [Path(path)]
 
+#     expanded: list[Path] = []
+#     for p in tqdm(raw_paths, desc="Expanding image paths", leave=False, unit="files"):
+#         if p.is_dir() and p.suffix.lower() != ".zarr":
+#             file_matches: list[Path] = []
+#             for ext in SUPPORTED_IMAGES:
+#                 file_matches.extend(p.glob(f"*{ext}"))
+#             expanded.extend(x for x in natsorted(file_matches, key=str) if x.is_file())
+#         else:
+#             matches = list(p.parent.glob(p.name))
+#             expanded.extend(matches or [p])
+
+#     return [p for p in expanded if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGES]
+
+
+def _expand_image_paths(path: str | Path | list[str | Path] | tuple[str | Path, ...]) -> list[Path]:
+    raw_paths = [Path(p) for p in path] if isinstance(path, (list, tuple)) else [Path(path)]
     expanded: list[Path] = []
+
     for p in raw_paths:
         if p.is_dir() and p.suffix.lower() != ".zarr":
-            file_matches: list[Path] = []
-            for ext in SUPPORTED_IMAGES:
-                file_matches.extend(p.glob(f"*{ext}"))
-            expanded.extend(x for x in natsorted(file_matches, key=str) if x.is_file())
-        else:
-            matches = list(p.parent.glob(p.name))
-            expanded.extend(matches or [p])
+            try:
+                with os.scandir(p) as it:
+                    files = [
+                        Path(entry.path)
+                        for entry in it
+                        if entry.is_file() and Path(entry.name).suffix.lower() in _SUPPORTED_SUFFIXES
+                    ]
+            except OSError:
+                continue
 
-    return [p for p in expanded if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGES]
+            files.sort(key=lambda q: q.name)
+            expanded.extend(files)
+            continue
+
+        if not _has_glob_magic(p.name):
+            if p.is_file() and p.suffix.lower() in _SUPPORTED_SUFFIXES:
+                expanded.append(p)
+            continue
+
+        parent = p.parent if str(p.parent) else Path(".")
+        pattern = p.name
+        try:
+            with os.scandir(parent) as it:
+                matches = [
+                    Path(entry.path)
+                    for entry in it
+                    if entry.is_file()
+                    and fnmatch.fnmatchcase(entry.name, pattern)
+                    and Path(entry.name).suffix.lower() in _SUPPORTED_SUFFIXES
+                ]
+        except OSError:
+            continue
+
+        matches.sort(key=lambda q: q.name)
+        expanded.extend(matches)
+
+    return expanded
 
 
 # Lazy image reader that supports directories and lists of files

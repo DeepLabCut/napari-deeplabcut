@@ -17,6 +17,8 @@ from napari_deeplabcut.ui.color_scheme_display import (
     _to_hex,
 )
 
+from ..conftest import force_show
+
 
 def _header_model_from_layer(layer) -> DLCHeaderModel:
     hdr = layer.metadata.get("header")
@@ -294,6 +296,7 @@ def test_panel_initial_active_mode_updates_display_from_current_frame(
         get_header_model=get_header_model,
     )
     qtbot.addWidget(panel)
+    force_show(panel, qtbot)
 
     expected = _expected_scheme_from_policy(layer, prop="label", names=["nose"])
     qtbot.waitUntil(lambda: panel.display.scheme_dict == expected)
@@ -328,6 +331,7 @@ def test_panel_reacts_to_frame_change_event(
         get_header_model=get_header_model,
     )
     qtbot.addWidget(panel)
+    force_show(panel, qtbot)
 
     expected0 = _expected_scheme_from_policy(layer, prop="label", names=["nose"])
     qtbot.waitUntil(lambda: panel.display.scheme_dict == expected0)
@@ -365,6 +369,7 @@ def test_panel_toggle_switches_from_active_to_config_preview(
         get_header_model=get_header_model,
     )
     qtbot.addWidget(panel)
+    force_show(panel, qtbot)
 
     # Active mode should show the currently visible label from the layer.
     expected_active = _expected_scheme_from_policy(layer, prop="label", names=["nose"])
@@ -376,6 +381,7 @@ def test_panel_toggle_switches_from_active_to_config_preview(
     qtbot.waitUntil(lambda: panel.display.scheme_dict == expected_config)
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_color_scheme_panel_delete_later_does_not_crash_on_pending_update(qtbot, fake_viewer, get_header_model):
     panel = ColorSchemePanel(
         viewer=fake_viewer,
