@@ -10,8 +10,8 @@ from napari_deeplabcut.core import schemas as dlc_schemas
 from napari_deeplabcut.core.dataframes import set_df_scorer
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.metadata import parse_points_metadata
+from napari_deeplabcut.core.project_paths import infer_dlc_project_from_points_meta
 from napari_deeplabcut.core.provenance import (
-    infer_dataset_folder_from_points_meta,
     resolve_output_path_from_metadata,
 )
 
@@ -99,7 +99,8 @@ def compute_overwrite_report_for_points_save(
 
     # Same GT fallback logic as write_hdf(...)
     if not out_path:
-        dataset_dir = infer_dataset_folder_from_points_meta(pts_meta)
+        project_ctx = infer_dlc_project_from_points_meta(pts_meta, prefer_project_root=False)
+        dataset_dir = project_ctx.dataset_folder
 
         if dataset_dir is not None:
             dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -151,6 +152,56 @@ def compute_overwrite_report_for_points_save(
     report = build_overwrite_conflict_report(
         key_conflict,
         layer_name=attributes.get("name"),
+        destination_path=str(out),
+    )
+
+    return report if report.has_conflicts else None
+
+
+def compute_overwrite_report_for_extracted_labels_row(
+    destination_path: str | Path,
+    df_new: pd.DataFrame,
+    *,
+    layer_name: str | None = None,
+) -> OverwriteConflictReport | None:
+    """
+    Compute an overwrite-conflict report for a single extracted-frame labels row
+    being merged into an existing machinelabels-iter0.h5 file.
+
+    Parameters
+    ----------
+    destination_path:
+        Existing or prospective machinelabels file.
+    df_new:
+        A one-row DLC-style dataframe for the extracted frame, indexed by the
+        canonical image path tuple.
+    layer_name:
+        Optional display name for the source layer in the dialog.
+
+    Returns
+    -------
+    OverwriteConflictReport | None
+        Report if overwrites would occur, otherwise None.
+    """
+    from napari_deeplabcut.core.dataframes import (
+        build_overwrite_conflict_report,
+        keypoint_conflicts,
+    )
+
+    out = Path(destination_path)
+    if not out.exists():
+        return None
+
+    try:
+        df_old = pd.read_hdf(out, key="df_with_missing")
+    except (KeyError, ValueError):
+        df_old = pd.read_hdf(out)
+
+    key_conflict = keypoint_conflicts(df_old, df_new)
+
+    report = build_overwrite_conflict_report(
+        key_conflict,
+        layer_name=layer_name or "Extracted frame labels",
         destination_path=str(out),
     )
 

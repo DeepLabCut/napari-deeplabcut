@@ -17,7 +17,7 @@ from napari_deeplabcut.core.io import (
     read_images,
     read_video,
 )
-from napari_deeplabcut.core.paths import looks_like_dlc_labeled_folder
+from napari_deeplabcut.core.project_paths import looks_like_dlc_labeled_folder
 
 logger = logging.getLogger(__name__)
 
