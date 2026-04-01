@@ -975,30 +975,49 @@ class KeypointControls(QWidget):
         show = self._view_scheme_cb.isChecked()
         self._color_scheme_display.setVisible(show)
 
-    def _current_points_layer(self) -> Points | None:
+    def _current_dlc_points_layer(self) -> Points | None:
         active = self.viewer.layers.selection.active
-        if isinstance(active, Points):
-            return active
-        return None
+        if not isinstance(active, Points):
+            return None
+
+        try:
+            res = read_points_meta(active, migrate_legacy=True, drop_controls=True, drop_header=False)
+        except Exception:
+            return None
+
+        if isinstance(res, ValidationError):
+            return None
+
+        if getattr(res, "header", None) is None:
+            return None
+
+        return active
 
     def _refresh_layer_status_panel(self) -> None:
-        active_points = self._current_points_layer()
+        active_layer = self.viewer.layers.selection.active
+        active_dlc_points = self._current_dlc_points_layer()
         active_image = find_relevant_image_layer(self.viewer)
 
         folder_name = infer_folder_display_name(
-            active_image if active_image is not None else active_points,
+            active_image if active_image is not None else active_layer,
             fallback_root=self._image_meta.root,
         )
         self._layer_status_panel.set_folder_name(folder_name)
 
-        if active_points is None:
+        # No active layer or not a Points layer at all
+        if active_layer is None or not isinstance(active_layer, Points):
             self._layer_status_panel.set_no_active_points_layer()
             return
 
-        self._layer_status_panel.set_point_size_enabled(True)
-        self._layer_status_panel.set_point_size(get_uniform_point_size(active_points))
+        # Active layer is a Points layer, but not a valid DLC points layer
+        if active_dlc_points is None:
+            self._layer_status_panel.set_invalid_points_layer()
+            return
 
-        progress = compute_label_progress(active_points, fallback_paths=self._image_meta.paths)
+        self._layer_status_panel.set_point_size_enabled(True)
+        self._layer_status_panel.set_point_size(get_uniform_point_size(active_dlc_points))
+
+        progress = compute_label_progress(active_dlc_points, fallback_paths=self._image_meta.paths)
         self._layer_status_panel.set_progress_summary(
             labeled_percent=progress.labeled_percent,
             remaining_percent=progress.remaining_percent,
@@ -1010,7 +1029,7 @@ class KeypointControls(QWidget):
         )
 
     def _on_active_points_size_changed(self, size: int) -> None:
-        layer = self._current_points_layer()
+        layer = self._current_dlc_points_layer()
         if layer is None:
             return
 
@@ -1028,7 +1047,7 @@ class KeypointControls(QWidget):
             )
 
     def _commit_active_points_size_to_config(self, size: int) -> None:
-        layer = self._current_points_layer()
+        layer = self._current_dlc_points_layer()
         if layer is None:
             return
 
