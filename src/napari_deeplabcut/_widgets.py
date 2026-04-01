@@ -1083,12 +1083,12 @@ class KeypointControls(QWidget):
     def _form_help_buttons(self):
         layout = QVBoxLayout()
         help_buttons_layout = QHBoxLayout()
-        show_shortcuts = QPushButton("View shortcuts")
-        show_shortcuts.clicked.connect(self.display_shortcuts)
-        help_buttons_layout.addWidget(show_shortcuts)
-        tutorial = QPushButton("Start tutorial")
-        tutorial.clicked.connect(self.start_tutorial)
-        help_buttons_layout.addWidget(tutorial)
+        self.show_shortcuts_btn = QPushButton("View shortcuts")
+        self.show_shortcuts_btn.clicked.connect(self.display_shortcuts)
+        help_buttons_layout.addWidget(self.show_shortcuts_btn)
+        self.tutorial_btn = QPushButton("Start tutorial")
+        self.tutorial_btn.clicked.connect(self.start_tutorial)
+        help_buttons_layout.addWidget(self.tutorial_btn)
         layout.addLayout(help_buttons_layout)
         self._keypoint_mapping_button = QPushButton("Load superkeypoints diagram")
         self._load_superkeypoints_action = self._keypoint_mapping_button.clicked.connect(
