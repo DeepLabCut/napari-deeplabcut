@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TypeVar
 
 import numpy as np
-
-try:
-    # napari is an optional dependency at import time in some test setups
-    from napari.layers import Image, Layer, Points, Shapes, Tracks
-except Exception:  # pragma: no cover
-    Image = Points = Shapes = Tracks = Layer = object  # type: ignore
+from napari.layers import Image, Points, Shapes, Tracks
 
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 from napari_deeplabcut.core.keypoints import build_color_cycles
@@ -209,3 +206,187 @@ def get_first_shapes_layer(viewer_or_layers: Any) -> Any | None:
 
 def get_first_tracks_layer(viewer_or_layers: Any) -> Any | None:
     return find_first_layer(viewer_or_layers, Tracks)
+
+
+@dataclass(frozen=True)
+class LabelProgress:
+    labeled_points: int
+    total_points: int
+    labeled_percent: float
+    remaining_percent: float
+    frame_count: int
+    bodypart_count: int
+    individual_count: int
+
+
+def _get_header_model_from_metadata(md: dict) -> DLCHeaderModel | None:
+    if not isinstance(md, dict):
+        return None
+
+    hdr = md.get("header")
+    if hdr is None:
+        return None
+
+    if isinstance(hdr, DLCHeaderModel):
+        return hdr
+
+    if isinstance(hdr, dict):
+        try:
+            return DLCHeaderModel.model_validate(hdr)
+        except Exception:
+            return None
+
+    try:
+        return DLCHeaderModel(columns=hdr)
+    except Exception:
+        return None
+
+
+def get_uniform_point_size(layer: Points, *, default: int = 6) -> int:
+    size = getattr(layer, "size", default)
+    try:
+        arr = np.asarray(size, dtype=float).ravel()
+        if arr.size == 0:
+            return default
+        return int(round(float(np.nanmean(arr))))
+    except Exception:
+        try:
+            return int(round(float(size)))
+        except Exception:
+            return default
+
+
+def set_uniform_point_size(layer: Points, size: int) -> None:
+    # Scalar assignment keeps it lightweight and applies uniformly.
+    layer.size = float(size)
+
+
+def infer_frame_count(layer: Points, *, fallback_paths: list[str] | None = None) -> int:
+    md = getattr(layer, "metadata", {}) or {}
+
+    paths = md.get("paths") or fallback_paths or []
+    if paths:
+        return len(paths)
+
+    data = np.asarray(getattr(layer, "data", []))
+    if data.size == 0:
+        return 0
+
+    try:
+        # Points layers use frame/time in first column
+        return int(np.nanmax(data[:, 0])) + 1
+    except Exception:
+        return 0
+
+
+def infer_bodypart_count(layer: Points) -> int:
+    hdr = _get_header_model_from_metadata(getattr(layer, "metadata", {}) or {})
+    if hdr is None:
+        return 0
+
+    try:
+        return len([bp for bp in hdr.bodyparts if str(bp) != ""])
+    except Exception:
+        return 0
+
+
+def infer_individual_count(layer: Points) -> int:
+    """
+    Returns the number of valid DLC individuals.
+
+    Single-animal convention:
+    - if no individuals are defined
+    - or individuals are empty / blank
+    => returns 1
+    """
+    hdr = _get_header_model_from_metadata(getattr(layer, "metadata", {}) or {})
+    if hdr is None:
+        return 1
+
+    try:
+        inds = [str(ind) for ind in hdr.individuals if str(ind) != ""]
+        return max(1, len(inds))
+    except Exception:
+        return 1
+
+
+def compute_label_progress(layer: Points, *, fallback_paths: list[str] | None = None) -> LabelProgress:
+    frame_count = infer_frame_count(layer, fallback_paths=fallback_paths)
+    bodypart_count = infer_bodypart_count(layer)
+    individual_count = infer_individual_count(layer)
+
+    total_points = frame_count * bodypart_count * individual_count
+
+    data = np.asarray(getattr(layer, "data", []))
+    labeled_points = int(data.shape[0]) if data.ndim >= 2 else 0
+
+    if total_points > 0:
+        labeled_points = min(labeled_points, total_points)
+        labeled_percent = 100.0 * labeled_points / total_points
+    else:
+        labeled_percent = 0.0
+
+    remaining_percent = max(0.0, 100.0 - labeled_percent)
+
+    return LabelProgress(
+        labeled_points=labeled_points,
+        total_points=total_points,
+        labeled_percent=labeled_percent,
+        remaining_percent=remaining_percent,
+        frame_count=frame_count,
+        bodypart_count=bodypart_count,
+        individual_count=individual_count,
+    )
+
+
+def infer_folder_display_name(
+    active_layer,
+    *,
+    fallback_root: str | None = None,
+) -> str:
+    """
+    Best-effort label for the current image/video folder context.
+    """
+    if active_layer is None:
+        return "—"
+
+    md = getattr(active_layer, "metadata", {}) or {}
+
+    paths = md.get("paths") or []
+    if paths:
+        try:
+            return Path(paths[0]).expanduser().parent.name or "—"
+        except Exception:
+            pass
+
+    root = md.get("root") or fallback_root
+    if root:
+        try:
+            return Path(root).expanduser().name or "—"
+        except Exception:
+            pass
+
+    try:
+        src = getattr(getattr(active_layer, "source", None), "path", None)
+        if src:
+            p = Path(str(src))
+            if p.is_file():
+                # video source: show parent folder name
+                return p.parent.name or p.stem or "—"
+            return p.name or "—"
+    except Exception:
+        pass
+
+    return "—"
+
+
+def find_relevant_image_layer(viewer) -> Image | None:
+    active = viewer.layers.selection.active
+    if isinstance(active, Image):
+        return active
+
+    for layer in viewer.layers:
+        if isinstance(layer, Image):
+            return layer
+
+    return None

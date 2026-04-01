@@ -44,12 +44,22 @@ from napari_deeplabcut.config.keybinds import (
 )
 from napari_deeplabcut.config.models import DLCHeaderModel, ImageMetadata, PointsMetadata
 from napari_deeplabcut.core import keypoints
+from napari_deeplabcut.core.config_sync import (
+    load_point_size_from_config,
+    resolve_config_path_from_layer,
+    save_point_size_to_config,
+)
 from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
 from napari_deeplabcut.core.layers import (
+    compute_label_progress,
+    find_relevant_image_layer,
     get_first_points_layer,
     get_points_layer_with_tables,
+    get_uniform_point_size,
+    infer_folder_display_name,
     is_machine_layer,
+    set_uniform_point_size,
 )
 from napari_deeplabcut.core.metadata import (
     MergePolicy,
@@ -103,6 +113,7 @@ from napari_deeplabcut.ui.labels_and_dropdown import (
     DropdownMenu,
     KeypointsDropdownMenu,
 )
+from napari_deeplabcut.ui.layer_stats import LayerStatusPanel
 from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
@@ -248,6 +259,18 @@ class KeypointControls(QWidget):
         grid.addWidget(self._trail_cb, 2, 0)
         grid.addWidget(self._view_scheme_cb, 3, 0)
 
+        # UX / status panel (folder, progress, point size)
+        self._layer_status_panel = LayerStatusPanel(self)
+        self._layer_status_panel.point_size_changed.connect(self._on_active_points_size_changed)
+        self._layer_status_panel.point_size_commit_requested.connect(self._commit_active_points_size_to_config)
+        self._layout.addWidget(self._layer_status_panel)
+
+        self._pending_config_point_size_write: tuple[Path, int] | None = None
+        self._config_point_size_write_timer = QTimer(self)
+        self._config_point_size_write_timer.setSingleShot(True)
+        self._config_point_size_write_timer.setInterval(350)  # lightweight debounce
+        self._config_point_size_write_timer.timeout.connect(self._flush_pending_point_size_config_write)
+
         self._layout.addLayout(grid)
 
         # form buttons for selection of annotation mode
@@ -332,6 +355,9 @@ class KeypointControls(QWidget):
         # If layers already exist (user loaded data before opening this widget),
         # adopt them so keypoint controls take ownership immediately.
         QTimer.singleShot(0, self._adopt_existing_layers)
+
+        # Refresh layers stats widget
+        QTimer.singleShot(0, self._refresh_layer_status_panel)
 
     # ######################## #
     # Layer setup core methods #
@@ -503,6 +529,8 @@ class KeypointControls(QWidget):
 
         # apply cycles (works even if empty; see method)
         self._apply_points_coloring_from_metadata(layer)
+        self._maybe_initialize_layer_point_size_from_config(layer)
+        self._connect_layer_status_events(layer)
         # refresh trails if enabled (e.g. when merging a config points layer with trails metadata)
         self._trails_controller.on_points_layer_added_or_rewired(checkbox_checked=self._trail_cb.isChecked())
 
@@ -932,6 +960,126 @@ class KeypointControls(QWidget):
         show = self._view_scheme_cb.isChecked()
         self._color_scheme_display.setVisible(show)
 
+    def _current_points_layer(self) -> Points | None:
+        active = self.viewer.layers.selection.active
+        if isinstance(active, Points):
+            return active
+        return None
+
+    def _refresh_layer_status_panel(self) -> None:
+        active_points = self._current_points_layer()
+        active_image = find_relevant_image_layer(self.viewer)
+
+        folder_name = infer_folder_display_name(
+            active_image if active_image is not None else active_points,
+            fallback_root=self._image_meta.root,
+        )
+        self._layer_status_panel.set_folder_name(folder_name)
+
+        if active_points is None:
+            self._layer_status_panel.set_no_active_points_layer()
+            return
+
+        self._layer_status_panel.set_point_size_enabled(True)
+        self._layer_status_panel.set_point_size(get_uniform_point_size(active_points))
+
+        progress = compute_label_progress(active_points, fallback_paths=self._image_meta.paths)
+        self._layer_status_panel.set_progress_summary(
+            labeled_percent=progress.labeled_percent,
+            remaining_percent=progress.remaining_percent,
+            labeled_points=progress.labeled_points,
+            total_points=progress.total_points,
+            frame_count=progress.frame_count,
+            bodypart_count=progress.bodypart_count,
+            individual_count=progress.individual_count,
+        )
+
+    def _on_active_points_size_changed(self, size: int) -> None:
+        layer = self._current_points_layer()
+        if layer is None:
+            return
+
+        set_uniform_point_size(layer, size)
+        mark_layer_presentation_changed(layer)
+
+        config_path = resolve_config_path_from_layer(layer, fallback_project=self._project_path)
+        if config_path is not None:
+            self._pending_config_point_size_write = (config_path, int(size))
+            self._config_point_size_write_timer.start()
+        else:
+            logger.debug(
+                "No config.yaml could be resolved for active layer %r",
+                getattr(layer, "name", layer),
+            )
+
+    def _commit_active_points_size_to_config(self, size: int) -> None:
+        layer = self._current_points_layer()
+        if layer is None:
+            return
+
+        config_path = resolve_config_path_from_layer(layer, fallback_project=self._project_path)
+        if config_path is None:
+            logger.debug(
+                "No config.yaml could be resolved at commit time for active layer %r",
+                getattr(layer, "name", layer),
+            )
+            return
+
+        self._pending_config_point_size_write = (config_path, int(size))
+        self._flush_pending_point_size_config_write()
+
+    def _maybe_initialize_layer_point_size_from_config(self, layer: Points) -> None:
+        config_path = resolve_config_path_from_layer(layer, fallback_project=self._project_path)
+        if config_path is None:
+            return
+
+        config_size = load_point_size_from_config(config_path)
+        if config_size is None:
+            return
+
+        current_size = get_uniform_point_size(layer)
+
+        # Conservative initialization
+        if current_size <= 8:
+            try:
+                set_uniform_point_size(layer, config_size)
+                mark_layer_presentation_changed(layer)
+            except Exception:
+                logger.debug("Could not initialize layer point size from config", exc_info=True)
+
+    def _flush_pending_point_size_config_write(self) -> None:
+        pending = self._pending_config_point_size_write
+        self._pending_config_point_size_write = None
+        if pending is None:
+            return
+
+        config_path, size = pending
+        try:
+            changed = save_point_size_to_config(config_path, size)
+            if changed:
+                self.viewer.status = f"Updated config dotsize to {size}"
+        except Exception:
+            logger.debug("Failed to sync point size to config", exc_info=True)
+
+    def _connect_layer_status_events(self, layer: Points) -> None:
+        """
+        Keep the UX panel live without adding heavy watchers.
+        """
+        try:
+            layer.events.data.connect(lambda event=None, _layer=layer: self._refresh_layer_status_panel())
+        except Exception:
+            pass
+
+        try:
+            layer.events.size.connect(lambda event=None, _layer=layer: self._refresh_layer_status_panel())
+        except Exception:
+            pass
+
+        try:
+            layer.events.properties.connect(lambda event=None, _layer=layer: self._refresh_layer_status_panel())
+        except Exception:
+            pass
+
     def _form_help_buttons(self):
         layout = QVBoxLayout()
         help_buttons_layout = QHBoxLayout()
@@ -1212,6 +1360,7 @@ class KeypointControls(QWidget):
             if not isinstance(layer_, Image):
                 self._remap_frame_indices(layer_)
         self._refresh_video_panel_context()
+        self._refresh_layer_status_panel()
 
     def on_remove(self, event):
         layer = event.value
@@ -1249,6 +1398,7 @@ class KeypointControls(QWidget):
                     self._trail_cb.setChecked(False)
 
         self._refresh_video_panel_context()
+        self._refresh_layer_status_panel()
 
     def _on_show_trails_toggled(self, state):
         self._trails_controller.toggle(Qt.CheckState(state) == Qt.CheckState.Checked)
@@ -1491,6 +1641,7 @@ class KeypointControls(QWidget):
                 menu.setHidden(True)
 
         self._refresh_video_panel_context()
+        self._refresh_layer_status_panel()
 
     def _update_colormap(self, colormap_name: str):
         for layer in self.viewer.layers.selection:
