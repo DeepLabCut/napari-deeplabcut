@@ -38,7 +38,7 @@ uv add napari-deeplabcut
 ```
 
 > [!NOTE]
-> A conda environment is not strictly required, please use your preferred package manager!
+> A conda environment is not strictly required. Please use your preferred package manager!
 
 ### Latest development version
 
