@@ -265,12 +265,6 @@ class KeypointControls(QWidget):
         self._layer_status_panel.point_size_commit_requested.connect(self._commit_active_points_size_to_config)
         self._layout.addWidget(self._layer_status_panel)
 
-        self._pending_config_point_size_write: tuple[Path, int] | None = None
-        self._config_point_size_write_timer = QTimer(self)
-        self._config_point_size_write_timer.setSingleShot(True)
-        self._config_point_size_write_timer.setInterval(350)  # lightweight debounce
-        self._config_point_size_write_timer.timeout.connect(self._flush_pending_point_size_config_write)
-
         self._layout.addLayout(grid)
 
         # form buttons for selection of annotation mode
@@ -1036,16 +1030,6 @@ class KeypointControls(QWidget):
         set_uniform_point_size(layer, size)
         mark_layer_presentation_changed(layer)
 
-        config_path = self._resolve_config_path_for_layer(layer)
-        if config_path is not None:
-            self._pending_config_point_size_write = (config_path, int(size))
-            self._config_point_size_write_timer.start()
-        else:
-            logger.debug(
-                "No config.yaml could be resolved for active layer %r",
-                getattr(layer, "name", layer),
-            )
-
     def _commit_active_points_size_to_config(self, size: int) -> None:
         layer = self._current_dlc_points_layer()
         if layer is None:
@@ -1059,8 +1043,12 @@ class KeypointControls(QWidget):
             )
             return
 
-        self._pending_config_point_size_write = (config_path, int(size))
-        self._flush_pending_point_size_config_write()
+        try:
+            changed = save_point_size_to_config(config_path, int(size))
+            if changed:
+                self.viewer.status = f"Updated config dotsize to {int(size)}"
+        except Exception:
+            logger.debug("Failed to sync point size to config", exc_info=True)
 
     def _maybe_initialize_layer_point_size_from_config(self, layer: Points) -> None:
         config_path = self._resolve_config_path_for_layer(layer)
@@ -1080,20 +1068,6 @@ class KeypointControls(QWidget):
                 mark_layer_presentation_changed(layer)
             except Exception:
                 logger.debug("Could not initialize layer point size from config", exc_info=True)
-
-    def _flush_pending_point_size_config_write(self) -> None:
-        pending = self._pending_config_point_size_write
-        self._pending_config_point_size_write = None
-        if pending is None:
-            return
-
-        config_path, size = pending
-        try:
-            changed = save_point_size_to_config(config_path, size)
-            if changed:
-                self.viewer.status = f"Updated config dotsize to {size}"
-        except Exception:
-            logger.debug("Failed to sync point size to config", exc_info=True)
 
     def _connect_layer_status_events(self, layer: Points) -> None:
         """
