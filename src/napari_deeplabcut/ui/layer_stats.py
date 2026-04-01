@@ -43,6 +43,9 @@ class LayerStatusPanel(QGroupBox):
         self._size_slider.setValue(6)
 
         self._size_value = QLabel("6")
+        self._size_value.setToolTip(
+            "Global point size for all keypoints layers. Saved to config.yaml as dotsize when changed."
+        )
         self._size_value.setMinimumWidth(28)
         self._size_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -107,7 +110,7 @@ class LayerStatusPanel(QGroupBox):
             f"{labeled_percent:.1f}% labeled"  # • {remaining_percent:.1f}% remaining "
             # f"({labeled_points}/{total_points} points = {breakdown})"
         )
-        self._progress_value.setToolTip(f"{labeled_points}/{total_points} points labeled • {breakdown}")
+        self._progress_value.setToolTip(f"{labeled_points}/{total_points} of all possible points labeled • {breakdown}")
 
     def set_no_active_points_layer(self) -> None:
         self._progress_value.setText("No active keypoints layer")
