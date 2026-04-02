@@ -83,12 +83,12 @@ from napari_deeplabcut.core.project_paths import (
     PathMatchPolicy,
     coerce_paths_to_dlc_row_keys,
     dataset_folder_has_files,
+    find_nearest_config,
     resolve_project_root_from_config,
     target_dataset_folder_for_config,
 )
 from napari_deeplabcut.core.provenance import (
     apply_gt_save_target,
-    find_nearest_config,
     is_projectless_folder_association_candidate,
     requires_gt_promotion,
     suggest_human_placeholder,
