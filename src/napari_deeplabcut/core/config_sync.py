@@ -163,6 +163,13 @@ def load_point_size_from_config(config_path: str | Path | None) -> int | None:
         logger.debug("Could not read config file %r", config_path, exc_info=True)
         return None
 
+    if not isinstance(cfg, dict):
+        logger.debug(
+            "Config file %r did not contain a mapping; ignoring for point-size load.",
+            config_path,
+        )
+        return None
+
     if _POINT_SIZE_KEY in cfg:
         return _coerce_point_size(cfg.get(_POINT_SIZE_KEY))
     return None
@@ -188,6 +195,13 @@ def save_point_size_to_config(config_path: str | Path | None, size: int) -> bool
     except Exception:
         logger.debug("Could not read config file %r", config_path, exc_info=True)
         return False
+
+    if not isinstance(cfg, dict):
+        logger.debug(
+            "Config file %r did not contain a mapping; replacing with empty config for point-size sync.",
+            config_path,
+        )
+        cfg = {}
 
     old_value = cfg.get(_POINT_SIZE_KEY, None)
 
