@@ -79,6 +79,8 @@ class LayerStatusPanel(QGroupBox):
 
     def _on_value_changed_commit(self, value: int) -> None:
         self._size_value.setText(str(int(value)))
+        # Ensure non-mouse / programmatic changes also update the visual layer size
+        self.point_size_changed.emit(int(value))  # visual update on commit
         self.point_size_commit_requested.emit(int(value))  # save / persist
 
     def _emit_commit(self) -> None:
