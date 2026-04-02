@@ -1,4 +1,13 @@
-"""Main widget and controls for napari-deeplabcut, including the tutorial and shortcuts windows."""
+"""Main widget and controls for napari-deeplabcut, including the tutorial and shortcuts windows.
+
+NOTE: This file is generally already too long. For future development, please consider:
+- Moving existing responsibilities out into separate modules (existing or new)
+- Avoiding adding anything that is not strictly related to :
+  - Building the final UI (blocks can be moved to ui/ for better organization)
+  - Wiring to the core plugin functionality (e.g. via signals/slots, method calls, etc.)
+  - Anything that requires the full widget+viewer+signal/event context to function properly
+  - Similarly, test_widgets.py is a bit of a default drawer right now, please create new tests in _tests/ui
+"""
 
 # src/napari_deeplabcut/_widgets.py
 from __future__ import annotations
@@ -79,7 +88,7 @@ from napari_deeplabcut.core.project_paths import (
 )
 from napari_deeplabcut.core.provenance import (
     apply_gt_save_target,
-    find_config_scorer_nearby,
+    find_nearest_config,
     is_projectless_folder_association_candidate,
     requires_gt_promotion,
     suggest_human_placeholder,
@@ -1447,31 +1456,89 @@ class KeypointControls(QWidget):
             QMessageBox.warning(self, "Cannot save", "Could not determine a folder anchor for saving.")
             return False
 
-        scorer = find_config_scorer_nearby(anchor) or get_default_scorer(anchor)
-        if not scorer:
-            suggested = suggest_human_placeholder(anchor)
-            while True:
-                s = _prompt_for_scorer(self, anchor=anchor, suggested=suggested)
-                if s is None:
-                    return False
-                if s.startswith("human_"):
-                    choice = QMessageBox.question(
-                        self,
-                        "Generic scorer name",
-                        "You entered a generic scorer name starting with 'human_'.\n\n"
-                        "We strongly recommend using a real name or stable identifier.\n"
-                        "Do you want to keep this generic scorer anyway?",
-                        QMessageBox.Yes | QMessageBox.No,
-                    )
-                    if choice == QMessageBox.No:
-                        suggested = s
-                        continue
-                scorer = s
-                break
+        scorer = None
+
+        # 1) Auto-discovered config.yaml always wins
+        cfg_path = None
+        try:
+            cfg_path = find_nearest_config(anchor)
+        except Exception:
+            logger.debug("Automatic config discovery failed for anchor=%r", anchor, exc_info=True)
+
+        if cfg_path:
             try:
-                set_default_scorer(anchor, scorer)
+                scorer = ui_dialogs.load_scorer_from_config(cfg_path)
             except Exception:
-                logger.debug("Failed to persist default scorer to sidecar", exc_info=True)
+                logger.exception("Failed to load auto-discovered config.yaml: %s", cfg_path)
+                ui_dialogs.warn_invalid_config_for_scorer(
+                    self,
+                    config_path=cfg_path,
+                    reason="unreadable",
+                    auto_found=True,
+                )
+                return False
+
+            if not scorer:
+                ui_dialogs.warn_invalid_config_for_scorer(
+                    self,
+                    config_path=cfg_path,
+                    reason="missing_scorer",
+                    auto_found=True,
+                )
+                return False
+
+        else:
+            # 2) No config found automatically -> let the user choose one
+            dialog_result = ui_dialogs.prompt_for_project_config_for_save(
+                self,
+                initial_dir=self._project_path or anchor,
+                window_title="Locate DLC config for scorer resolution",
+                message=(
+                    "No DeepLabCut config.yaml could be found automatically for this machine-labeled layer.\n\n"
+                    "If this layer belongs to a DLC project, choose its config.yaml so the save uses the "
+                    "project scorer and standard naming.\n\n"
+                    "If no config.yaml exists, you can continue without one."
+                ),
+                choose_button_text="Choose config.yaml",
+                skip_button_text="Continue without config",
+                resolve_scorer=True,
+            )
+
+            if dialog_result.action is ui_dialogs.ProjectConfigPromptAction.CANCEL:
+                return False
+
+            if dialog_result.action is ui_dialogs.ProjectConfigPromptAction.ASSOCIATE:
+                scorer = dialog_result.scorer
+
+            else:
+                # 3) Only if no config is available at all may sidecar be consulted
+                scorer = get_default_scorer(anchor)
+
+                # 4) Final fallback: prompt manually
+                if not scorer:
+                    suggested = suggest_human_placeholder(anchor)
+                    while True:
+                        s = _prompt_for_scorer(self, anchor=anchor, suggested=suggested)
+                        if s is None:
+                            return False
+                        if s.startswith("human_"):
+                            choice = QMessageBox.question(
+                                self,
+                                "Generic scorer name",
+                                "You entered a generic scorer name starting with 'human_'.\n\n"
+                                "We strongly recommend using a real name or stable identifier.\n"
+                                "Do you want to keep this generic scorer anyway?",
+                                QMessageBox.Yes | QMessageBox.No,
+                            )
+                            if choice == QMessageBox.No:
+                                suggested = s
+                                continue
+                        scorer = s
+                        break
+                    try:
+                        set_default_scorer(anchor, scorer)
+                    except Exception:
+                        logger.debug("Failed to persist default scorer to sidecar", exc_info=True)
 
         updated = apply_gt_save_target(
             pts,

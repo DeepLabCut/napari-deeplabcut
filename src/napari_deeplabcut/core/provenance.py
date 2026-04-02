@@ -7,12 +7,13 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import ValidationError
 
-import napari_deeplabcut.core.io as io
-from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import AnnotationKind, IOProvenance, PointsMetadata
 from napari_deeplabcut.core.errors import MissingProvenanceError, UnresolvablePathError
 from napari_deeplabcut.core.metadata import parse_points_metadata
-from napari_deeplabcut.core.project_paths import infer_dlc_project_from_points_meta, is_windows_absolute_path
+from napari_deeplabcut.core.project_paths import (
+    infer_dlc_project_from_points_meta,
+    is_windows_absolute_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,22 +21,6 @@ logger = logging.getLogger(__name__)
 # ----------------------------------------
 # Helper functions
 # ----------------------------------------
-def find_config_scorer_nearby(anchor: str) -> str | None:
-    """
-    Best-effort lookup of DLC config.yaml scorer near a folder anchor.
-    """
-    try:
-        cfg_path = misc.find_project_config_path(anchor)
-        if cfg_path:
-            cfg = io.load_config(cfg_path)
-            scorer = cfg.get("scorer")
-            if isinstance(scorer, str) and scorer.strip():
-                return scorer.strip()
-    except Exception:
-        pass
-    return None
-
-
 def suggest_human_placeholder(anchor: str) -> str:
     """
     Deterministic fallback scorer placeholder derived from anchor path.
