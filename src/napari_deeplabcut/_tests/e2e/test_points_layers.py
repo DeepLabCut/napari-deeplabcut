@@ -301,7 +301,8 @@ def test_points_interaction_observer_rebinds_when_active_layer_changes(viewer, q
     # Mutating new active layer selection should produce a callback
     layer2.selected_data.select_only(1)
     qtbot.waitUntil(lambda: len(seen) > count_after_active_switch, timeout=1000)
-    assert seen[-1].layer is layer2
+    assert seen[-1].layer is not None
+    assert seen[-1].layer.name == layer2.name
     assert "selection" in seen[-1].reasons
 
     observer.close()

@@ -15,6 +15,7 @@ import matplotlib.style as mplstyle
 import napari
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvas, NavigationToolbar2QT
+from napari.layers import Points
 from napari.utils.events import Event
 from qtpy.QtCore import QSize, Qt, QTimer
 from qtpy.QtGui import QIcon
@@ -190,16 +191,6 @@ class KeypointMatplotlibCanvas(QWidget):
     def refresh_from_viewer_layers(self) -> None:
         """
         Refresh the trajectory plot from the current viewer state.
-
-        This is safe to call:
-        - after drag/drop loads that happened before the widget was opened
-        - after layer adoption / remap
-        - after later explicit layer changes
-
-        It intentionally:
-        1) reloads the dataframe from the current Points layer
-        2) updates the slider max from the current Image/Video layer
-        3) re-syncs visible lines to current point selection
         """
         try:
             self._load_dataframe()
@@ -215,6 +206,53 @@ class KeypointMatplotlibCanvas(QWidget):
             self.sync_visible_lines_to_points_selection()
         except Exception:
             logger.debug("Trajectory plot: failed to sync visible lines to point selection", exc_info=True)
+
+    def _get_plot_points_layer(self):
+        """
+        Return the first Points layer that looks plottable for DLC trajectories.
+
+        A generic napari Points layer may not have the DLC header required by io.form_df.
+        """
+        for layer in self.viewer.layers:
+            if not isinstance(layer, Points):
+                continue
+
+            md = getattr(layer, "metadata", None) or {}
+            data = getattr(layer, "data", None)
+
+            if md.get("header") is None:
+                continue
+            if data is None or len(data) == 0:
+                continue
+
+            return layer
+
+        return None
+
+    def _clear_plot(self) -> None:
+        """Clear plotted trajectories and reset axes."""
+        self.df = None
+        self._lines = {}
+
+        self.ax.clear()
+        self.ax.set_xlabel("Frame")
+        self.ax.set_ylabel("Y position")
+        self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
+        self._apply_napari_theme()
+
+    def _has_refreshable_df(self) -> bool:
+        """
+        Return True if self.df looks like something we can safely use with len(...).
+
+        This keeps selection-only tests and partial UI states from crashing.
+        """
+        if self.df is None:
+            return False
+        try:
+            len(self.df)
+        except Exception:
+            return False
+        return True
 
     def _apply_axis_theme(self) -> None:
         """Force axis/text colors to match napari theme."""
@@ -263,10 +301,10 @@ class KeypointMatplotlibCanvas(QWidget):
 
     def _load_dataframe(self, event=None) -> None:
         with mplstyle.context(self.mpl_style_sheet_path):
-            points_layer = get_first_points_layer(self.viewer)
-            data = getattr(points_layer, "data", None)
-
-            if points_layer is None or data is None or len(data) == 0:
+            points_layer = self._get_plot_points_layer()
+            if points_layer is None:
+                # No plottable DLC points layer present -> clear the plot quietly.
+                self._clear_plot()
                 return
 
             # Silly hack so the window does not hang the first time it is shown
@@ -279,8 +317,14 @@ class KeypointMatplotlibCanvas(QWidget):
                     layer_metadata=points_layer.metadata,
                     layer_properties=points_layer.properties,
                 )
+            except KeyError as e:
+                # Generic / incomplete points layer: not an error for the UI, just skip plotting.
+                logger.debug("Trajectory plot skipped for non-DLC/incomplete points layer: %r", e)
+                self._clear_plot()
+                return
             except Exception as e:
                 logger.error("Failed to form DataFrame from points layer: %r", e, exc_info=True)
+                self._clear_plot()
                 return
 
             image_layer = get_first_video_image_layer(self.viewer)
@@ -306,20 +350,21 @@ class KeypointMatplotlibCanvas(QWidget):
                     height = None
 
             for keypoint in self.df.columns.get_level_values("bodyparts").unique():
-                y = (
-                    self.df.xs(
-                        (keypoint, "y"),
-                        axis=1,
-                        level=["bodyparts", "coords"],
-                    )
-                    .to_numpy()
-                    .squeeze()
-                )
-                x = np.arange(len(y))
+                y = self.df.xs(
+                    (keypoint, "y"),
+                    axis=1,
+                    level=["bodyparts", "coords"],
+                ).to_numpy()
+
+                # Important: a single-row dataframe can squeeze to a scalar.
+                y = np.atleast_1d(np.asarray(y).squeeze())
+                x = np.arange(y.shape[0])
+
                 try:
                     color = points_layer.metadata["face_color_cycles"]["label"][keypoint]
                 except Exception:
                     color = "C0"
+
                 lines = self.ax.plot(x, y, color=color, label=str(keypoint))
                 self._lines[str(keypoint)] = lines
 
@@ -350,7 +395,8 @@ class KeypointMatplotlibCanvas(QWidget):
         self._set_visible_keypoints({keypoint})
 
     def _refresh_canvas(self, value: int) -> None:
-        if self.df is None:
+        if not self._has_refreshable_df():
+            self.canvas.draw_idle()
             return
 
         with mplstyle.context(self.mpl_style_sheet_path):
@@ -402,7 +448,8 @@ class KeypointMatplotlibCanvas(QWidget):
             for artist in artists:
                 artist.set_visible(show)
 
-        self._refresh_canvas(value=self._n)
+        if self.isVisible():
+            self._refresh_canvas(value=self._n)
 
     def _show_all_keypoints(self) -> None:
         """Show all trajectories."""
@@ -413,7 +460,8 @@ class KeypointMatplotlibCanvas(QWidget):
             for artist in artists:
                 artist.set_visible(True)
 
-        self._refresh_canvas(value=self._n)
+        if self.isVisible():
+            self._refresh_canvas(value=self._n)
 
     def _selected_bodyparts_from_points_layer(self) -> set[str]:
         """
