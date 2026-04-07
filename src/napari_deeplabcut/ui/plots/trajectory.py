@@ -292,23 +292,34 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
     def _get_plot_points_layer(self):
         """
-        Return the first Points layer that looks plottable for DLC trajectories.
+        Return the active plottable Points layer for DLC trajectories when possible.
 
         A generic napari Points layer may not have the DLC header required by io.form_df.
+        If the active layer is not a suitable DLC Points layer, fall back to the first
+        plottable Points layer in the viewer.
         """
-        for layer in self.viewer.layers:
+
+        def _is_plottable_points_layer(layer) -> bool:
             if not isinstance(layer, Points):
-                continue
+                return False
 
             md = getattr(layer, "metadata", None) or {}
             data = getattr(layer, "data", None)
 
             if md.get("header") is None:
-                continue
+                return False
             if data is None or len(data) == 0:
-                continue
+                return False
 
-            return layer
+            return True
+
+        active_layer = getattr(getattr(self.viewer.layers, "selection", None), "active", None)
+        if _is_plottable_points_layer(active_layer):
+            return active_layer
+
+        for layer in self.viewer.layers:
+            if _is_plottable_points_layer(layer):
+                return layer
 
         return None
 
