@@ -134,7 +134,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
         slider_row.addWidget(self.slider_value, stretch=0)
         layout.addLayout(slider_row, stretch=0)
 
-        self.setLayout(layout)
+        # self.setLayout(layout)
 
         self.frames = []
         self.keypoints = []
@@ -295,10 +295,10 @@ class TrajectoryMatplotlibCanvas(QWidget):
                 action.setToolTip("Zoom to rectangle; Click once to activate; Click again to deactivate")
             if text:
                 icon_path = Path(icon_dir) / f"{text}.png"
-                try:
-                    action.setIcon(self.toolbar._qicon(icon_path))
-                except AttributeError:
-                    logger.debug(f"Failed to set toolbar icon from {icon_path}", exc_info=True)
+                if icon_path.is_file():
+                    action.setIcon(QIcon(str(icon_path)))
+                else:
+                    logger.debug(f"Failed to set toolbar icon from {icon_path}: file does not exist")
 
     def _load_dataframe(self, event=None) -> None:
         with mplstyle.context(self.mpl_style_sheet_path):
@@ -466,20 +466,23 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
     def _selected_bodyparts_from_points_layer(self) -> set[str]:
         """
-        Return the set of selected bodypart labels from the active Points layer.
+        Return the set of selected bodypart labels from the Points layer used
+        to build the trajectory plot.
 
         Notes
         -----
         - We intentionally key visibility by `label` because this plot currently
         groups trajectories by bodypart name.
-        - If the active layer is not a Points layer, we fall back to the first
-        Points layer for backward compatibility.
+        - We use the same Points layer selection policy as the plotting code so
+        selection-driven visibility cannot drift out of sync with the plotted
+        dataframe.
         - If nothing is selected, returns an empty set.
         """
-        active_layer = getattr(self.viewer.layers.selection, "active", None)
-        if isinstance(active_layer, Points):
-            points_layer = active_layer
-        else:
+        points_layer = None
+        get_plot_points_layer = getattr(self, "_get_plot_points_layer", None)
+        if callable(get_plot_points_layer):
+            points_layer = get_plot_points_layer()
+        if points_layer is None:
             points_layer = get_first_points_layer(self.viewer)
         if points_layer is None:
             return set()

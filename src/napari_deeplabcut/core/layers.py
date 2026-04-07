@@ -445,10 +445,16 @@ def capture_points_state(
     This is intentionally separate from the observer so callers can choose
     whether they want lightweight interaction events or heavier snapshots.
     """
+    data = getattr(layer, "data", None)
+    try:
+        n_points = 0 if data is None else len(data)
+    except Exception:
+        n_points = 0
+
     state: dict[str, Any] = {
         "name": getattr(layer, "name", None),
         "selected_data": tuple(sorted(int(i) for i in getattr(layer, "selected_data", set()) or set())),
-        "n_points": len(getattr(layer, "data", []) or []),
+        "n_points": n_points,
     }
 
     if include_data:

@@ -204,7 +204,9 @@ class KeypointControls(QWidget):
         # for future-proofing
         def _close_event(event):
             self.on_close(event)
-            self._points_interactions.close()
+            points_inter = getattr(self, "_points_interactions", None)
+            if points_inter is not None:
+                points_inter.close()
             # if accepted, call original
             if event.isAccepted():
                 orig_close_event(event)
