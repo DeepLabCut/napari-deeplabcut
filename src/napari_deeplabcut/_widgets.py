@@ -125,7 +125,7 @@ from napari_deeplabcut.ui.labels_and_dropdown import (
     KeypointsDropdownMenu,
 )
 from napari_deeplabcut.ui.layer_stats import LayerStatusPanel
-from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
+from napari_deeplabcut.ui.plots.trajectory import TrajectoryMatplotlibCanvas
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
 # logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
@@ -257,10 +257,10 @@ class KeypointControls(QWidget):
         )
 
         self._mpl_docked = False
-        self._matplotlib_canvas = KeypointMatplotlibCanvas(self.viewer)
+        self._traj_mpl_canvas = TrajectoryMatplotlibCanvas(self.viewer)
         self._show_traj_plot_cb = QCheckBox("Show trajectories", parent=self)
         self._show_traj_plot_cb.setToolTip("Toggle to see trajectories in a t-y plot outside of the main video viewer")
-        self._show_traj_plot_cb.stateChanged.connect(self._show_matplotlib_canvas)
+        self._show_traj_plot_cb.stateChanged.connect(self._show_traj_canvas)
         self._show_traj_plot_cb.setChecked(False)
         self._show_traj_plot_cb.setEnabled(False)
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
@@ -363,7 +363,7 @@ class KeypointControls(QWidget):
         # NOTE while a timer may seem hacky, it is a simple, one-line solution that minimizes intrusion
         # There are to my knowledge no other way that is as concise and clean
         # (Of course this will be a problem if we start using it everywhere so do not reuse lightly)
-        QTimer.singleShot(10, self.silently_dock_matplotlib_canvas)
+        QTimer.singleShot(10, self.silently_dock_canvas)
 
         # If layers already exist (user loaded data before opening this widget),
         # adopt them so keypoint controls take ownership immediately.
@@ -654,7 +654,7 @@ class KeypointControls(QWidget):
 
         QTimer.singleShot(0, _do)
 
-    def _ensure_mpl_canvas_docked(self) -> None:
+    def _ensure_traj_canvas_docked(self) -> None:
         """
         Dock the Matplotlib canvas as a napari dock widget, exactly once,
         and only if the Qt window exists. Safe no-op in headless/proxy teardown.
@@ -670,34 +670,49 @@ class KeypointControls(QWidget):
             return
 
         try:
-            window.add_dock_widget(self._matplotlib_canvas, name="Trajectory plot", area="right", tabify=False)
-            self._matplotlib_canvas.canvas.draw_idle()
-            self._matplotlib_canvas.hide()
+            window.add_dock_widget(self._traj_mpl_canvas, name="Trajectory plot", area="right", tabify=False)
+            self._traj_mpl_canvas.canvas.draw_idle()
+            self._traj_mpl_canvas.hide()
             self._mpl_docked = True
         except Exception as e:
             logging.debug("Skipping docking KeypointMatplotlibCanvas (not ready / teardown): %r", e)
             return
 
-    def silently_dock_matplotlib_canvas(self) -> None:
-        """Dock the Matplotlib canvas without showing it."""
-        self._ensure_mpl_canvas_docked()
-        if self._mpl_docked:
-            self._matplotlib_canvas.hide()
+    def _safe_get_traj_canvas(self):
+        canvas = getattr(self, "_traj_mpl_canvas", None)
+        if canvas is None:
+            return None
 
-    def _show_matplotlib_canvas(self, state):
+        try:
+            # Any Qt call is enough to verify the underlying C++ object still exists
+            canvas.isVisible()
+        except RuntimeError:
+            # Underlying Qt object was already deleted
+            self._traj_mpl_canvas = None
+            return None
+
+        return canvas
+
+    def silently_dock_canvas(self) -> None:
+        """Dock the Matplotlib canvas without showing it."""
+        self._ensure_traj_canvas_docked()
+        if self._mpl_docked:
+            self._traj_mpl_canvas.hide()
+
+    def _show_traj_canvas(self, state):
         if Qt.CheckState(state) == Qt.CheckState.Checked:
-            self._ensure_mpl_canvas_docked()
+            self._ensure_traj_canvas_docked()
             if self._mpl_docked:
-                self._matplotlib_canvas._apply_napari_theme()
-                self._matplotlib_canvas.update_plot_range(
+                self._traj_mpl_canvas._apply_napari_theme()
+                self._traj_mpl_canvas.update_plot_range(
                     Event(type_name="", value=[self.viewer.dims.current_step[0]]),
                     force=True,
                 )
-                self._matplotlib_canvas.sync_visible_lines_to_points_selection()
-                self._matplotlib_canvas.show()
+                self._traj_mpl_canvas.sync_visible_lines_to_points_selection()
+                self._traj_mpl_canvas.show()
         else:
             if self._mpl_docked:
-                self._matplotlib_canvas.hide()
+                self._traj_mpl_canvas.hide()
 
     def _on_points_interaction(self, event: PointsInteractionEvent) -> None:
         """
@@ -707,15 +722,11 @@ class KeypointControls(QWidget):
         - no selected points -> all trajectories
         - selected points    -> only selected labels' trajectories
         """
+        traj_canvas = self._safe_get_traj_canvas()
+        if traj_canvas is None or not traj_canvas.isVisible():
+            return
         if {"selection", "active_layer", "layers"} & set(event.reasons):
-            self._matplotlib_canvas.sync_visible_lines_to_points_selection()
-
-    # def _on_color_scheme_label_clicked(self, _text: str) -> None:
-    #     """
-    #     Let the color-scheme panel perform its normal point-selection logic first,
-    #     then sync the trajectory plot visibility to the resulting napari selection.
-    #     """
-    #     QTimer.singleShot(0, self._matplotlib_canvas.sync_visible_lines_to_points_selection)
+            traj_canvas.sync_visible_lines_to_points_selection()
 
     def _refresh_trajectory_plot_from_layers(self) -> None:
         """
@@ -723,7 +734,9 @@ class KeypointControls(QWidget):
 
         Deferred through QTimer so it runs after layer adoption/remap settles.
         """
-        QTimer.singleShot(0, self._matplotlib_canvas.refresh_from_viewer_layers)
+        traj_canvas = self._safe_get_traj_canvas()
+        if traj_canvas is not None:
+            QTimer.singleShot(0, traj_canvas.refresh_from_viewer_layers)
 
     def load_superkeypoints_diagram(self):
         points_layer = get_first_points_layer(self.viewer)

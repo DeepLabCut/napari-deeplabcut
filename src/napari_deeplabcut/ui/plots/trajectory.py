@@ -4,6 +4,7 @@ This module intentionally does not make decisions about what constitutes
 valid DLC points metadata; it only reads what it needs (face_color_cycles).
 """
 
+# src/napari_deeplabcut/ui/plots/trajectory.py
 from __future__ import annotations
 
 import logging
@@ -78,7 +79,7 @@ class NapariNavigationToolbar(NavigationToolbar2QT):
                 self._actions["zoom"].setIcon(self._qicon(Path(icon_dir) / "Zoom.png"))
 
 
-class KeypointMatplotlibCanvas(QWidget):
+class TrajectoryMatplotlibCanvas(QWidget):
     """Trajectory plot using matplotlib for keypoints (t-y plot)."""
 
     def __init__(self, napari_viewer, parent=None):

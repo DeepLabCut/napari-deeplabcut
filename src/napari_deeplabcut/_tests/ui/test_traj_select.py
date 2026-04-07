@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
+from napari_deeplabcut.ui.plots.trajectory import TrajectoryMatplotlibCanvas
 
 
 @pytest.mark.e2e
@@ -14,7 +14,7 @@ def test_sync_visible_lines_to_points_selection_shows_all_when_no_points_selecte
         properties={"label": np.array(["nose", "tail"], dtype=object)},
     )
 
-    canvas = KeypointMatplotlibCanvas(viewer)
+    canvas = TrajectoryMatplotlibCanvas(viewer)
     qtbot.addWidget(canvas)
 
     # Avoid relying on df creation for this focused visibility test
@@ -41,7 +41,7 @@ def test_sync_visible_lines_to_points_selection_filters_by_selected_labels(viewe
         properties={"label": np.array(["nose", "tail", "nose"], dtype=object)},
     )
 
-    canvas = KeypointMatplotlibCanvas(viewer)
+    canvas = TrajectoryMatplotlibCanvas(viewer)
     qtbot.addWidget(canvas)
 
     canvas.df = object()
@@ -68,7 +68,7 @@ def test_sync_visible_lines_to_points_selection_shows_label_if_any_selected_poin
         properties={"label": np.array(["nose", "tail", "nose"], dtype=object)},
     )
 
-    canvas = KeypointMatplotlibCanvas(viewer)
+    canvas = TrajectoryMatplotlibCanvas(viewer)
     qtbot.addWidget(canvas)
 
     canvas.df = object()

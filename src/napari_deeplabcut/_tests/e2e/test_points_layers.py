@@ -102,7 +102,7 @@ def test_layer_insert_does_not_crash_when_current_property_is_nan(viewer, keypoi
     layer = viewer.add_points(data, **md)
     # Plot cannot be formed because of the NaN,
     # but the layer must still be added and cycle mode must not be enabled.
-    assert keypoint_controls._matplotlib_canvas.df is None
+    assert keypoint_controls._traj_mpl_canvas.df is None
     assert isinstance(layer, Points)
     assert layer.face_color_mode != "cycle"
 

@@ -16,7 +16,7 @@ from napari_deeplabcut.core.io import populate_keypoint_layer_properties
 from napari_deeplabcut.ui.color_scheme_display import ColorSchemeDisplay
 from napari_deeplabcut.ui.dialogs import ShortcutRow
 from napari_deeplabcut.ui.labels_and_dropdown import KeypointsDropdownMenu, LabelPair
-from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
+from napari_deeplabcut.ui.plots.trajectory import TrajectoryMatplotlibCanvas
 
 from .conftest import force_show
 
@@ -235,7 +235,7 @@ def test_color_scheme_display(qtbot):
 @pytest.mark.usefixtures("qtbot")
 def test_matplotlib_canvas_initialization_and_slider(viewer, points, qtbot):
     # Create the canvas widget
-    canvas = KeypointMatplotlibCanvas(viewer)
+    canvas = TrajectoryMatplotlibCanvas(viewer)
     qtbot.add_widget(canvas)
 
     # Simulate adding a Points layer (triggers _load_dataframe)
@@ -289,7 +289,7 @@ def test_ensure_mpl_canvas_docked_already_docked(keypoint_controls, qtbot, monke
     # Ensure it wouldn't try to dock again
     monkeypatch.setattr(controls.viewer.window, "add_dock_widget", fake_add_dock_widget)
 
-    controls._ensure_mpl_canvas_docked()
+    controls._ensure_traj_canvas_docked()
     assert called["count"] == 0, "add_dock_widget should not be called when already docked"
     assert controls._mpl_docked is True  # stays docked
 
@@ -304,7 +304,7 @@ def test_ensure_mpl_canvas_docked_missing_window(keypoint_controls, qtbot):
     controls.viewer = types.SimpleNamespace()  # no 'window'
 
     controls._mpl_docked = False
-    controls._ensure_mpl_canvas_docked()
+    controls._ensure_traj_canvas_docked()
 
     # Nothing should change; crucially, no exceptions should be raised
     assert controls._mpl_docked is False
@@ -325,11 +325,11 @@ def test_trajectory_loader_ignores_invalid_properties(viewer, keypoint_controls,
 
     layer = viewer.add_points(np.array([[0.0, 10.0, 20.0]]), **md)
     assert layer is not None
-    assert keypoint_controls._matplotlib_canvas.df is None  # loader should have bailed out safely
+    assert keypoint_controls._traj_mpl_canvas.df is None  # loader should have bailed out safely
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_ensure_mpl_canvas_docked_missing_qt_window(keypoint_controls, qtbot):
+def test_ensure_traj_canvas_docked_missing_qt_window(keypoint_controls, qtbot):
     """If window._qt_window is None, method should safely no-op."""
     controls = keypoint_controls
     qtbot.add_widget(controls)
@@ -344,7 +344,7 @@ def test_ensure_mpl_canvas_docked_missing_qt_window(keypoint_controls, qtbot):
     controls.viewer = types.SimpleNamespace(window=DummyWindow())
 
     controls._mpl_docked = False
-    controls._ensure_mpl_canvas_docked()
+    controls._ensure_traj_canvas_docked()
 
     # Still undocked, no crash
     assert controls._mpl_docked is False
@@ -368,7 +368,7 @@ def test_ensure_mpl_canvas_docked_exception_during_docking(keypoint_controls, qt
     controls._mpl_docked = False
 
     # Should not raise
-    controls._ensure_mpl_canvas_docked()
+    controls._ensure_traj_canvas_docked()
 
     # Docking failed → remains undocked
     assert controls._mpl_docked is False
