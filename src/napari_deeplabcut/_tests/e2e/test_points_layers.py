@@ -259,8 +259,11 @@ def test_points_interaction_observer_emits_on_selected_data_change(viewer, qtbot
 
     qtbot.waitUntil(lambda: len(seen) >= 1, timeout=1000)
 
-    assert seen[-1].layer is layer
-    assert "selection" in seen[-1].reasons
+    evt = seen[-1]
+    assert evt.viewer is viewer
+    assert isinstance(evt.layer, Points)
+    assert "selection" in evt.reasons
+    assert tuple(sorted(evt.layer.selected_data)) == (1,)
 
     observer.close()
 
