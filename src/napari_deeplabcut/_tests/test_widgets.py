@@ -1,3 +1,7 @@
+"""
+NOTE: This file can be a litle non-specific, please ensure functionalities from ui/ are tested
+in the _tests/ui folder and consider moving tests below to more specific files as needed."""
+
 # src/napari_deeplabcut/_tests/test_widgets.py
 import os
 import types
