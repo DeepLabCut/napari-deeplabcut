@@ -19,18 +19,18 @@ def patch_color_manager_guess_continuous() -> None:
     try:
         import numpy as np
         from napari.layers.utils import color_manager
-    except Exception as e:
+    except Exception as e:  # pragma: no cover
         logger.debug("Skipping color_manager patch (napari import failed): %r", e)
         return
 
     def guess_continuous(property_):
         try:
             return issubclass(property_.dtype.type, np.floating)
-        except Exception:
+        except Exception:  # pragma: no cover
             return False
 
     try:
         color_manager.guess_continuous = guess_continuous
-    except Exception as e:
+    except Exception as e:  # pragma: no cover
         logger.debug("Skipping color_manager patch (assignment failed): %r", e)
         return
