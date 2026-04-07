@@ -23,6 +23,12 @@ from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QSlider, QVBoxLayout, QWidget
 
 import napari_deeplabcut.core.io as io
+from napari_deeplabcut.config.models import DLCHeaderModel
+from napari_deeplabcut.config.settings import (
+    DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP,
+    DEFAULT_SINGLE_ANIMAL_CMAP,
+)
+from napari_deeplabcut.core.keypoints import build_color_cycles
 from napari_deeplabcut.core.layers import (
     get_first_image_layer,
     get_first_video_image_layer,
@@ -81,11 +87,11 @@ class NapariNavigationToolbar(NavigationToolbar2QT):
 class TrajectoryMatplotlibCanvas(QWidget):
     """Trajectory plot using matplotlib for keypoints (t-y plot)."""
 
-    def __init__(self, napari_viewer, parent=None, get_color_mode=None):
+    def __init__(self, napari_viewer, parent=None, get_color_mode: callable = None):
         super().__init__(parent=parent)
 
         self.viewer = napari_viewer
-        self._get_color_mode = get_color_mode
+        self._get_color_mode = get_color_mode or (lambda: "bodypart")
 
         with mplstyle.context(self.mpl_style_sheet_path):
             self.canvas = FigureCanvas()
@@ -179,6 +185,54 @@ class TrajectoryMatplotlibCanvas(QWidget):
         """
         return QSize(280, 340)
 
+    def _get_header_model_from_metadata(self, md: dict) -> DLCHeaderModel | None:
+        """Return DLCHeaderModel from metadata['header'] when possible.
+        TODO: Check codebase for duplicate logic and centralize if needed.
+        """
+        if not isinstance(md, dict):
+            return None
+
+        hdr = md.get("header", None)
+        if hdr is None:
+            return None
+
+        if isinstance(hdr, DLCHeaderModel):
+            return hdr
+
+        if isinstance(hdr, dict):
+            try:
+                return DLCHeaderModel.model_validate(hdr)
+            except Exception:
+                return None
+
+        try:
+            return DLCHeaderModel(columns=hdr)
+        except Exception:
+            return None
+
+    def _is_multianimal_layer(self, layer: Points) -> bool:
+        """TODO: Check codebase for duplicate logic and centralize if needed."""
+        md = getattr(layer, "metadata", None) or {}
+        header = self._get_header_model_from_metadata(md)
+        if header is None:
+            return False
+
+        try:
+            inds = getattr(header, "individuals", None)
+            return bool(inds and len(inds) > 0 and str(inds[0]) != "")
+        except Exception:
+            return False
+
+    def _get_config_colormap(self, layer: Points) -> str:
+        """Return the colormap for the given layer based on its metadata.
+        TODO: Check codebase for duplicate logic and centralize if needed.
+        """
+        md = getattr(layer, "metadata", None) or {}
+        cmap = md.get("config_colormap")
+        if isinstance(cmap, str) and cmap:
+            return cmap
+        return DEFAULT_SINGLE_ANIMAL_CMAP
+
     def _plot_mode(self) -> str:
         try:
             mode = str(self._get_color_mode()).lower()
@@ -188,6 +242,24 @@ class TrajectoryMatplotlibCanvas(QWidget):
         if "individual" in mode:
             return "individual"
         return "bodypart"
+
+    @staticmethod
+    def _normalized_cycle(mapping) -> dict[str, object]:
+        """Return a cycle mapping with string keys for robust lookups."""
+        try:
+            return {str(k): v for k, v in (mapping or {}).items()}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _normalized_individual_name(value) -> str:
+        """Best-effort normalization for individual/id values used as cycle keys."""
+        if value is None:
+            return ""
+        text = str(value)
+        if not text or text.lower() == "nan":
+            return ""
+        return text
 
     def on_doubleclick(self, event):
         if getattr(event, "dblclick", False):
@@ -319,8 +391,10 @@ class TrajectoryMatplotlibCanvas(QWidget):
                 return
 
             # Silly hack so the window does not hang the first time it is shown
+            was_visible = self.isVisible()
             self.show()
-            self.hide()
+            if not was_visible:
+                self.hide()
 
             try:
                 self.df = io.form_df(
@@ -567,20 +641,71 @@ class TrajectoryMatplotlibCanvas(QWidget):
         except Exception:
             return False
 
-    def _line_color_for(self, points_layer: Points, individual: str, bodypart: str):
-        cycles = (getattr(points_layer, "metadata", None) or {}).get("face_color_cycles", {}) or {}
-        mode = self._plot_mode()
+    def _resolved_face_color_cycles(self, layer: Points) -> dict[str, dict]:
+        """
+        Resolve the same label/id color cycles as ColorSchemeResolver.
 
-        if mode == "individual" and individual:
-            try:
-                return cycles.get("id", {})[individual]
-            except Exception:
-                pass
+        - label cycle uses the current config colormap
+        - id cycle uses DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP for multi-animal
+        - single-animal falls back to the bodypart cycle for both
+        """
+        md = getattr(layer, "metadata", None) or {}
+        header = self._get_header_model_from_metadata(md)
+        if header is None:
+            return {}
+
+        config_cmap = self._get_config_colormap(layer)
 
         try:
-            return cycles.get("label", {})[bodypart]
+            bodypart_cycles = build_color_cycles(header, config_cmap) or {}
         except Exception:
+            logger.debug("Trajectory plot: failed to build bodypart color cycles", exc_info=True)
+            bodypart_cycles = {}
+
+        if self._is_multianimal_layer(layer):
+            try:
+                individual_cycles = build_color_cycles(header, DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP) or {}
+            except Exception:
+                logger.debug("Trajectory plot: failed to build individual color cycles", exc_info=True)
+                individual_cycles = {}
+        else:
+            individual_cycles = bodypart_cycles
+
+        return {
+            "label": self._normalized_cycle(bodypart_cycles.get("label", {})),
+            "id": self._normalized_cycle(individual_cycles.get("id", {})),
+        }
+
+    def _line_color_for(self, points_layer: Points, individual: str, bodypart: str):
+        """
+        Resolve line color from the same logic as ColorSchemeResolver.
+
+        - individual mode -> prefer id cycle
+        - bodypart mode   -> prefer label cycle
+        - fallback        -> whichever exists
+        - final fallback  -> Matplotlib default
+        """
+        cycles = self._resolved_face_color_cycles(points_layer)
+        mode = self._plot_mode()
+
+        id_cycle = cycles.get("id", {}) or {}
+        label_cycle = cycles.get("label", {}) or {}
+
+        individual_key = self._normalized_individual_name(individual)
+        bodypart_key = str(bodypart)
+
+        if mode == "individual" and self._is_multianimal_layer(points_layer):
+            if individual_key and individual_key in id_cycle:
+                return id_cycle[individual_key]
+            if bodypart_key in label_cycle:
+                return label_cycle[bodypart_key]
             return "C0"
+
+        if bodypart_key in label_cycle:
+            return label_cycle[bodypart_key]
+        if individual_key and individual_key in id_cycle:
+            return id_cycle[individual_key]
+        return "C0"
 
     def _legend_text_for(self, individual: str, bodypart: str) -> str:
         if self._plot_mode() == "individual" and individual:
@@ -595,7 +720,13 @@ class TrajectoryMatplotlibCanvas(QWidget):
         names = list(cols.names)
 
         has_inds = "individuals" in names
-        individuals = list(cols.get_level_values("individuals").unique()) if has_inds else [""]
+        if has_inds:
+            individuals = [self._normalized_individual_name(v) for v in cols.get_level_values("individuals").unique()]
+            # preserve order while removing duplicates
+            seen = set()
+            individuals = [v for v in individuals if not (v in seen or seen.add(v))]
+        else:
+            individuals = [""]
 
         for individual in individuals:
             for bodypart in cols.get_level_values("bodyparts").unique():
@@ -613,7 +744,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
                 if y.size == 0:
                     continue
 
-                yield str(individual), str(bodypart), y
+                yield self._normalized_individual_name(individual), str(bodypart), y
 
     def _apply_toolbar_stylesheet(self) -> None:
         """
