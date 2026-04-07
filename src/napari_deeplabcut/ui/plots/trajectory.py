@@ -466,15 +466,21 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
     def _selected_bodyparts_from_points_layer(self) -> set[str]:
         """
-        Return the set of selected bodypart labels from the first Points layer.
+        Return the set of selected bodypart labels from the active Points layer.
 
         Notes
         -----
         - We intentionally key visibility by `label` because this plot currently
         groups trajectories by bodypart name.
+        - If the active layer is not a Points layer, we fall back to the first
+        Points layer for backward compatibility.
         - If nothing is selected, returns an empty set.
         """
-        points_layer = get_first_points_layer(self.viewer)
+        active_layer = getattr(self.viewer.layers.selection, "active", None)
+        if isinstance(active_layer, Points):
+            points_layer = active_layer
+        else:
+            points_layer = get_first_points_layer(self.viewer)
         if points_layer is None:
             return set()
 
