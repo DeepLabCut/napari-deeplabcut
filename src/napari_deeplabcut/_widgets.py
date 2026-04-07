@@ -3,10 +3,16 @@
 NOTE: This file is generally already too long. For future development, please consider:
 - Moving existing responsibilities out into separate modules (existing or new)
 - Avoiding adding anything that is not strictly related to :
-  - Building the final UI (blocks can be moved to ui/ for better organization)
-  - Wiring to the core plugin functionality (e.g. via signals/slots, method calls, etc.)
-  - Anything that requires the full widget+viewer+signal/event context to function properly
-  - Similarly, test_widgets.py is a bit of a default drawer right now, please create new tests in _tests/ui
+    - Building the final UI (blocks can be moved to ui/ for better organization)
+    - Wiring to the core plugin functionality (e.g. via signals/slots, method calls, etc.)
+    - Anything that requires the full widget+viewer+signal/event context to function properly
+    - Similarly, test_widgets.py is a bit of a default drawer right now, please create new tests in _tests/ui
+- Lifecycle of UI elements and Qt wiring should ideally:
+    - Use parent child widgets/controllers to KeypointControls
+    - Use child QTimers instead of fire-and-forget QTimer.singleShot for deferred UI work
+    - Use normal Qt signal connections for Qt-owned objects
+    - Keep explicit cleanup only for non-Qt subscriptions/resources
+    (e.g. napari event connections, observer install/uninstall, monkey-patch restoration)
 """
 
 # src/napari_deeplabcut/_widgets.py
