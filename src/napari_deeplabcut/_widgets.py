@@ -1091,15 +1091,7 @@ class KeypointControls(QWidget):
         self._layer_status_panel.set_point_size(get_uniform_point_size(active_dlc_points))
 
         progress = compute_label_progress(active_dlc_points, fallback_paths=self._image_meta.paths)
-        self._layer_status_panel.set_progress_summary(
-            labeled_percent=progress.labeled_percent,
-            remaining_percent=progress.remaining_percent,
-            labeled_points=progress.labeled_points,
-            total_points=progress.total_points,
-            frame_count=progress.frame_count,
-            bodypart_count=progress.bodypart_count,
-            individual_count=progress.individual_count,
-        )
+        self._layer_status_panel.set_progress_summary(progress=progress)
 
     def _on_active_points_size_changed(self, size: int) -> None:
         layer = self._current_dlc_points_layer()
@@ -1269,7 +1261,7 @@ class KeypointControls(QWidget):
         layout = QHBoxLayout()
         group = QButtonGroup(self)
         for i, mode in enumerate(keypoints.ColorMode.__members__, start=1):
-            btn = QRadioButton(mode.lower())
+            btn = QRadioButton(mode.capitalize())
             group.addButton(btn, i)
             layout.addWidget(btn)
         group.button(1).setChecked(True)
@@ -1277,7 +1269,7 @@ class KeypointControls(QWidget):
         self._layout.addWidget(group_box)
 
         def _func():
-            self.color_mode = group.checkedButton().text()
+            self.color_mode = group.checkedButton().text().lower()
 
         group.buttonClicked.connect(_func)
         return group_box, group
