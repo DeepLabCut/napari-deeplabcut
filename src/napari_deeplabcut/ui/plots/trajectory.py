@@ -177,7 +177,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
         """
         Smallest comfortable size before the widget becomes cramped.
         """
-        return QSize(280, 440)
+        return QSize(280, 340)
 
     def on_doubleclick(self, event):
         if getattr(event, "dblclick", False):

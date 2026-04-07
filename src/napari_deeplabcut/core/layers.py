@@ -411,8 +411,9 @@ class PointsInteractionEvent:
     layer:
         The active Points layer at the time the event flushes, or None.
     reasons:
-        A normalized set of reasons that triggered the event. Typical values:
-        {"selection"}, {"active_layer"}, {"layers"}, {"data"}, {"properties"}.
+        A normalized set of reasons that triggered the event. Typical values
+        include {"install"}, {"selection"}, {"active_layer"}, {"layers"},
+        and {"content"}, depending on which observer hooks fired.
     """
 
     viewer: Any

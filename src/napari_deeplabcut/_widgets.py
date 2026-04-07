@@ -204,6 +204,7 @@ class KeypointControls(QWidget):
         # for future-proofing
         def _close_event(event):
             self.on_close(event)
+            self._points_interactions.close()
             # if accepted, call original
             if event.isAccepted():
                 orig_close_event(event)
@@ -681,7 +682,7 @@ class KeypointControls(QWidget):
             self._traj_mpl_canvas.hide()
             self._mpl_docked = True
         except Exception as e:
-            logging.debug("Skipping docking KeypointMatplotlibCanvas (not ready / teardown): %r", e)
+            logging.debug("Skipping docking canvas (not ready / teardown): %r", e)
             return
 
     def _safe_get_traj_canvas(self):
