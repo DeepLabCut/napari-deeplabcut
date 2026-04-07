@@ -12,6 +12,7 @@ from qtpy.QtWidgets import (
     QLabel,
     QMenu,
     QSlider,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -39,10 +40,46 @@ class LayerStatusPanel(QGroupBox):
 
         self._progress_value = QLabel("No active keypoints layer")
         self._progress_value.setWordWrap(True)
+        self._progress_value.setCursor(Qt.WhatsThisCursor)
         self._progress_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        # self._progress_info = QLabel("ℹ")
+        self._progress_info = QToolButton(self)
+        self._progress_info.setText("ℹ")
+        self._progress_info.setAutoRaise(True)
+        self._progress_info.setCursor(Qt.WhatsThisCursor)
+        # self._progress_info.setIcon(self.style().standardIcon(QStyle.SP_MessageBoxInformation))
+        # self._progress_info.setAlignment(Qt.AlignCenter)
+        self._progress_info.setStyleSheet(
+            """
+            QToolButton {
+                color: #414851;
+                background: transparent;
+                border: 1px solid #414851;
+                border-radius: 8px;
+                padding: 0px 4px;
+                font-weight: bold;
+            }
+            QToolButton:hover {
+                background: rgba(65, 72, 81, 0.08);
+            }
+            """
+        )
+        self._progress_info.setToolTip("Hover for more details")
+
         self._progress_details_text = ""
+
         self._progress_value.setContextMenuPolicy(Qt.CustomContextMenu)
         self._progress_value.customContextMenuRequested.connect(self._show_progress_context_menu)
+        self._progress_info.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._progress_info.customContextMenuRequested.connect(self._show_progress_context_menu)
+
+        self._progress_container = QWidget(self)
+        progress_row = QHBoxLayout(self._progress_container)
+        progress_row.setContentsMargins(0, 0, 0, 0)
+        progress_row.setSpacing(4)
+        progress_row.addWidget(self._progress_value, stretch=1)
+        progress_row.addWidget(self._progress_info, stretch=0, alignment=Qt.AlignTop)
 
         self._size_slider = QSlider(Qt.Horizontal, self)
         self._size_slider.setRange(1, 100)
@@ -70,7 +107,7 @@ class LayerStatusPanel(QGroupBox):
 
         form = QFormLayout()
         form.addRow("Folder", self._folder_value)
-        form.addRow("Progress", self._progress_value)
+        form.addRow("Progress", self._progress_container)
         form.addRow("Point size", self._size_controls)
 
         wrapper = QVBoxLayout(self)
@@ -170,14 +207,14 @@ class LayerStatusPanel(QGroupBox):
         first_incomplete = list(p.incomplete_frames[:10])
 
         details_lines = [
-            f"{p.labeled_percent:.1f}% labeled, {p.remaining_percent:.1f}% remaining",
+            f"{p.labeled_percent:.1f}% fully labeled, {p.remaining_percent:.1f}% remaining",
             f"{p.labeled_points}/{p.total_points} possible keypoint slots currently labeled • {breakdown}",
-            f"{p.completed_frames}/{p.frame_count} frames complete ({p.completed_percent:.1f}%)",
-            f"{incomplete_count} incomplete frames",
+            f"{p.completed_frames}/{p.frame_count} frames fully labeled ({p.completed_percent:.1f}%)",
+            f"{incomplete_count} non fully labeled frames",
         ]
 
         if first_incomplete:
-            details_lines.append("First incomplete frames: " + ", ".join(str(int(f)) for f in first_incomplete))
+            details_lines.append("First non fully labeled frames: " + ", ".join(str(int(f)) for f in first_incomplete))
 
         if p.individual_count > 1:
             # Keep individual rows stable and compact
@@ -185,9 +222,10 @@ class LayerStatusPanel(QGroupBox):
             for individual, n_frames in sorted(p.incomplete_frames_by_individual.items()):
                 if individual == "":
                     continue
-                missing_points = int(p.missing_points_by_individual.get(individual, 0))
+                int(p.missing_points_by_individual.get(individual, 0))
                 per_individual_lines.append(
-                    f"- {individual}: incomplete on {int(n_frames)} frame(s), {missing_points} missing keypoint(s)"
+                    f"- {individual}: non fully labeled on {int(n_frames)} frame(s), "
+                    "{missing_points} missing keypoint(s)"
                 )
 
             if per_individual_lines:
@@ -196,20 +234,32 @@ class LayerStatusPanel(QGroupBox):
                 details_lines.extend(per_individual_lines)
 
         details_lines.append("")
-        details_lines.append("Tip: right-click this progress label to copy the full summary.")
+        details_lines.append(
+            "Tip: right-click this progress label to copy the full summary.\n"
+            "Please note that actual visibility of keypoints in the video cannot"
+            " be determined automatically.\nTherefore, not having all frames be fully labeled"
+            " does not necessarily imply the labeling is incomplete."
+            " Please treat it as a relative progress estimate based on the maximum possible keypoints"
+        )
 
         details_text = "\n".join(details_lines)
         self._progress_details_text = details_text
         self._progress_value.setToolTip(details_text)
+        self._progress_info.setToolTip(details_text)
+        self._progress_container.setToolTip(details_text)
 
     def set_no_active_points_layer(self) -> None:
         self._progress_value.setText("No active keypoints layer")
         self._progress_value.setToolTip("")
+        self._progress_info.setToolTip("")
+        self._progress_container.setToolTip("")
         self._progress_details_text = ""
         self.set_point_size_enabled(False, reason="Select a DLC keypoints layer to edit point size.")
 
     def set_invalid_points_layer(self) -> None:
         self._progress_value.setText("Active layer is not a DLC keypoints layer")
         self._progress_value.setToolTip("")
+        self._progress_info.setToolTip("")
+        self._progress_container.setToolTip("")
         self._progress_details_text = ""
         self.set_point_size_enabled(False, reason="This control only works for DLC keypoints layers.")
