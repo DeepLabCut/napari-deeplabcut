@@ -263,10 +263,10 @@ def set_uniform_point_size(layer: Points, size: int) -> None:
     layer.size = float(size)
 
 
-def infer_frame_count(layer: Points, *, fallback_paths: list[str] | None = None) -> int:
+def infer_frame_count(layer: Points, *, preferred_paths: list[str] | None = None) -> int:
     md = getattr(layer, "metadata", {}) or {}
 
-    paths = md.get("paths") or fallback_paths or []
+    paths = preferred_paths or md.get("paths") or []
     if paths:
         return len(paths)
 
@@ -313,7 +313,7 @@ def infer_individual_count(layer: Points) -> int:
 
 
 def compute_label_progress(layer: Points, *, fallback_paths: list[str] | None = None) -> LabelProgress:
-    frame_count = infer_frame_count(layer, fallback_paths=fallback_paths)
+    frame_count = infer_frame_count(layer, preferred_paths=fallback_paths)
     bodypart_count = infer_bodypart_count(layer)
     individual_count = infer_individual_count(layer)
 

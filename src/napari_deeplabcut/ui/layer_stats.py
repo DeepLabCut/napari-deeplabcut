@@ -143,7 +143,11 @@ class LayerStatusPanel(QGroupBox):
         self._progress_value.setText(f"{labeled_percent:.1f}% labeled")
         self._progress_value.setToolTip(
             f"{labeled_percent:.1f}% labeled, {remaining_percent:.1f}% remaining\n"
-            f"{labeled_points}/{total_points} of all possible points labeled • {breakdown}"
+            f"{labeled_points}/{total_points} of all possible points labeled • {breakdown}\n"
+            "NOTE: percentages are calculated assuming all keypoints are visible "
+            "on every frame and represent only a theoretical maximum.\n"
+            "Actual progress may be higher if some keypoints are not visible on all frames, "
+            "or lower if some keypoints are missing from the dataset.\n"
         )
 
     def set_no_active_points_layer(self) -> None:
