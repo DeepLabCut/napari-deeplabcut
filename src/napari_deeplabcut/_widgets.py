@@ -266,7 +266,11 @@ class KeypointControls(QWidget):
         )
 
         self._mpl_docked = False
-        self._traj_mpl_canvas = TrajectoryMatplotlibCanvas(self.viewer)
+
+        self._traj_mpl_canvas = TrajectoryMatplotlibCanvas(
+            self.viewer,
+            get_color_mode=lambda: self.color_mode,
+        )
         self._show_traj_plot_cb = QCheckBox("Show trajectories", parent=self)
         self._show_traj_plot_cb.setToolTip("Toggle to see trajectories in a t-y plot outside of the main video viewer")
         self._show_traj_plot_cb.stateChanged.connect(self._show_traj_canvas)
@@ -1841,6 +1845,13 @@ class KeypointControls(QWidget):
             if btn.text().lower() == str(mode).lower():
                 btn.setChecked(True)
                 break
+
+        traj_canvas = self._safe_get_traj_canvas()
+        if traj_canvas is not None:
+            try:
+                traj_canvas.refresh_from_viewer_layers()
+            except Exception:
+                logger.debug("Failed to refresh trajectory plot after color mode change", exc_info=True)
 
         self._update_color_scheme()
         self._trails_controller.on_points_visual_inputs_changed(checkbox_checked=self._trail_cb.isChecked())

@@ -25,7 +25,6 @@ from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QSlider, QVBoxLayou
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut.core.layers import (
     get_first_image_layer,
-    get_first_points_layer,
     get_first_video_image_layer,
 )
 from napari_deeplabcut.utils.deprecations import deprecated
@@ -82,10 +81,11 @@ class NapariNavigationToolbar(NavigationToolbar2QT):
 class TrajectoryMatplotlibCanvas(QWidget):
     """Trajectory plot using matplotlib for keypoints (t-y plot)."""
 
-    def __init__(self, napari_viewer, parent=None):
+    def __init__(self, napari_viewer, parent=None, get_color_mode=None):
         super().__init__(parent=parent)
 
         self.viewer = napari_viewer
+        self._get_color_mode = get_color_mode
 
         with mplstyle.context(self.mpl_style_sheet_path):
             self.canvas = FigureCanvas()
@@ -151,7 +151,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
         self.viewer.layers.events.inserted.connect(self._load_dataframe)
         self.viewer.dims.events.range.connect(self._update_slider_max)
-        self._lines: dict[str, list] = {}
+        self._lines: dict[tuple[str, str], list] = {}
 
         self._apply_napari_theme()
         self._connect_theme_events()
@@ -178,6 +178,16 @@ class TrajectoryMatplotlibCanvas(QWidget):
         Smallest comfortable size before the widget becomes cramped.
         """
         return QSize(280, 340)
+
+    def _plot_mode(self) -> str:
+        try:
+            mode = str(self._get_color_mode()).lower()
+        except Exception:
+            mode = "bodypart"
+
+        if "individual" in mode:
+            return "individual"
+        return "bodypart"
 
     def on_doubleclick(self, event):
         if getattr(event, "dblclick", False):
@@ -350,24 +360,14 @@ class TrajectoryMatplotlibCanvas(QWidget):
                 except Exception:
                     height = None
 
-            for keypoint in self.df.columns.get_level_values("bodyparts").unique():
-                y = self.df.xs(
-                    (keypoint, "y"),
-                    axis=1,
-                    level=["bodyparts", "coords"],
-                ).to_numpy()
+            self._lines = {}
 
-                # Important: a single-row dataframe can squeeze to a scalar.
-                y = np.atleast_1d(np.asarray(y).squeeze())
+            for individual, bodypart, y in self._iter_series():
                 x = np.arange(y.shape[0])
-
-                try:
-                    color = points_layer.metadata["face_color_cycles"]["label"][keypoint]
-                except Exception:
-                    color = "C0"
-
-                lines = self.ax.plot(x, y, color=color, label=str(keypoint))
-                self._lines[str(keypoint)] = lines
+                color = self._line_color_for(points_layer, individual, bodypart)
+                label = self._legend_text_for(individual, bodypart)
+                artists = self.ax.plot(x, y, color=color, label=label)
+                self._lines[(individual, bodypart)] = artists
 
             # Match napari image coordinates: y increases downward
             if height is not None:
@@ -389,11 +389,12 @@ class TrajectoryMatplotlibCanvas(QWidget):
         self._refresh_canvas(value=self._n)
 
     def show_only_keypoint(self, keypoint: str) -> None:
-        """Show only one keypoint trajectory; if unknown, show all."""
-        if keypoint not in self._lines:
+        """Show all trajectories matching one bodypart; if unknown, show all."""
+        matches = {k for k in self._lines if k[1] == keypoint}
+        if not matches:
             self._show_all_keypoints()
             return
-        self._set_visible_keypoints({keypoint})
+        self._set_visible_keypoints(matches)
 
     def _refresh_canvas(self, value: int) -> None:
         if not self._has_refreshable_df():
@@ -439,13 +440,18 @@ class TrajectoryMatplotlibCanvas(QWidget):
         else:
             self.slider.setMaximum(n_frames - 1)
 
-    def _set_visible_keypoints(self, visible_keypoints: set[str]) -> None:
-        """Show only the given keypoint trajectories."""
+    def _set_visible_keypoints(self, visible_keys: set) -> None:
         if not self._lines:
             return
 
-        for keypoint, artists in self._lines.items():
-            show = keypoint in visible_keypoints
+        mode = self._plot_mode()
+
+        for (individual, bodypart), artists in self._lines.items():
+            if mode == "individual":
+                show = (individual, bodypart) in visible_keys
+            else:
+                show = bodypart in visible_keys
+
             for artist in artists:
                 artist.set_visible(show)
 
@@ -464,26 +470,8 @@ class TrajectoryMatplotlibCanvas(QWidget):
         if self.isVisible():
             self._refresh_canvas(value=self._n)
 
-    def _selected_bodyparts_from_points_layer(self) -> set[str]:
-        """
-        Return the set of selected bodypart labels from the Points layer used
-        to build the trajectory plot.
-
-        Notes
-        -----
-        - We intentionally key visibility by `label` because this plot currently
-        groups trajectories by bodypart name.
-        - We use the same Points layer selection policy as the plotting code so
-        selection-driven visibility cannot drift out of sync with the plotted
-        dataframe.
-        - If nothing is selected, returns an empty set.
-        """
-        points_layer = None
-        get_plot_points_layer = getattr(self, "_get_plot_points_layer", None)
-        if callable(get_plot_points_layer):
-            points_layer = get_plot_points_layer()
-        if points_layer is None:
-            points_layer = get_first_points_layer(self.viewer)
+    def _selected_line_keys_from_points_layer(self) -> set:
+        points_layer = self._get_plot_points_layer()
         if points_layer is None:
             return set()
 
@@ -493,6 +481,8 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
         props = getattr(points_layer, "properties", {}) or {}
         labels = props.get("label", None)
+        ids = props.get("id", None)
+
         if labels is None:
             return set()
 
@@ -501,19 +491,38 @@ class TrajectoryMatplotlibCanvas(QWidget):
         except Exception:
             return set()
 
-        visible: set[str] = set()
+        try:
+            ids_arr = np.asarray(ids, dtype=object).ravel() if ids is not None else None
+        except Exception:
+            ids_arr = None
+
+        mode = self._plot_mode()
+        visible = set()
+
         for idx in selected:
             try:
                 i = int(idx)
             except Exception:
                 continue
-            if 0 <= i < len(labels_arr):
-                val = labels_arr[i]
-                if val is None:
-                    continue
-                text = str(val)
-                if text:
-                    visible.add(text)
+            if not (0 <= i < len(labels_arr)):
+                continue
+
+            label = str(labels_arr[i])
+            if not label:
+                continue
+
+            if mode == "individual":
+                individual = ""
+                if ids_arr is not None and i < len(ids_arr):
+                    val = ids_arr[i]
+                    if val is not None:
+                        text = str(val)
+                        if text and text.lower() != "nan":
+                            individual = text
+                visible.add((individual, label))
+            else:
+                # bodypart mode -> show all series with this bodypart
+                visible.add(label)
 
         return visible
 
@@ -523,12 +532,12 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
         Behavior:
         - no selected points -> show all trajectories
-        - selected points    -> show only trajectories whose bodypart label is selected
+        - selected points    -> show only trajectories for the selected (id, label) pairs
         """
         if not self._lines:
             return
 
-        visible = self._selected_bodyparts_from_points_layer()
+        visible = self._selected_line_keys_from_points_layer()
         if not visible:
             self._show_all_keypoints()
             return
@@ -546,21 +555,65 @@ class TrajectoryMatplotlibCanvas(QWidget):
             elif text == "Zoom":
                 action.setToolTip("Zoom to rectangle; Click once to activate; Click again to deactivate")
 
-    # def _apply_toolbar_icons(self) -> None:
-    #     """
-    #     Apply static black/white toolbar icons based on the current napari theme.
+    def _df_has_individuals(self) -> bool:
+        if self.df is None:
+            return False
+        try:
+            cols = self.df.columns
+            if "individuals" not in cols.names:
+                return False
+            vals = [str(v) for v in cols.get_level_values("individuals").unique()]
+            return any(v != "" for v in vals)
+        except Exception:
+            return False
 
-    #     This does not override toolbar behavior; it only replaces the displayed icons.
-    #     """
-    #     icon_dir = self._get_path_to_icon()
-    #     for action in self.toolbar.actions():
-    #         text = action.text()
-    #         if not text:
-    #             continue
+    def _line_color_for(self, points_layer: Points, individual: str, bodypart: str):
+        cycles = (getattr(points_layer, "metadata", None) or {}).get("face_color_cycles", {}) or {}
+        mode = self._plot_mode()
 
-    #         icon_path = Path(icon_dir) / f"{text}.png"
-    #         if icon_path.exists():
-    #             action.setIcon(QIcon(str(icon_path)))
+        if mode == "individual" and individual:
+            try:
+                return cycles.get("id", {})[individual]
+            except Exception:
+                pass
+
+        try:
+            return cycles.get("label", {})[bodypart]
+        except Exception:
+            return "C0"
+
+    def _legend_text_for(self, individual: str, bodypart: str) -> str:
+        if self._plot_mode() == "individual" and individual:
+            return f"{individual} • {bodypart}"
+        return bodypart
+
+    def _iter_series(self):
+        if self.df is None:
+            return
+
+        cols = self.df.columns
+        names = list(cols.names)
+
+        has_inds = "individuals" in names
+        individuals = list(cols.get_level_values("individuals").unique()) if has_inds else [""]
+
+        for individual in individuals:
+            for bodypart in cols.get_level_values("bodyparts").unique():
+                mask = cols.get_level_values("bodyparts") == bodypart
+                mask &= cols.get_level_values("coords") == "y"
+
+                if has_inds:
+                    mask &= cols.get_level_values("individuals") == individual
+
+                y_df = self.df.loc[:, mask]
+                if y_df.shape[1] == 0:
+                    continue
+
+                y = np.asarray(y_df.iloc[:, 0].to_numpy(), dtype=float).ravel()
+                if y.size == 0:
+                    continue
+
+                yield str(individual), str(bodypart), y
 
     def _apply_toolbar_stylesheet(self) -> None:
         """
