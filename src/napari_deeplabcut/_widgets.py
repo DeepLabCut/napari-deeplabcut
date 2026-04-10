@@ -13,6 +13,17 @@ NOTE: This file is generally already too long. For future development, please co
     - Use normal Qt signal connections for Qt-owned objects
     - Keep explicit cleanup only for non-Qt subscriptions/resources
     (e.g. napari event connections, observer install/uninstall, monkey-patch restoration)
+
+TODO: And general dev notes:
+- The saving workflow is crammed into save_layers_dialog() right now,
+  and should move to a dedicated  e.g. PointsLayerSaveFactory class in a dedicated file.
+- Project/root/paths/image-meta/points-meta synchronization should be centralized.
+  It is too distributed right now, and it can be unclear "which truth" is authoritative.
+  Some sort of context-manager class would likely help.
+- Maybe a dedicated layer lifecycle system would help, for layer adoption and setup.
+- Something that owns UI sync state (what to refresh, why, when) could help with the heavy wiring.
+- I'd suggest keeping in this file:
+    - color/label mode, menu/help actions, widget visibility and user interaction hooks.
 """
 
 # src/napari_deeplabcut/_widgets.py
