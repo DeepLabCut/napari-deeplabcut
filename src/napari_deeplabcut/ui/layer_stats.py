@@ -225,7 +225,7 @@ class LayerStatusPanel(QGroupBox):
                 int(p.missing_points_by_individual.get(individual, 0))
                 per_individual_lines.append(
                     f"- {individual}: non fully labeled on {int(n_frames)} frame(s), "
-                    "{missing_points} missing keypoint(s)"
+                    f"{int(p.missing_points_by_individual.get(individual, 0))} missing keypoint(s)"
                 )
 
             if per_individual_lines:
@@ -238,8 +238,8 @@ class LayerStatusPanel(QGroupBox):
             "Tip: right-click this progress label to copy the full summary.\n"
             "Please note that actual visibility of keypoints in the video cannot"
             " be determined automatically.\nTherefore, not having all frames be fully labeled"
-            " does not necessarily imply the labeling is incomplete."
-            " Please treat it as a relative progress estimate based on the maximum possible keypoints"
+            " does not necessarily imply the labeling is incomplete.\n"
+            "Please treat it as a relative progress estimate based on the maximum possible keypoints"
         )
 
         details_text = "\n".join(details_lines)
