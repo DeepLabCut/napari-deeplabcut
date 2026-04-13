@@ -36,6 +36,33 @@ def forbid_project_config_dialog(monkeypatch):
     )
 
 
+@pytest.fixture
+def skip_project_config_dialog(monkeypatch):
+    """
+    Simulate the new promotion policy when no config.yaml exists.
+
+    The save flow now asks whether the user wants to locate a DLC config.yaml
+    before falling back to sidecar/manual scorer entry. In these no-config e2e
+    scenarios, emulate the user explicitly choosing to continue without config.
+    """
+    from napari_deeplabcut.ui import dialogs as ui_dialogs
+
+    calls = {"count": 0, "kwargs": None}
+
+    def _skip(*args, **kwargs):
+        calls["count"] += 1
+        calls["kwargs"] = kwargs
+        return ui_dialogs.ProjectConfigPromptResult(
+            action=ui_dialogs.ProjectConfigPromptAction.SKIP,
+        )
+
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
+        _skip,
+    )
+    return calls
+
+
 @pytest.mark.usefixtures("qtbot")
 def test_save_routes_to_correct_gt_when_multiple_gt_exist(
     viewer, keypoint_controls, qtbot, tmp_path, overwrite_confirm
@@ -302,12 +329,14 @@ def test_config_first_save_writes_gt_into_dataset_folder(viewer, keypoint_contro
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_promotion_first_save_prompts_and_creates_sidecar(
-    viewer, keypoint_controls, qtbot, tmp_path, inputdialog, forbid_project_config_dialog
+def test_promotion_first_save_skip_config_then_prompt_scorer_and_create_sidecar(
+    viewer, keypoint_controls, qtbot, tmp_path, inputdialog, skip_project_config_dialog
 ):
     """
     First save on a machine/prediction layer (no config.yaml, no sidecar):
-    - prompts for scorer
+    - offers project-config lookup first
+    - user continues without config
+    - then prompts for scorer
     - writes .napari-deeplabcut.json sidecar
     - creates CollectedData_<scorer>.h5
     - does NOT modify machinelabels-iter0.h5
@@ -348,6 +377,13 @@ def test_promotion_first_save_prompts_and_creates_sidecar(
     qtbot.wait(200)
     assert "save_target" in machine_layer.metadata, machine_layer.metadata.keys()
 
+    keypoint_controls._save_layers_dialog(selected=True)
+    qtbot.wait(200)
+
+    assert skip_project_config_dialog["count"] == 1
+    assert skip_project_config_dialog["kwargs"]["resolve_scorer"] is True
+    assert "save_target" in machine_layer.metadata, machine_layer.metadata.keys()
+
     # Sidecar created
     sidecar = labeled_folder / ".napari-deeplabcut.json"
     assert sidecar.exists()
@@ -363,12 +399,14 @@ def test_promotion_first_save_prompts_and_creates_sidecar(
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_promotion_second_save_uses_sidecar_no_prompt(
-    viewer, keypoint_controls, qtbot, tmp_path, inputdialog, forbid_project_config_dialog
+def test_promotion_second_save_skip_config_then_use_sidecar_without_scorer_prompt(
+    viewer, keypoint_controls, qtbot, tmp_path, inputdialog, skip_project_config_dialog
 ):
     """
-    After sidecar exists, saving again must not prompt:
-    - QInputDialog.getText not called
+    After sidecar exists, saving again with no config.yaml available:
+    - offers project-config lookup first
+    - user continues without config
+    - QInputDialog.getText not called because sidecar provides scorer
     - writes/updates same CollectedData_<scorer>.h5
     - machine file unchanged
     """
@@ -409,6 +447,13 @@ def test_promotion_second_save_uses_sidecar_no_prompt(
 
     machine_post = pd.read_hdf(machine_path, key="keypoints")
     pd.testing.assert_frame_equal(machine_pre, machine_post)
+
+    controls._save_layers_dialog(selected=True)
+    qtbot.wait(200)
+
+    assert skip_project_config_dialog["count"] == 1
+    assert skip_project_config_dialog["kwargs"]["resolve_scorer"] is True
+    assert inputdialog.calls == 0
 
 
 @pytest.mark.usefixtures("qtbot")
@@ -632,3 +677,162 @@ def test_projectless_folder_save_refuses_when_target_dataset_folder_already_cont
 
     # No GT should be created in the external folder because association was refused.
     assert not (external_folder / "CollectedData_John.h5").exists()
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_promotion_nearby_config_wins_no_dialog_no_prompt(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    monkeypatch,
+    inputdialog,
+):
+    """
+    If a valid DLC config.yaml is discoverable near a machine-labeled layer,
+    promotion must use the scorer from that config without showing either:
+    - the project-config selection dialog
+    - the manual scorer prompt
+
+    Sidecar, if present, must be ignored in favor of config.yaml.
+    """
+    project, config_path, labeled_folder, _gt_paths, machine_path = _make_dlc_project_with_multiple_gt(
+        tmp_path, scorers=("John", "Jane"), with_machine=True
+    )
+    assert machine_path is not None
+
+    # Create a conflicting sidecar scorer to prove config.yaml wins.
+    sidecar = labeled_folder / ".napari-deeplabcut.json"
+    sidecar.write_text('{"schema_version": 1, "default_scorer": "Alice"}', encoding="utf-8")
+
+    machine_pre = pd.read_hdf(machine_path, key="keypoints")
+
+    dialog_calls = {"count": 0}
+
+    def _unexpected_config_dialog(*args, **kwargs):
+        dialog_calls["count"] += 1
+        pytest.fail("Config-selection dialog must not appear when nearby config.yaml is auto-discovered.")
+
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
+        _unexpected_config_dialog,
+    )
+
+    # Manual scorer prompt must not be used either.
+    inputdialog.forbid()
+
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
+    qtbot.wait(200)
+
+    pts_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
+    machine_layer = next(p for p in pts_layers if p.name == machine_path.stem)
+
+    store = keypoint_controls._stores.get(machine_layer)
+    assert store is not None
+    _set_or_add_bodypart_xy(machine_layer, store, "bodypart2", x=54.0, y=43.0)
+
+    viewer.layers.selection.active = machine_layer
+    keypoint_controls.viewer.layers.selection.active = machine_layer
+    keypoint_controls.viewer.layers.selection.select_only(machine_layer)
+
+    keypoint_controls._save_layers_dialog(selected=True)
+    qtbot.wait(300)
+
+    assert dialog_calls["count"] == 0
+    assert inputdialog.calls == 0
+    assert "save_target" in machine_layer.metadata, machine_layer.metadata.keys()
+
+    # Config scorer must win over sidecar scorer.
+    expected_gt = labeled_folder / "CollectedData_John.h5"
+    unexpected_gt = labeled_folder / "CollectedData_Alice.h5"
+    assert expected_gt.exists(), f"Expected GT with config scorer to be created: {expected_gt}"
+    assert not unexpected_gt.exists(), f"Sidecar scorer must be ignored when config.yaml is nearby: {unexpected_gt}"
+
+    machine_post = pd.read_hdf(machine_path, key="keypoints")
+    pd.testing.assert_frame_equal(machine_pre, machine_post)
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_promotion_selected_external_config_wins_no_scorer_prompt(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    monkeypatch,
+    inputdialog,
+):
+    """
+    If no nearby config.yaml is found, but the user points the save flow to a
+    valid external DLC config.yaml, promotion must use that config scorer and
+    must not show the manual scorer prompt.
+
+    Sidecar, if present, must be ignored in favor of the user-selected config.
+    """
+    labeled_folder = _make_labeled_folder_with_machine_only(tmp_path)
+    machine_path = labeled_folder / "machinelabels-iter0.h5"
+    machine_pre = pd.read_hdf(machine_path, key="keypoints")
+
+    # External DLC project whose config scorer should be used.
+    external_project, external_config_path, _external_dataset = _make_project_config_and_frames_no_gt(
+        tmp_path / "extproj"
+    )
+    assert external_config_path.exists()
+
+    # Create a conflicting sidecar scorer to prove selected config wins.
+    sidecar = labeled_folder / ".napari-deeplabcut.json"
+    sidecar.write_text('{"schema_version": 1, "default_scorer": "Alice"}', encoding="utf-8")
+
+    from napari_deeplabcut.ui import dialogs as ui_dialogs
+
+    dialog_calls = {"count": 0, "kwargs": None}
+
+    def _choose_external_config(*args, **kwargs):
+        dialog_calls["count"] += 1
+        dialog_calls["kwargs"] = kwargs
+        return ui_dialogs.ProjectConfigPromptResult(
+            action=ui_dialogs.ProjectConfigPromptAction.ASSOCIATE,
+            config_path=str(external_config_path),
+            scorer="John",
+        )
+
+    monkeypatch.setattr(
+        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
+        _choose_external_config,
+    )
+
+    # Manual scorer prompt must not be used when selected config already resolves scorer.
+    inputdialog.forbid()
+
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
+    qtbot.wait(200)
+
+    pts_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
+    machine_layer = next(p for p in pts_layers if p.name == "machinelabels-iter0")
+
+    store = keypoint_controls._stores.get(machine_layer)
+    assert store is not None
+    _set_or_add_bodypart_xy(machine_layer, store, "bodypart1", x=91.0, y=82.0)
+
+    viewer.layers.selection.active = machine_layer
+    keypoint_controls.viewer.layers.selection.active = machine_layer
+    keypoint_controls.viewer.layers.selection.select_only(machine_layer)
+
+    keypoint_controls._save_layers_dialog(selected=True)
+    qtbot.wait(300)
+
+    assert dialog_calls["count"] == 1
+    assert dialog_calls["kwargs"]["resolve_scorer"] is True
+    assert inputdialog.calls == 0
+    assert "save_target" in machine_layer.metadata, machine_layer.metadata.keys()
+
+    expected_gt = labeled_folder / "CollectedData_John.h5"
+    unexpected_gt = labeled_folder / "CollectedData_Alice.h5"
+    assert expected_gt.exists(), f"Expected GT with user-selected config scorer to be created: {expected_gt}"
+    assert not unexpected_gt.exists(), (
+        f"Sidecar scorer must be ignored when a valid external config is selected: {unexpected_gt}"
+    )
+
+    machine_post = pd.read_hdf(machine_path, key="keypoints")
+    pd.testing.assert_frame_equal(machine_pre, machine_post)

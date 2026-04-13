@@ -48,7 +48,11 @@ from napari_deeplabcut.core.dataframes import (
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
 from napari_deeplabcut.core.metadata import attach_source_and_io_to_layer_kwargs, parse_points_metadata
-from napari_deeplabcut.core.project_paths import canonicalize_path, infer_dlc_project_from_points_meta
+from napari_deeplabcut.core.project_paths import (
+    canonicalize_path,
+    find_nearest_config,
+    infer_dlc_project_from_points_meta,
+)
 from napari_deeplabcut.core.provenance import resolve_output_path_from_metadata
 
 logger = logging.getLogger(__name__)
@@ -135,7 +139,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     # Handle legacy/single-animal column layout by inserting empty "individuals" level.
     # Colormap selection also falls back to config when possible.
     try:
-        cfg = load_config(misc.find_project_config_path(str(file)))
+        cfg = load_config(find_nearest_config(file, max_levels=3))
         config_colormap = str(cfg.get("colormap", DEFAULT_SINGLE_ANIMAL_CMAP))
     except Exception as e:
         logger.warning("Could not load config for %s; falling back to default colormap. Error: %s", file, e)

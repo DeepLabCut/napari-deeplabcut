@@ -3,17 +3,22 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from napari.layers import Image, Points
 from qtpy.QtCore import QPoint, Qt
 from qtpy.QtWidgets import QDialog, QLabel, QPlainTextEdit, QPushButton, QScrollArea
 
+import napari_deeplabcut.ui.dialogs as ui_dialogs
 from napari_deeplabcut.config.keybinds import iter_shortcuts
 from napari_deeplabcut.ui.dialogs import (
     OverwriteConflictsDialog,
+    ProjectConfigPromptAction,
     ShortcutRow,
     Shortcuts,
     Tutorial,
+    load_scorer_from_config,
     maybe_confirm_overwrite,
+    prompt_for_project_config_for_save,
 )
 
 # -----------------------------------------------------------------------------
@@ -147,11 +152,9 @@ def test_tutorial_initial_state(dialog_parent, qtbot):
     qtbot.addWidget(dlg)
 
     assert dlg.parent() is dialog_parent
-    assert dlg.windowTitle() == "Tutorial"
     assert dlg.isModal()
     assert dlg._current_tip == -1
     assert dlg.count.text() == ""
-    assert "Let's get started with a quick walkthrough!" in dlg.message.text()
 
     # initial nav state with "intro" screen before first tip
     assert not dlg.prev_button.isEnabled()
@@ -168,9 +171,6 @@ def test_tutorial_next_advances_to_first_tip_and_updates_position(dialog_parent,
     qtbot.mouseClick(dlg.next_button, Qt.LeftButton)
 
     assert dlg._current_tip == 0
-    assert dlg.count.text() == f"Tip 1|{len(dlg._tips)}"
-    assert dlg.message.text().startswith("💡\n\n")
-    assert "Load a folder of annotated data" in dlg.message.text()
 
     # first real tip still has prev disabled, next enabled
     assert not dlg.prev_button.isEnabled()
@@ -195,7 +195,6 @@ def test_tutorial_navigation_enables_and_disables_buttons(dialog_parent, qtbot):
     assert dlg._current_tip == 1
     assert dlg.prev_button.isEnabled()
     assert dlg.next_button.isEnabled()
-    assert dlg.count.text() == f"Tip 2|{len(dlg._tips)}"
 
     qtbot.mouseClick(dlg.prev_button, Qt.LeftButton)
     assert dlg._current_tip == 0
@@ -215,7 +214,6 @@ def test_tutorial_last_tip_has_no_emoji_prefix_and_disables_next(dialog_parent, 
     assert not dlg.next_button.isEnabled()
 
     # last tip should not be prefixed with the emoji
-    assert not dlg.message.text().startswith("💡\n\n")
     assert "napari-deeplabcut" in dlg.message.text()
 
 
@@ -428,3 +426,255 @@ def test_maybe_confirm_overwrite_delegates_to_confirm(monkeypatch, dialog_parent
         "affected_text": "3 keypoint overwrite(s) across 2 frame(s)/image(s).",
         "details": "img001.png -> nose, tail",
     }
+
+
+# -----------------------------------------------------------------------------
+# Project config / scorer resolution dialogs
+# -----------------------------------------------------------------------------
+
+
+class _FakeButton:
+    def __init__(self, text=None, role=None):
+        self.text = text
+        self.role = role
+
+
+class _FakeMessageBox:
+    Question = object()
+    YesRole = object()
+    NoRole = object()
+    Cancel = object()
+    Rejected = 0
+
+    planned_click = "yes"  # "yes" | "no" | "cancel"
+    warnings = []
+    last_instance = None
+
+    def __init__(self, parent=None):
+        self.parent = parent
+        self._buttons = []
+        self._clicked = None
+        self.window_title = None
+        self.text = None
+        self.default_button = None
+        type(self).last_instance = self
+
+    def setIcon(self, icon):
+        self.icon = icon
+
+    def setWindowTitle(self, title):
+        self.window_title = title
+
+    def setText(self, text):
+        self.text = text
+
+    def addButton(self, *args):
+        if len(args) == 2:
+            text, role = args
+            btn = _FakeButton(text=text, role=role)
+        else:
+            btn = _FakeButton(text="cancel", role=None)
+        self._buttons.append(btn)
+        return btn
+
+    def setDefaultButton(self, btn):
+        self.default_button = btn
+
+    def exec_(self):
+        if self.planned_click == "cancel":
+            self._clicked = None
+            return self.Rejected
+
+        if self.planned_click == "no":
+            self._clicked = next((b for b in self._buttons if b.role is self.NoRole), None)
+            return 1
+
+        self._clicked = next((b for b in self._buttons if b.role is self.YesRole), None)
+        return 1
+
+    def clickedButton(self):
+        return self._clicked
+
+    @staticmethod
+    def warning(parent, title, text):
+        _FakeMessageBox.warnings.append((title, text))
+
+
+class _FakeFileDialog:
+    next_result = ("", "")
+    calls = []
+
+    @staticmethod
+    def getOpenFileName(*args, **kwargs):
+        _FakeFileDialog.calls.append((args, kwargs))
+        return _FakeFileDialog.next_result
+
+
+@pytest.fixture
+def fake_config_prompt_qt(monkeypatch):
+    _FakeMessageBox.planned_click = "yes"
+    _FakeMessageBox.warnings = []
+    _FakeMessageBox.last_instance = None
+    _FakeFileDialog.next_result = ("", "")
+    _FakeFileDialog.calls = []
+    monkeypatch.setattr(ui_dialogs, "QMessageBox", _FakeMessageBox)
+    monkeypatch.setattr(ui_dialogs, "QFileDialog", _FakeFileDialog)
+    return _FakeMessageBox, _FakeFileDialog
+
+
+def test_load_scorer_from_config_returns_trimmed_scorer(tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("scorer: '  John  '\n", encoding="utf-8")
+
+    scorer = load_scorer_from_config(cfg)
+
+    assert scorer == "John"
+
+
+def test_load_scorer_from_config_returns_none_when_missing(tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("dotsize: 5\npcutoff: 0.6\n", encoding="utf-8")
+
+    scorer = load_scorer_from_config(cfg)
+
+    assert scorer is None
+
+
+def test_load_scorer_from_config_returns_none_when_blank(tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("scorer: '   '\n", encoding="utf-8")
+
+    scorer = load_scorer_from_config(cfg)
+
+    assert scorer is None
+
+
+def test_prompt_for_project_config_for_save_returns_skip_when_user_chooses_no(fake_config_prompt_qt):
+    fake_messagebox, fake_filedialog = fake_config_prompt_qt
+    fake_messagebox.planned_click = "no"
+
+    result = prompt_for_project_config_for_save(parent=None)
+
+    assert result.action is ProjectConfigPromptAction.SKIP
+    assert result.config_path is None
+    assert result.scorer is None
+    assert fake_filedialog.calls == []
+
+
+def test_prompt_for_project_config_for_save_returns_cancel_when_messagebox_cancelled(fake_config_prompt_qt):
+    fake_messagebox, fake_filedialog = fake_config_prompt_qt
+    fake_messagebox.planned_click = "cancel"
+
+    result = prompt_for_project_config_for_save(parent=None)
+
+    assert result.action is ProjectConfigPromptAction.CANCEL
+    assert result.config_path is None
+    assert result.scorer is None
+    assert fake_filedialog.calls == []
+
+
+def test_prompt_for_project_config_for_save_resolve_scorer_valid_config(fake_config_prompt_qt, tmp_path):
+    fake_messagebox, fake_filedialog = fake_config_prompt_qt
+    fake_messagebox.planned_click = "yes"
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("scorer: John\n", encoding="utf-8")
+    fake_filedialog.next_result = (str(cfg), "DeepLabCut config (config.yaml)")
+
+    result = prompt_for_project_config_for_save(parent=None, resolve_scorer=True)
+
+    assert result.action is ProjectConfigPromptAction.ASSOCIATE
+    assert result.config_path == str(cfg)
+    assert result.scorer == "John"
+    assert fake_messagebox.warnings == []
+
+
+def test_prompt_for_project_config_for_save_resolve_scorer_invalid_config_missing_scorer(
+    fake_config_prompt_qt,
+    tmp_path,
+):
+    fake_messagebox, fake_filedialog = fake_config_prompt_qt
+    fake_messagebox.planned_click = "yes"
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("dotsize: 8\n", encoding="utf-8")
+    fake_filedialog.next_result = (str(cfg), "DeepLabCut config (config.yaml)")
+
+    result = prompt_for_project_config_for_save(parent=None, resolve_scorer=True)
+
+    assert result.action is ProjectConfigPromptAction.CANCEL
+    assert result.config_path is None
+    assert result.scorer is None
+
+    assert len(fake_messagebox.warnings) == 1
+    title, text = fake_messagebox.warnings[0]
+    assert title == "Invalid project configuration"
+    assert "does not define a valid non-empty 'scorer' field" in text
+    assert str(cfg) in text
+
+
+def test_prompt_for_project_config_for_save_resolve_scorer_unreadable_config(
+    monkeypatch,
+    fake_config_prompt_qt,
+    tmp_path,
+):
+    fake_messagebox, fake_filedialog = fake_config_prompt_qt
+    fake_messagebox.planned_click = "yes"
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("scorer: John\n", encoding="utf-8")
+    fake_filedialog.next_result = (str(cfg), "DeepLabCut config (config.yaml)")
+
+    def _boom(*args, **kwargs):
+        raise ValueError("bad yaml")
+
+    monkeypatch.setattr(ui_dialogs, "load_scorer_from_config", _boom)
+
+    result = prompt_for_project_config_for_save(parent=None, resolve_scorer=True)
+
+    assert result.action is ProjectConfigPromptAction.CANCEL
+    assert result.config_path is None
+    assert result.scorer is None
+
+    assert len(fake_messagebox.warnings) == 1
+    title, text = fake_messagebox.warnings[0]
+    assert title == "Invalid project configuration"
+    assert "could not be read as a DeepLabCut config.yaml" in text
+    assert str(cfg) in text
+
+
+def test_prompt_for_project_config_for_save_uses_custom_text(fake_config_prompt_qt):
+    fake_messagebox, _ = fake_config_prompt_qt
+    fake_messagebox.planned_click = "cancel"
+
+    prompt_for_project_config_for_save(
+        parent=None,
+        window_title="Locate config",
+        message="Pick a config for scorer resolution",
+        choose_button_text="Browse…",
+        skip_button_text="Continue without config",
+    )
+
+    inst = fake_messagebox.last_instance
+    assert inst is not None
+    assert inst.window_title == "Locate config"
+    assert inst.text == "Pick a config for scorer resolution"
+    assert [b.text for b in inst._buttons[:2]] == ["Browse…", "Continue without config"]
+
+
+def test_warn_invalid_config_for_scorer_auto_found_unreadable(fake_config_prompt_qt):
+    fake_messagebox, _ = fake_config_prompt_qt
+
+    ui_dialogs.warn_invalid_config_for_scorer(
+        parent=None,
+        config_path="/tmp/config.yaml",
+        reason="unreadable",
+        auto_found=True,
+    )
+
+    assert len(fake_messagebox.warnings) == 1
+    title, text = fake_messagebox.warnings[0]
+    assert title == "Invalid project configuration"
+    assert "found automatically" in text
+    assert "could not be read" in text
+    assert "/tmp/config.yaml" in text

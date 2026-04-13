@@ -26,6 +26,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+import napari_deeplabcut.core.io as io
 from napari_deeplabcut.config.keybinds import iter_shortcuts
 from napari_deeplabcut.config.settings import get_overwrite_confirmation_enabled
 from napari_deeplabcut.core.conflicts import OverwriteConflictReport
@@ -483,16 +484,63 @@ class ProjectConfigPromptAction(str, Enum):
 class ProjectConfigPromptResult:
     action: ProjectConfigPromptAction
     config_path: str | None = None
+    scorer: str | None = None
+
+
+def load_scorer_from_config(config_path: str | Path) -> str | None:
+    """Return the non-empty DLC scorer from a config.yaml, if present."""
+    cfg = io.load_config(str(config_path))
+    scorer = cfg.get("scorer") if isinstance(cfg, dict) else None
+    if isinstance(scorer, str) and scorer.strip():
+        return scorer.strip()
+    return None
+
+
+def warn_invalid_config_for_scorer(
+    parent,
+    *,
+    config_path: str | Path,
+    reason: str = "missing_scorer",
+    auto_found: bool = False,
+) -> None:
+    """Explain why a config.yaml cannot be used to resolve a scorer."""
+    config_path = str(config_path)
+
+    if reason == "unreadable":
+        if auto_found:
+            text = (
+                "A DeepLabCut config.yaml was found automatically, but it could not be read:\n\n"
+                f"{config_path}\n\n"
+                "Please fix the file or choose another config.yaml."
+            )
+        else:
+            text = f"The selected file could not be read as a DeepLabCut config.yaml:\n\n{config_path}"
+    else:
+        if auto_found:
+            text = (
+                "A DeepLabCut config.yaml was found automatically, but its 'scorer' field is missing or empty:\n\n"
+                f"{config_path}\n\n"
+                "Please fix the config.yaml scorer or choose another valid project configuration."
+            )
+        else:
+            text = f"The selected config.yaml does not define a valid non-empty 'scorer' field:\n\n{config_path}"
+
+    QMessageBox.warning(parent, "Invalid project configuration", text)
 
 
 def prompt_for_project_config_for_save(
     parent,
     *,
     initial_dir: str | None = None,
+    window_title: str = "Associate folder with DLC project?",
+    message: str | None = None,
+    choose_button_text: str = "Choose config.yaml",
+    skip_button_text: str = "Continue without association",
+    resolve_scorer: bool = False,
 ) -> ProjectConfigPromptResult:
     """
     Ask the user whether to associate the current labeled folder with an
-    existing DLC project.
+    existing DLC project, optionally resolving a scorer from the selected config.
 
     Returns
     -------
@@ -500,21 +548,32 @@ def prompt_for_project_config_for_save(
         - ASSOCIATE: user selected a config.yaml
         - SKIP: user explicitly chose not to associate, but wants to continue
         - CANCEL: user cancelled the flow and the caller should abort save
+
+    Notes
+    -----
+    If resolve_scorer=True:
+    - the selected config.yaml is loaded immediately
+    - its scorer is validated
+    - the returned result includes `scorer`
+    - invalid/unreadable config files are warned about and the flow is cancelled
     """
     msg = QMessageBox(parent)
     msg.setIcon(QMessageBox.Question)
-    msg.setWindowTitle("Associate folder with DLC project?")
+    msg.setWindowTitle(window_title)
     msg.setText(
-        "No DLC project root could be inferred for this layer.\n\n"
-        "Do you want to choose a config.yaml so this labeled folder can be saved "
-        "using DeepLabCut's standard dataset paths?\n\n"
-        "Important: the current folder name will become the DLC dataset name:\n"
-        "labeled-data/<current-folder-name>/...\n\n"
-        "This will not move files on disk or edit config.yaml."
+        message
+        or (
+            "No DLC project root could be inferred for this layer.\n\n"
+            "Do you want to choose a config.yaml so this labeled folder can be saved "
+            "using DeepLabCut's standard dataset paths?\n\n"
+            "Important: the current folder name will become the DLC dataset name:\n"
+            "labeled-data/<current-folder-name>/...\n\n"
+            "This will not move files on disk or edit config.yaml."
+        )
     )
 
-    yes_btn = msg.addButton("Choose config.yaml", QMessageBox.YesRole)
-    no_btn = msg.addButton("Continue without association", QMessageBox.NoRole)
+    yes_btn = msg.addButton(choose_button_text, QMessageBox.YesRole)
+    no_btn = msg.addButton(skip_button_text, QMessageBox.NoRole)
     msg.addButton(QMessageBox.Cancel)
 
     msg.setDefaultButton(yes_btn)
@@ -538,9 +597,32 @@ def prompt_for_project_config_for_save(
     if not filename:
         return ProjectConfigPromptResult(ProjectConfigPromptAction.CANCEL)
 
+    scorer = None
+    if resolve_scorer:
+        try:
+            scorer = load_scorer_from_config(filename)
+        except Exception:
+            warn_invalid_config_for_scorer(
+                parent,
+                config_path=filename,
+                reason="unreadable",
+                auto_found=False,
+            )
+            return ProjectConfigPromptResult(ProjectConfigPromptAction.CANCEL)
+
+        if not scorer:
+            warn_invalid_config_for_scorer(
+                parent,
+                config_path=filename,
+                reason="missing_scorer",
+                auto_found=False,
+            )
+            return ProjectConfigPromptResult(ProjectConfigPromptAction.CANCEL)
+
     return ProjectConfigPromptResult(
         ProjectConfigPromptAction.ASSOCIATE,
         config_path=filename,
+        scorer=scorer,
     )
 
 
