@@ -3,10 +3,12 @@ repos:
     rev: v6.0.0
     hooks:
       - id: check-added-large-files
+        args: ['--maxkb=1024']
       - id: check-yaml
       - id: check-toml
       - id: end-of-file-fixer
       - id: name-tests-test
+        args: ['--pytest-test-first']
       - id: trailing-whitespace
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.4
