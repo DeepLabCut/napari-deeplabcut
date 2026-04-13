@@ -371,13 +371,14 @@ def keypoint_conflicts(df_old: pd.DataFrame, df_new: pd.DataFrame) -> pd.DataFra
     # Reduce across coords first -> any conflict for that coord-set
     # This yields a DataFrame with columns still multi-level including scorer and coords.
     # We then group by key_levels.
-    # Step 1: ensure we can group: drop coords by grouping over it using "any".
+    # Ensure we can group by dropping coords by grouping over it using "any".
     # We'll group over all columns that share the same (individual/bodypart), ignoring coords.
     # To do that cleanly: swap coords to last, then groupby on key_levels.
     conflict_cols = cell_conflict.copy()
 
     # Group columns by key_levels and reduce with any() across remaining levels (coords + scorer)
-    # pandas allows groupby on axis=1 by level names:
+    # pandas no longer allows groupby on axis=1 by level names
+    # we use .T to swap axes, groupby on rows, then .T back to original orientation instead
     key_conflict = conflict_cols.T.groupby(level=key_levels).any().T
 
     return key_conflict

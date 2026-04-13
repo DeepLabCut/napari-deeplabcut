@@ -5,7 +5,6 @@ import logging
 from collections.abc import Sequence
 from enum import Enum, EnumMeta
 from itertools import cycle
-from pathlib import Path
 from typing import Protocol
 
 import numpy as np
@@ -22,10 +21,6 @@ class HeaderLike(Protocol):
     def bodyparts(self) -> list[str]: ...
     @property
     def individuals(self) -> list[str]: ...
-
-
-def find_project_config_path(labeled_data_path: str) -> str:
-    return str(Path(labeled_data_path).parents[2] / "config.yaml")
 
 
 @deprecated(

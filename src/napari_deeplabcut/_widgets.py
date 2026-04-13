@@ -1,4 +1,13 @@
-"""Main widget and controls for napari-deeplabcut, including the tutorial and shortcuts windows."""
+"""Main widget and controls for napari-deeplabcut, including the tutorial and shortcuts windows.
+
+NOTE: This file is generally already too long. For future development, please consider:
+- Moving existing responsibilities out into separate modules (existing or new)
+- Avoiding adding anything that is not strictly related to :
+  - Building the final UI (blocks can be moved to ui/ for better organization)
+  - Wiring to the core plugin functionality (e.g. via signals/slots, method calls, etc.)
+  - Anything that requires the full widget+viewer+signal/event context to function properly
+  - Similarly, test_widgets.py is a bit of a default drawer right now, please create new tests in _tests/ui
+"""
 
 # src/napari_deeplabcut/_widgets.py
 from __future__ import annotations
@@ -44,12 +53,22 @@ from napari_deeplabcut.config.keybinds import (
 )
 from napari_deeplabcut.config.models import DLCHeaderModel, ImageMetadata, PointsMetadata
 from napari_deeplabcut.core import keypoints
+from napari_deeplabcut.core.config_sync import (
+    load_point_size_from_config,
+    resolve_config_path_from_layer,
+    save_point_size_to_config,
+)
 from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
 from napari_deeplabcut.core.layers import (
+    compute_label_progress,
+    find_relevant_image_layer,
     get_first_points_layer,
     get_points_layer_with_tables,
+    get_uniform_point_size,
+    infer_folder_display_name,
     is_machine_layer,
+    set_uniform_point_size,
 )
 from napari_deeplabcut.core.metadata import (
     MergePolicy,
@@ -64,12 +83,12 @@ from napari_deeplabcut.core.project_paths import (
     PathMatchPolicy,
     coerce_paths_to_dlc_row_keys,
     dataset_folder_has_files,
+    find_nearest_config,
     resolve_project_root_from_config,
     target_dataset_folder_for_config,
 )
 from napari_deeplabcut.core.provenance import (
     apply_gt_save_target,
-    find_config_scorer_nearby,
     is_projectless_folder_association_candidate,
     requires_gt_promotion,
     suggest_human_placeholder,
@@ -103,6 +122,7 @@ from napari_deeplabcut.ui.labels_and_dropdown import (
     DropdownMenu,
     KeypointsDropdownMenu,
 )
+from napari_deeplabcut.ui.layer_stats import LayerStatusPanel
 from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
@@ -248,6 +268,12 @@ class KeypointControls(QWidget):
         grid.addWidget(self._trail_cb, 2, 0)
         grid.addWidget(self._view_scheme_cb, 3, 0)
 
+        # UX / status panel (folder, progress, point size)
+        self._layer_status_panel = LayerStatusPanel(self)
+        self._layer_status_panel.point_size_changed.connect(self._on_active_points_size_changed)
+        self._layer_status_panel.point_size_commit_requested.connect(self._commit_active_points_size_to_config)
+        self._layout.addWidget(self._layer_status_panel)
+
         self._layout.addLayout(grid)
 
         # form buttons for selection of annotation mode
@@ -332,6 +358,9 @@ class KeypointControls(QWidget):
         # If layers already exist (user loaded data before opening this widget),
         # adopt them so keypoint controls take ownership immediately.
         QTimer.singleShot(0, self._adopt_existing_layers)
+
+        # Refresh layers stats widget
+        QTimer.singleShot(0, self._refresh_layer_status_panel)
 
     # ######################## #
     # Layer setup core methods #
@@ -503,6 +532,8 @@ class KeypointControls(QWidget):
 
         # apply cycles (works even if empty; see method)
         self._apply_points_coloring_from_metadata(layer)
+        self._maybe_initialize_layer_point_size_from_config(layer)
+        self._connect_layer_status_events(layer)
         # refresh trails if enabled (e.g. when merging a config points layer with trails metadata)
         self._trails_controller.on_points_layer_added_or_rewired(checkbox_checked=self._trail_cb.isChecked())
 
@@ -827,6 +858,21 @@ class KeypointControls(QWidget):
                     out,
                 )
 
+    def _resolve_config_path_for_layer(self, layer: Points | None) -> Path | None:
+        if layer is None:
+            return None
+
+        image_layer = find_relevant_image_layer(self.viewer)
+
+        return resolve_config_path_from_layer(
+            layer,
+            fallback_project=self._project_path,
+            fallback_root=self._image_meta.root,
+            image_layer=image_layer,
+            prefer_project_root=True,
+            max_levels=5,
+        )
+
     def _maybe_prepare_project_path_override_metadata(self, layer: Points) -> tuple[dict | None, bool]:
         """
         Optionally prepare save-time metadata by associating a project-less labeled
@@ -932,15 +978,134 @@ class KeypointControls(QWidget):
         show = self._view_scheme_cb.isChecked()
         self._color_scheme_display.setVisible(show)
 
+    def _current_dlc_points_layer(self) -> Points | None:
+        active = self.viewer.layers.selection.active
+        if not isinstance(active, Points):
+            return None
+
+        try:
+            res = read_points_meta(active, migrate_legacy=True, drop_controls=True, drop_header=False)
+        except Exception:
+            return None
+
+        if isinstance(res, ValidationError):
+            return None
+
+        if getattr(res, "header", None) is None:
+            return None
+
+        return active
+
+    def _refresh_layer_status_panel(self) -> None:
+        active_layer = self.viewer.layers.selection.active
+        active_dlc_points = self._current_dlc_points_layer()
+        active_image = find_relevant_image_layer(self.viewer)
+
+        folder_name = infer_folder_display_name(
+            active_image if active_image is not None else active_layer,
+            fallback_root=self._image_meta.root,
+        )
+        self._layer_status_panel.set_folder_name(folder_name)
+
+        # No active layer or not a Points layer at all
+        if active_layer is None or not isinstance(active_layer, Points):
+            self._layer_status_panel.set_no_active_points_layer()
+            return
+
+        # Active layer is a Points layer, but not a valid DLC points layer
+        if active_dlc_points is None:
+            self._layer_status_panel.set_invalid_points_layer()
+            return
+
+        self._layer_status_panel.set_point_size_enabled(True)
+        self._layer_status_panel.set_point_size(get_uniform_point_size(active_dlc_points))
+
+        progress = compute_label_progress(active_dlc_points, fallback_paths=self._image_meta.paths)
+        self._layer_status_panel.set_progress_summary(
+            labeled_percent=progress.labeled_percent,
+            remaining_percent=progress.remaining_percent,
+            labeled_points=progress.labeled_points,
+            total_points=progress.total_points,
+            frame_count=progress.frame_count,
+            bodypart_count=progress.bodypart_count,
+            individual_count=progress.individual_count,
+        )
+
+    def _on_active_points_size_changed(self, size: int) -> None:
+        layer = self._current_dlc_points_layer()
+        if layer is None:
+            return
+
+        set_uniform_point_size(layer, size)
+        mark_layer_presentation_changed(layer)
+
+    def _commit_active_points_size_to_config(self, size: int) -> None:
+        layer = self._current_dlc_points_layer()
+        if layer is None:
+            return
+
+        config_path = self._resolve_config_path_for_layer(layer)
+        if config_path is None:
+            logger.debug(
+                "No config.yaml could be resolved at commit time for active layer %r",
+                getattr(layer, "name", layer),
+            )
+            return
+
+        try:
+            changed = save_point_size_to_config(config_path, int(size))
+            if changed:
+                self.viewer.status = f"Updated config dotsize to {int(size)}"
+        except Exception:
+            logger.debug("Failed to sync point size to config", exc_info=True)
+
+    def _maybe_initialize_layer_point_size_from_config(self, layer: Points) -> None:
+        config_path = self._resolve_config_path_for_layer(layer)
+        if config_path is None:
+            return
+
+        config_size = load_point_size_from_config(config_path)
+        if config_size is None:
+            return
+
+        current_size = get_uniform_point_size(layer)
+
+        # Conservative initialization
+        if current_size <= 8:
+            try:
+                set_uniform_point_size(layer, config_size)
+                mark_layer_presentation_changed(layer)
+            except Exception:
+                logger.debug("Could not initialize layer point size from config", exc_info=True)
+
+    def _connect_layer_status_events(self, layer: Points) -> None:
+        """
+        Keep the UX panel live without adding heavy watchers.
+        """
+        try:
+            layer.events.data.connect(lambda event=None, _layer=layer: self._refresh_layer_status_panel())
+        except Exception:
+            pass
+
+        try:
+            layer.events.size.connect(lambda event=None, _layer=layer: self._refresh_layer_status_panel())
+        except Exception:
+            pass
+
+        try:
+            layer.events.properties.connect(lambda event=None, _layer=layer: self._refresh_layer_status_panel())
+        except Exception:
+            pass
+
     def _form_help_buttons(self):
         layout = QVBoxLayout()
         help_buttons_layout = QHBoxLayout()
-        show_shortcuts = QPushButton("View shortcuts")
-        show_shortcuts.clicked.connect(self.display_shortcuts)
-        help_buttons_layout.addWidget(show_shortcuts)
-        tutorial = QPushButton("Start tutorial")
-        tutorial.clicked.connect(self.start_tutorial)
-        help_buttons_layout.addWidget(tutorial)
+        self.show_shortcuts_btn = QPushButton("View shortcuts")
+        self.show_shortcuts_btn.clicked.connect(self.display_shortcuts)
+        help_buttons_layout.addWidget(self.show_shortcuts_btn)
+        self.tutorial_btn = QPushButton("Start tutorial")
+        self.tutorial_btn.clicked.connect(self.start_tutorial)
+        help_buttons_layout.addWidget(self.tutorial_btn)
         layout.addLayout(help_buttons_layout)
         self._keypoint_mapping_button = QPushButton("Load superkeypoints diagram")
         self._load_superkeypoints_action = self._keypoint_mapping_button.clicked.connect(
@@ -1212,6 +1377,7 @@ class KeypointControls(QWidget):
             if not isinstance(layer_, Image):
                 self._remap_frame_indices(layer_)
         self._refresh_video_panel_context()
+        self._refresh_layer_status_panel()
 
     def on_remove(self, event):
         layer = event.value
@@ -1249,6 +1415,7 @@ class KeypointControls(QWidget):
                     self._trail_cb.setChecked(False)
 
         self._refresh_video_panel_context()
+        self._refresh_layer_status_panel()
 
     def _on_show_trails_toggled(self, state):
         self._trails_controller.toggle(Qt.CheckState(state) == Qt.CheckState.Checked)
@@ -1289,31 +1456,89 @@ class KeypointControls(QWidget):
             QMessageBox.warning(self, "Cannot save", "Could not determine a folder anchor for saving.")
             return False
 
-        scorer = find_config_scorer_nearby(anchor) or get_default_scorer(anchor)
-        if not scorer:
-            suggested = suggest_human_placeholder(anchor)
-            while True:
-                s = _prompt_for_scorer(self, anchor=anchor, suggested=suggested)
-                if s is None:
-                    return False
-                if s.startswith("human_"):
-                    choice = QMessageBox.question(
-                        self,
-                        "Generic scorer name",
-                        "You entered a generic scorer name starting with 'human_'.\n\n"
-                        "We strongly recommend using a real name or stable identifier.\n"
-                        "Do you want to keep this generic scorer anyway?",
-                        QMessageBox.Yes | QMessageBox.No,
-                    )
-                    if choice == QMessageBox.No:
-                        suggested = s
-                        continue
-                scorer = s
-                break
+        scorer = None
+
+        # 1) Auto-discovered config.yaml always wins
+        cfg_path = None
+        try:
+            cfg_path = find_nearest_config(anchor)
+        except Exception:
+            logger.debug("Automatic config discovery failed for anchor=%r", anchor, exc_info=True)
+
+        if cfg_path:
             try:
-                set_default_scorer(anchor, scorer)
+                scorer = ui_dialogs.load_scorer_from_config(cfg_path)
             except Exception:
-                logger.debug("Failed to persist default scorer to sidecar", exc_info=True)
+                logger.exception("Failed to load auto-discovered config.yaml: %s", cfg_path)
+                ui_dialogs.warn_invalid_config_for_scorer(
+                    self,
+                    config_path=cfg_path,
+                    reason="unreadable",
+                    auto_found=True,
+                )
+                return False
+
+            if not scorer:
+                ui_dialogs.warn_invalid_config_for_scorer(
+                    self,
+                    config_path=cfg_path,
+                    reason="missing_scorer",
+                    auto_found=True,
+                )
+                return False
+
+        else:
+            # 2) No config found automatically -> let the user choose one
+            dialog_result = ui_dialogs.prompt_for_project_config_for_save(
+                self,
+                initial_dir=self._project_path or anchor,
+                window_title="Locate DLC config for scorer resolution",
+                message=(
+                    "No DeepLabCut config.yaml could be found automatically for this machine-labeled layer.\n\n"
+                    "If this layer belongs to a DLC project, choose its config.yaml so the save uses the "
+                    "project scorer and standard naming.\n\n"
+                    "If no config.yaml exists, you can continue without one."
+                ),
+                choose_button_text="Choose config.yaml",
+                skip_button_text="Continue without config",
+                resolve_scorer=True,
+            )
+
+            if dialog_result.action is ui_dialogs.ProjectConfigPromptAction.CANCEL:
+                return False
+
+            if dialog_result.action is ui_dialogs.ProjectConfigPromptAction.ASSOCIATE:
+                scorer = dialog_result.scorer
+
+            else:
+                # 3) Only if no config is available at all may sidecar be consulted
+                scorer = get_default_scorer(anchor)
+
+                # 4) Final fallback: prompt manually
+                if not scorer:
+                    suggested = suggest_human_placeholder(anchor)
+                    while True:
+                        s = _prompt_for_scorer(self, anchor=anchor, suggested=suggested)
+                        if s is None:
+                            return False
+                        if s.startswith("human_"):
+                            choice = QMessageBox.question(
+                                self,
+                                "Generic scorer name",
+                                "You entered a generic scorer name starting with 'human_'.\n\n"
+                                "We strongly recommend using a real name or stable identifier.\n"
+                                "Do you want to keep this generic scorer anyway?",
+                                QMessageBox.Yes | QMessageBox.No,
+                            )
+                            if choice == QMessageBox.No:
+                                suggested = s
+                                continue
+                        scorer = s
+                        break
+                    try:
+                        set_default_scorer(anchor, scorer)
+                    except Exception:
+                        logger.debug("Failed to persist default scorer to sidecar", exc_info=True)
 
         updated = apply_gt_save_target(
             pts,
@@ -1491,6 +1716,7 @@ class KeypointControls(QWidget):
                 menu.setHidden(True)
 
         self._refresh_video_panel_context()
+        self._refresh_layer_status_panel()
 
     def _update_colormap(self, colormap_name: str):
         for layer in self.viewer.layers.selection:

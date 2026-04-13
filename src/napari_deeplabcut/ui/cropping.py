@@ -16,7 +16,7 @@ from qtpy.QtWidgets import QCheckBox, QGroupBox, QLabel, QMessageBox, QPushButto
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut._writer import _write_image
 from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_extracted_labels_row
-from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
+from napari_deeplabcut.core.dataframes import align_old_new, guarantee_multiindex_rows
 from napari_deeplabcut.core.project_paths import (
     canonicalize_path,
     infer_dlc_project,
@@ -757,6 +757,7 @@ def execute_frame_extraction(plan: FrameExtractionPlan) -> tuple[list[Path], str
                 df_prev = pd.read_hdf(plan.labels_path)
 
             guarantee_multiindex_rows(df_prev)
+            df_prev, df_new = align_old_new(df_prev, df_new)
             df_merged = pd.concat([df_prev, df_new])
 
             # IMPORTANT:

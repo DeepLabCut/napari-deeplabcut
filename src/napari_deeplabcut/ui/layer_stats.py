@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+from qtpy.QtCore import QSignalBlocker, Qt, Signal
+from qtpy.QtWidgets import (
+    QFormLayout,
+    QGraphicsOpacityEffect,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
+
+
+class LayerStatusPanel(QGroupBox):
+    """
+    Small dock-widget panel showing:
+    - current folder name
+    - labeling progress
+    - point size control (slider)
+    """
+
+    point_size_changed = Signal(int)
+    point_size_commit_requested = Signal(int)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__("Layer status", parent=parent)
+
+        self._folder_value = QLabel("—")
+        self._folder_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        self._progress_value = QLabel("No active keypoints layer")
+        self._progress_value.setWordWrap(True)
+        self._progress_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        self._size_slider = QSlider(Qt.Horizontal, self)
+        self._size_slider.setRange(1, 100)
+        self._size_slider.setSingleStep(1)
+        self._size_slider.setPageStep(2)
+        self._size_slider.setValue(6)
+        self._size_opacity = QGraphicsOpacityEffect(self._size_slider)
+        self._size_slider.setGraphicsEffect(self._size_opacity)
+
+        self._size_value = QLabel("6")
+        self._size_value.setMinimumWidth(28)
+        self._size_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        # Dedicated container for the whole size-control row
+        self._size_controls = QWidget(self)
+        size_row = QHBoxLayout(self._size_controls)
+        size_row.setContentsMargins(0, 0, 0, 0)
+        size_row.addWidget(self._size_slider, stretch=1)
+        size_row.addWidget(self._size_value, stretch=0)
+
+        size_tooltip = "Point size for the active DLC keypoints layer. Saved to config.yaml as dotsize when changed."
+        self._size_slider.setToolTip(size_tooltip)
+        self._size_value.setToolTip(size_tooltip)
+        self._size_controls.setToolTip(size_tooltip)
+
+        form = QFormLayout()
+        form.addRow("Folder", self._folder_value)
+        form.addRow("Progress", self._progress_value)
+        form.addRow("Point size", self._size_controls)
+
+        wrapper = QVBoxLayout(self)
+        wrapper.addLayout(form)
+
+        self._size_slider.setTracking(False)
+
+        self._size_slider.sliderMoved.connect(self._on_slider_moved_preview)
+        self._size_slider.valueChanged.connect(self._on_value_changed_commit)
+
+        self.set_point_size_enabled(False, reason="Select a DLC keypoints layer to edit point size.")
+
+    def _on_slider_moved_preview(self, value: int) -> None:
+        self._size_value.setText(str(int(value)))
+        self.point_size_changed.emit(int(value))  # visual only
+
+    def _on_value_changed_commit(self, value: int) -> None:
+        self._size_value.setText(str(int(value)))
+        # Ensure non-mouse / programmatic changes also update the visual layer size
+        self.point_size_changed.emit(int(value))  # visual update on commit
+        self.point_size_commit_requested.emit(int(value))  # save / persist
+
+    def _emit_commit(self) -> None:
+        self.point_size_commit_requested.emit(self.point_size())
+
+    def point_size(self) -> int:
+        return int(self._size_slider.value())
+
+    def set_point_size(self, value: int) -> None:
+        blocker = QSignalBlocker(self._size_slider)
+        self._size_slider.setValue(int(value))
+        del blocker
+        self._size_value.setText(str(int(value)))
+
+    def set_point_size_enabled(self, enabled: bool, *, reason: str | None = None) -> None:
+        enabled = bool(enabled)
+
+        # Disable the entire container so both slider and label get proper native disabled styling
+        self._size_controls.setEnabled(enabled)
+        self._size_slider.setEnabled(enabled)
+        self._size_value.setEnabled(enabled)
+
+        opacity = 1.0 if enabled else 0.35
+        self._size_opacity.setOpacity(opacity)
+
+        tooltip = (
+            "Point size for the active DLC keypoints layer. Saved to config.yaml as dotsize when changed."
+            if enabled
+            else (reason or "Select a DLC keypoints layer to edit point size.")
+        )
+
+        self._size_controls.setToolTip(tooltip)
+        self._size_slider.setToolTip(tooltip)
+        self._size_value.setToolTip(tooltip)
+
+    def set_folder_name(self, folder_name: str) -> None:
+        self._folder_value.setText(folder_name or "—")
+
+    def set_progress_summary(
+        self,
+        *,
+        labeled_percent: float,
+        remaining_percent: float,
+        labeled_points: int,
+        total_points: int,
+        frame_count: int,
+        bodypart_count: int,
+        individual_count: int,
+    ) -> None:
+        if total_points <= 0:
+            self._progress_value.setText("Not enough metadata to estimate progress yet")
+            self._progress_value.setToolTip("")
+            return
+
+        if individual_count <= 1:
+            breakdown = f"{frame_count} frames × {bodypart_count} bodyparts"
+        else:
+            breakdown = f"{frame_count} frames × {bodypart_count} bodyparts × {individual_count} individuals"
+
+        self._progress_value.setText(f"{labeled_percent:.1f}% labeled")
+        self._progress_value.setToolTip(
+            f"{labeled_percent:.1f}% labeled, {remaining_percent:.1f}% remaining\n"
+            f"{labeled_points}/{total_points} of all possible points labeled • {breakdown}"
+        )
+
+    def set_no_active_points_layer(self) -> None:
+        self._progress_value.setText("No active keypoints layer")
+        self._progress_value.setToolTip("")
+        self.set_point_size_enabled(False, reason="Select a DLC keypoints layer to edit point size.")
+
+    def set_invalid_points_layer(self) -> None:
+        self._progress_value.setText("Active layer is not a DLC keypoints layer")
+        self._progress_value.setToolTip("")
+        self.set_point_size_enabled(False, reason="This control only works for DLC keypoints layers.")
