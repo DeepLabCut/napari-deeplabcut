@@ -84,7 +84,7 @@ class InMemoryDebugRecorder(logging.Handler):
 
     def __init__(self, *, capacity: int = LOG_QUEUE_MAXLEN, level: int = logging.DEBUG):
         super().__init__(level=level)
-        self._records: deque[RecordedLog] = deque(maxlen=max(10, int(capacity)))
+        self._records: deque[RecordedLog] = deque(maxlen=max(1, int(capacity)))
         self._lock = threading.Lock()
         self._dropped = 0
 
@@ -195,8 +195,8 @@ def _safe_tail(pathlike) -> str:
         p = Path(str(pathlike))
         parts = p.parts
         if len(parts) >= 2:
-            return str(Path(*parts[-2:]))
-        return str(p)
+            return str(Path(*parts[-2:]).as_posix())
+        return str(p.as_posix())
     except Exception:
         return str(pathlike)
 
