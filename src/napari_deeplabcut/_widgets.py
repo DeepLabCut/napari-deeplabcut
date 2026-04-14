@@ -195,11 +195,6 @@ class KeypointControls(QWidget):
         ## Debug ##
         self._debug_recorder = install_debug_recorder()
         self._debug_window = None
-
-        show_debug_action = QAction("&Generate napari-dlc log", self)
-        show_debug_action.setToolTip("Show a debug report with recent plugin logs")
-        show_debug_action.triggered.connect(self._show_debug_window)
-        self.viewer.window.help_menu.addAction(show_debug_action)
         ###########
 
         # self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
@@ -367,17 +362,7 @@ class KeypointControls(QWidget):
             elif "save all layers" in action_name:
                 self.viewer.window.file_menu.removeAction(action)
 
-        # Add action to show the walkthrough again
-        launch_tutorial = QAction("&Launch napari-dlc tutorial", self)
-        launch_tutorial.triggered.connect(self.start_tutorial)
-        self.viewer.window.view_menu.addAction(launch_tutorial)
-
-        # Add action to view keyboard shortcuts
-        display_shortcuts_action = QAction("&Show napari-dlc shortcuts", self)
-        display_shortcuts_action.triggered.connect(self.display_shortcuts)
-        self.viewer.window.help_menu.addAction(display_shortcuts_action)
-        # Install global keybinds
-        install_global_points_keybindings()
+        self._add_plugin_actions()
 
         # Hide some unused viewer buttons
         # NOTE (future) do we truly want to disable these ? Tracking util may need to create new points layers
@@ -1328,6 +1313,80 @@ class KeypointControls(QWidget):
         except Exception:
             pass
 
+    # ------------------------------------------------------------------
+    # UI setup
+    # ------------------------------------------------------------------
+    def _add_plugin_actions(self):
+        # Help menu
+        self.viewer.window.help_menu.addSeparator()
+        # Add action to show the walkthrough again
+        launch_tutorial = QAction("&Launch napari-dlc tutorial", self)
+        launch_tutorial.triggered.connect(self.start_tutorial)
+        self.viewer.window.help_menu.addAction(launch_tutorial)
+
+        # Add action to view keyboard shortcuts
+        display_shortcuts_action = QAction("&Show napari-dlc shortcuts", self)
+        display_shortcuts_action.triggered.connect(self.display_shortcuts)
+        self.viewer.window.help_menu.addAction(display_shortcuts_action)
+        # Install global keybinds hook
+        install_global_points_keybindings()
+
+        # Add debug action to generate a log report for troubleshooting
+        show_debug_action = QAction("&Generate napari-dlc log", self)
+        show_debug_action.setToolTip("Show a debug report with recent plugin logs")
+        show_debug_action.triggered.connect(self._show_debug_window)
+        self.viewer.window.help_menu.addAction(show_debug_action)
+
+    def _form_dropdown_menus(self, store):
+        menu = KeypointsDropdownMenu(store)
+        self.viewer.dims.events.current_step.connect(
+            menu.smart_reset,
+            position="last",
+        )
+        menu.smart_reset(event=None)
+        self._menus.append(menu)
+        self._layer_to_menu[store.layer] = len(self._menus) - 1
+        layout = QVBoxLayout()
+        layout.addWidget(menu)
+        self._layout.addLayout(layout)
+
+    def _form_mode_radio_buttons(self):
+        group_box = QGroupBox("Labeling mode")
+        layout = QHBoxLayout()
+        group = QButtonGroup(self)
+        for i, mode in enumerate(keypoints.LabelMode.__members__, start=1):
+            btn = QRadioButton(mode.capitalize())
+            btn.setToolTip(keypoints.TOOLTIPS[mode])
+            group.addButton(btn, i)
+            layout.addWidget(btn)
+        group.button(1).setChecked(True)
+        group_box.setLayout(layout)
+        self._layout.addWidget(group_box)
+
+        def _func():
+            self.label_mode = group.checkedButton().text().lower()
+
+        group.buttonClicked.connect(_func)
+        return group_box, group
+
+    def _form_color_mode_selector(self):
+        group_box = QGroupBox("Keypoint coloring mode")
+        layout = QHBoxLayout()
+        group = QButtonGroup(self)
+        for i, mode in enumerate(keypoints.ColorMode.__members__, start=1):
+            btn = QRadioButton(mode.capitalize())
+            group.addButton(btn, i)
+            layout.addWidget(btn)
+        group.button(1).setChecked(True)
+        group_box.setLayout(layout)
+        self._layout.addWidget(group_box)
+
+        def _func():
+            self.color_mode = group.checkedButton().text().lower()
+
+        group.buttonClicked.connect(_func)
+        return group_box, group
+
     def _form_help_buttons(self):
         layout = QVBoxLayout()
         help_buttons_layout = QHBoxLayout()
@@ -1392,56 +1451,6 @@ class KeypointControls(QWidget):
             self._project_path = project_path
         self.viewer.status = msg
         self._refresh_video_panel_context()
-
-    def _form_dropdown_menus(self, store):
-        menu = KeypointsDropdownMenu(store)
-        self.viewer.dims.events.current_step.connect(
-            menu.smart_reset,
-            position="last",
-        )
-        menu.smart_reset(event=None)
-        self._menus.append(menu)
-        self._layer_to_menu[store.layer] = len(self._menus) - 1
-        layout = QVBoxLayout()
-        layout.addWidget(menu)
-        self._layout.addLayout(layout)
-
-    def _form_mode_radio_buttons(self):
-        group_box = QGroupBox("Labeling mode")
-        layout = QHBoxLayout()
-        group = QButtonGroup(self)
-        for i, mode in enumerate(keypoints.LabelMode.__members__, start=1):
-            btn = QRadioButton(mode.capitalize())
-            btn.setToolTip(keypoints.TOOLTIPS[mode])
-            group.addButton(btn, i)
-            layout.addWidget(btn)
-        group.button(1).setChecked(True)
-        group_box.setLayout(layout)
-        self._layout.addWidget(group_box)
-
-        def _func():
-            self.label_mode = group.checkedButton().text().lower()
-
-        group.buttonClicked.connect(_func)
-        return group_box, group
-
-    def _form_color_mode_selector(self):
-        group_box = QGroupBox("Keypoint coloring mode")
-        layout = QHBoxLayout()
-        group = QButtonGroup(self)
-        for i, mode in enumerate(keypoints.ColorMode.__members__, start=1):
-            btn = QRadioButton(mode.capitalize())
-            group.addButton(btn, i)
-            layout.addWidget(btn)
-        group.button(1).setChecked(True)
-        group_box.setLayout(layout)
-        self._layout.addWidget(group_box)
-
-        def _func():
-            self.color_mode = group.checkedButton().text().lower()
-
-        group.buttonClicked.connect(_func)
-        return group_box, group
 
     def _update_color_scheme(self):
         if hasattr(self, "_color_scheme_panel"):
