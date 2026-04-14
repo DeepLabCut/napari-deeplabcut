@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/utils/debug.py
 from __future__ import annotations
 
 import logging
@@ -315,3 +316,21 @@ def format_debug_report(
     lines.append("```")
 
     return "\n".join(lines)
+
+
+def build_debug_report(
+    *,
+    viewer,
+    recorder: InMemoryDebugRecorder | None,
+    log_limit: int = 300,
+) -> str:
+    logs_text = recorder.render_text(limit=log_limit) if recorder is not None else "<debug recorder unavailable>"
+
+    env = collect_environment_summary()
+    viewer_summary = summarize_viewer(viewer)
+
+    return format_debug_report(
+        env=env,
+        viewer_summary=viewer_summary,
+        logs_text=logs_text,
+    )
