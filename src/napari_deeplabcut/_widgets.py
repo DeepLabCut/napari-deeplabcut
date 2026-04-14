@@ -76,6 +76,7 @@ from napari_deeplabcut.core.config_sync import (
     save_point_size_to_config,
 )
 from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
+from napari_deeplabcut.core.layer_lifecycle import LayerLifecycleManager
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
 from napari_deeplabcut.core.layers import (
     PointsInteractionEvent,
@@ -189,8 +190,9 @@ class KeypointControls(QWidget):
 
         self.viewer = napari_viewer
 
-        self.viewer.layers.events.inserted.connect(self.on_insert)
-        self.viewer.layers.events.removed.connect(self.on_remove)
+        self.layer_manager = LayerLifecycleManager(self.viewer)
+        # self.viewer.layers.events.inserted.connect(self.on_insert)
+        # self.viewer.layers.events.removed.connect(self.on_remove)
 
         ## Debug ##
         self._debug_recorder = install_debug_recorder()
@@ -388,7 +390,8 @@ class KeypointControls(QWidget):
 
         # If layers already exist (user loaded data before opening this widget),
         # adopt them so keypoint controls take ownership immediately.
-        QTimer.singleShot(0, self._adopt_existing_layers)
+        # QTimer.singleShot(0, self._adopt_existing_layers)
+        self.layer_manager.schedule_initial_adoption()
 
         # Refresh layers stats widget
         QTimer.singleShot(0, self._refresh_layer_status_panel)
@@ -650,6 +653,7 @@ class KeypointControls(QWidget):
 
         store = keypoints.KeypointStore(self.viewer, layer)
         self._stores[layer] = store
+        self.layer_manager.register_managed_points_layer(layer, store)
         layer._dlc_store = store
         layer._dlc_controls = self
 
@@ -1607,6 +1611,7 @@ class KeypointControls(QWidget):
             return
 
     def on_insert(self, event):
+        logger.debug("on_insert event received: event=%r", event)
         layer = event.source[-1]
         logger.debug(
             "on_insert layer=%r type=%s index=%s",
@@ -1625,14 +1630,13 @@ class KeypointControls(QWidget):
         self._refresh_video_panel_context()
         self._refresh_layer_status_panel()
 
-    def on_remove(self, event):
-        layer = event.value
+    def _handle_removed_layer(self, layer) -> None:
         n_points_layer = sum(isinstance(l, Points) for l in self.viewer.layers)
 
         if isinstance(layer, Points):
             self._stores.pop(layer, None)
+            self._lifecycle.unregister_managed_layer(layer)
 
-            # Refresh color scheme panel regardless; it will clear itself if no valid target remains.
             self._update_color_scheme()
             self._trails_controller.on_points_layer_removed(layer)
 
