@@ -196,10 +196,11 @@ class KeypointControls(QWidget):
         self._debug_recorder = install_debug_recorder()
         self._debug_window = None
 
-        show_debug_action = QAction("&Generate debug log", self)
+        show_debug_action = QAction("&Generate napari-dlc log", self)
         show_debug_action.setToolTip("Show a debug report with recent plugin logs")
         show_debug_action.triggered.connect(self._show_debug_window)
         self.viewer.window.help_menu.addAction(show_debug_action)
+        ###########
 
         # self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
         #     _get_and_try_preferred_reader,
@@ -367,12 +368,12 @@ class KeypointControls(QWidget):
                 self.viewer.window.file_menu.removeAction(action)
 
         # Add action to show the walkthrough again
-        launch_tutorial = QAction("&Launch Tutorial", self)
+        launch_tutorial = QAction("&Launch napari-dlc tutorial", self)
         launch_tutorial.triggered.connect(self.start_tutorial)
         self.viewer.window.view_menu.addAction(launch_tutorial)
 
         # Add action to view keyboard shortcuts
-        display_shortcuts_action = QAction("&Shortcuts", self)
+        display_shortcuts_action = QAction("&Show napari-dlc shortcuts", self)
         display_shortcuts_action.triggered.connect(self.display_shortcuts)
         self.viewer.window.help_menu.addAction(display_shortcuts_action)
         # Install global keybinds
@@ -501,7 +502,7 @@ class KeypointControls(QWidget):
                 self._debug_window = DebugTextWindow(
                     title="napari-deeplabcut debug info",
                     text_provider=provider,
-                    parent=self.viewer.window._qt_window,
+                    parent=self,
                     initial_hint="Read-only diagnostics. Paste this into a bug report if needed.",
                 )
                 self._debug_window.finished.connect(lambda _result: setattr(self, "_debug_window", None))
