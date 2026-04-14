@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from qtpy.QtCore import Qt
-from qtpy.QtGui import QAction, QFontDatabase, QKeySequence
+from qtpy.QtGui import QAction, QFontDatabase, QKeySequence, QTextCursor
 from qtpy.QtWidgets import (
     QApplication,
     QDialog,
@@ -128,7 +128,7 @@ class DebugTextWindow(QDialog):
             text = f"[debug-window] failed to build debug text\n\n{exc!r}"
 
         self._text_edit.setPlainText(text or "<no debug text available>")
-        self._text_edit.moveCursor(self._text_edit.textCursor().Start)
+        self._text_edit.moveCursor(QTextCursor.MoveOperation.Start)
         self._status_label.setText("")
 
     def copy_to_clipboard(self) -> None:
