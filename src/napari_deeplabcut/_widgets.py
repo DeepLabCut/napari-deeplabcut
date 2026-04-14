@@ -136,6 +136,7 @@ from napari_deeplabcut.ui.cropping import (
     run_store_crop_coordinates,
     update_video_panel_context,
 )
+from napari_deeplabcut.ui.debug_window import DebugTextWindow, make_issue_report_provider
 from napari_deeplabcut.ui.dialogs import Shortcuts, Tutorial
 from napari_deeplabcut.ui.labels_and_dropdown import (
     DropdownMenu,
@@ -143,6 +144,7 @@ from napari_deeplabcut.ui.labels_and_dropdown import (
 )
 from napari_deeplabcut.ui.layer_stats import LayerStatusPanel
 from napari_deeplabcut.ui.plots.trajectory import TrajectoryMatplotlibCanvas
+from napari_deeplabcut.utils.debug import get_debug_recorder, install_debug_recorder
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
 # logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
@@ -189,6 +191,15 @@ class KeypointControls(QWidget):
 
         self.viewer.layers.events.inserted.connect(self.on_insert)
         self.viewer.layers.events.removed.connect(self.on_remove)
+
+        ## Debug ##
+        self._debug_recorder = install_debug_recorder()
+        self._debug_window = None
+
+        show_debug_action = QAction("&Generate debug log", self)
+        show_debug_action.setToolTip("Show a debug report with recent plugin logs")
+        show_debug_action.triggered.connect(self._show_debug_window)
+        self.viewer.window.help_menu.addAction(show_debug_action)
 
         # self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
         #     _get_and_try_preferred_reader,
@@ -399,6 +410,109 @@ class KeypointControls(QWidget):
     @cached_property
     def settings(self):
         return QSettings()
+
+    @register_points_action("Change labeling mode")
+    def cycle_through_label_modes(self, *args):
+        self.label_mode = next(keypoints.LabelMode)
+
+    @register_points_action("Change color mode")
+    def cycle_through_color_modes(self, *args):
+        if self._active_layer_is_multianimal() or self.color_mode != str(keypoints.ColorMode.BODYPART):
+            self.color_mode = next(keypoints.ColorMode)
+
+    @property
+    def label_mode(self):
+        return str(self._label_mode)
+
+    @label_mode.setter
+    def label_mode(self, mode: str | keypoints.LabelMode):
+        self._label_mode = keypoints.LabelMode(mode)
+        self.viewer.status = self.label_mode
+        mode_ = str(mode).lower()
+        if mode_ == keypoints.LabelMode.LOOP.value.lower():
+            for menu in self._menus:
+                menu._locked = True
+        else:
+            for menu in self._menus:
+                menu._locked = False
+        for btn in self._radio_group.buttons():
+            if btn.text().lower() == mode_:
+                btn.setChecked(True)
+                break
+
+    @property
+    def color_mode(self):
+        return str(self._color_mode)
+
+    @color_mode.setter
+    def color_mode(self, mode: str | keypoints.ColorMode):
+        self._color_mode = keypoints.ColorMode(mode)
+
+        for layer in list(self._stores.keys()):
+            if isinstance(layer, Points) and layer.metadata:
+                self._apply_points_coloring_from_metadata(layer)
+
+        for btn in self._color_mode_selector.buttons():
+            if btn.text().lower() == str(mode).lower():
+                btn.setChecked(True)
+                break
+
+        traj_canvas = self._safe_get_traj_canvas()
+        if traj_canvas is not None:
+            try:
+                traj_canvas.refresh_from_viewer_layers()
+            except Exception:
+                logger.debug("Failed to refresh trajectory plot after color mode change", exc_info=True)
+
+        self._update_color_scheme()
+        self._trails_controller.on_points_visual_inputs_changed(checkbox_checked=self._trail_cb.isChecked())
+
+    def _is_multianimal(self, layer) -> bool:
+        if layer is None or not isinstance(layer, Points):
+            return False
+
+        md = layer.metadata or {}
+        hdr = self._get_header_model_from_metadata(md)
+        if hdr is None:
+            return False
+
+        try:
+            inds = hdr.individuals
+            return bool(inds and len(inds) > 0 and str(inds[0]) != "")
+        except Exception:
+            return False
+
+    def _active_layer_is_multianimal(self) -> bool:
+        """Returns: whether the active layer is a multi-animal points layer"""
+        for layer in self.viewer.layers.selection:
+            if self._is_multianimal(layer):
+                return True
+
+        return False
+
+    def _show_debug_window(self) -> None:
+        try:
+            if self._debug_window is None:
+                provider = make_issue_report_provider(
+                    viewer=self.viewer,
+                    recorder=get_debug_recorder(),
+                    log_limit=300,
+                )
+                self._debug_window = DebugTextWindow(
+                    title="napari-deeplabcut debug info",
+                    text_provider=provider,
+                    parent=self.viewer.window._qt_window,
+                    initial_hint="Read-only diagnostics. Paste this into a bug report if needed.",
+                )
+                self._debug_window.finished.connect(lambda _result: setattr(self, "_debug_window", None))
+
+            self._debug_window.show()
+            self._debug_window.raise_()
+            self._debug_window.activateWindow()
+
+        except Exception:
+            logger.debug("Failed to open debug window", exc_info=True)
+            self.viewer.status = "Could not open debug window"
 
     # ######################## #
     # Layer setup core methods #
@@ -1802,85 +1916,6 @@ class KeypointControls(QWidget):
 
             self._update_color_scheme()
             self._trails_controller.on_points_visual_inputs_changed(checkbox_checked=self._trail_cb.isChecked())
-
-    @register_points_action("Change labeling mode")
-    def cycle_through_label_modes(self, *args):
-        self.label_mode = next(keypoints.LabelMode)
-
-    @register_points_action("Change color mode")
-    def cycle_through_color_modes(self, *args):
-        if self._active_layer_is_multianimal() or self.color_mode != str(keypoints.ColorMode.BODYPART):
-            self.color_mode = next(keypoints.ColorMode)
-
-    @property
-    def label_mode(self):
-        return str(self._label_mode)
-
-    @label_mode.setter
-    def label_mode(self, mode: str | keypoints.LabelMode):
-        self._label_mode = keypoints.LabelMode(mode)
-        self.viewer.status = self.label_mode
-        mode_ = str(mode).lower()
-        if mode_ == keypoints.LabelMode.LOOP.value.lower():
-            for menu in self._menus:
-                menu._locked = True
-        else:
-            for menu in self._menus:
-                menu._locked = False
-        for btn in self._radio_group.buttons():
-            if btn.text().lower() == mode_:
-                btn.setChecked(True)
-                break
-
-    @property
-    def color_mode(self):
-        return str(self._color_mode)
-
-    @color_mode.setter
-    def color_mode(self, mode: str | keypoints.ColorMode):
-        self._color_mode = keypoints.ColorMode(mode)
-
-        for layer in list(self._stores.keys()):
-            if isinstance(layer, Points) and layer.metadata:
-                self._apply_points_coloring_from_metadata(layer)
-
-        for btn in self._color_mode_selector.buttons():
-            if btn.text().lower() == str(mode).lower():
-                btn.setChecked(True)
-                break
-
-        traj_canvas = self._safe_get_traj_canvas()
-        if traj_canvas is not None:
-            try:
-                traj_canvas.refresh_from_viewer_layers()
-            except Exception:
-                logger.debug("Failed to refresh trajectory plot after color mode change", exc_info=True)
-
-        self._update_color_scheme()
-        self._trails_controller.on_points_visual_inputs_changed(checkbox_checked=self._trail_cb.isChecked())
-
-    def _is_multianimal(self, layer) -> bool:
-        if layer is None or not isinstance(layer, Points):
-            return False
-
-        md = layer.metadata or {}
-        hdr = self._get_header_model_from_metadata(md)
-        if hdr is None:
-            return False
-
-        try:
-            inds = hdr.individuals
-            return bool(inds and len(inds) > 0 and str(inds[0]) != "")
-        except Exception:
-            return False
-
-    def _active_layer_is_multianimal(self) -> bool:
-        """Returns: whether the active layer is a multi-animal points layer"""
-        for layer in self.viewer.layers.selection:
-            if self._is_multianimal(layer):
-                return True
-
-        return False
 
     def _resolved_cycle_for_layer(self, layer: Points) -> dict:
         """
