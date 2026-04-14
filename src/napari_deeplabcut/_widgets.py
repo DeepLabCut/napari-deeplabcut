@@ -542,15 +542,30 @@ class KeypointControls(QWidget):
 
         self._sync_points_layers_from_image_meta()
         self._refresh_video_panel_context()
+        logger.debug(
+            "Setup image layer=%r index=%s reorder=%s paths_count=%s root=%r",
+            getattr(layer, "name", layer),
+            index,
+            reorder,
+            len(md.get("paths") or []),
+            md.get("root"),
+        )
 
         if reorder and index is not None:
             QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, index))
 
     def _maybe_merge_config_points_layer(self, layer: Points) -> bool:
-        if not layer.metadata.get("project", "") or not self._stores:
+        md = layer.metadata or {}
+        logger.debug(
+            "Maybe merge config points layer=%r project=%r stores=%d",
+            getattr(layer, "name", layer),
+            md.get("project"),
+            len(self._stores),
+        )
+        if not md.get("project", "") or not self._stores:
             return False
 
-        new_metadata = layer.metadata.copy()
+        new_metadata = md.copy()
 
         keypoints_menu = self._menus[0].menus["label"]
         current_keypoint_set = {keypoints_menu.itemText(i) for i in range(keypoints_menu.count())}
@@ -564,6 +579,11 @@ class KeypointControls(QWidget):
             answer = QMessageBox.question(self, "", "Do you want to display the new keypoints only?")
             if answer == QMessageBox.Yes:
                 self.viewer.layers[-2].shown = False
+                logger.debug(
+                    "Merging config points layer=%r new_keypoints=%s",
+                    getattr(layer, "name", layer),
+                    sorted(diff),
+                )
 
             self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
             for _layer, store in self._stores.items():
@@ -704,6 +724,16 @@ class KeypointControls(QWidget):
         self._trail_cb.setEnabled(True)
         self._show_traj_plot_cb.setEnabled(True)
 
+        md = layer.metadata or {}
+        logger.debug(
+            "Wire points layer=%r existing_store=%s project=%s root=%s len_paths=%s",
+            getattr(layer, "name", layer),
+            getattr(layer, "_dlc_store", None) is not None,
+            md.get("project"),
+            md.get("root"),
+            len(md.get("paths", [])),
+        )
+
         return store
 
     def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
@@ -728,6 +758,12 @@ class KeypointControls(QWidget):
                 pass
 
         self._update_color_scheme()
+        logger.debug(
+            "Setup points layer=%r allow_merge=%s metadata_keys=%s",
+            getattr(layer, "name", layer),
+            allow_merge,
+            sorted((layer.metadata or {}).keys()),
+        )
 
     def _adopt_existing_layers(self) -> None:
         """
@@ -735,6 +771,7 @@ class KeypointControls(QWidget):
         run the same initialization as if they had been inserted.
         """
         # Iterate over a snapshot, because on_insert may modify layer order
+        logger.debug("Adopting existing layers count=%d", len(self.viewer.layers))
         layers_snapshot = list(self.viewer.layers)
 
         for idx, layer in enumerate(layers_snapshot):
@@ -759,6 +796,12 @@ class KeypointControls(QWidget):
         Run the relevant portion of on_insert() for an already-existing layer.
         This avoids duplicating your logic and prevents reliance on napari's Event object.
         """
+        logger.debug(
+            "Adopt layer=%r type=%s index=%s",
+            getattr(layer, "name", layer),
+            type(layer).__name__,
+            index,
+        )
         if isinstance(layer, Image):
             self._setup_image_layer(layer, index, reorder=True)
         elif isinstance(layer, Points):
@@ -1556,6 +1599,12 @@ class KeypointControls(QWidget):
 
     def on_insert(self, event):
         layer = event.source[-1]
+        logger.debug(
+            "on_insert layer=%r type=%s index=%s",
+            getattr(layer, "name", layer),
+            type(layer).__name__,
+            getattr(event, "index", None),
+        )
         if isinstance(layer, Image):
             self._setup_image_layer(layer, event.index, reorder=True)
         elif isinstance(layer, Points):
