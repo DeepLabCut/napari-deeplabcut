@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from qtpy.QtCore import QSignalBlocker, Qt, Signal
+from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import (
     QApplication,
     QFormLayout,
@@ -47,24 +48,8 @@ class LayerStatusPanel(QGroupBox):
         self._progress_info = QToolButton(self)
         self._progress_info.setText("ℹ")
         self._progress_info.setAutoRaise(True)
+        self._progress_info.setIcon(QIcon.fromTheme("help-about"))
         self._progress_info.setCursor(Qt.WhatsThisCursor)
-        # self._progress_info.setIcon(self.style().standardIcon(QStyle.SP_MessageBoxInformation))
-        # self._progress_info.setAlignment(Qt.AlignCenter)
-        self._progress_info.setStyleSheet(
-            """
-            QToolButton {
-                color: #414851;
-                background: transparent;
-                border: 1px solid #414851;
-                border-radius: 8px;
-                padding: 0px 4px;
-                font-weight: bold;
-            }
-            QToolButton:hover {
-                background: rgba(65, 72, 81, 0.08);
-            }
-            """
-        )
         self._progress_info.setToolTip("Hover for more details")
 
         self._progress_details_text = ""
