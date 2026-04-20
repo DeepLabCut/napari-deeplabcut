@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 
 class TrackingControls(QWidget):
-    trackingRequested = Signal(TrackingWorkerData)
+    trackingRequested = Signal(object)
     trackedKeypointsAdded = Signal()
 
     def __init__(self, viewer: "napari.viewer.Viewer"):
@@ -448,25 +448,56 @@ class TrackingControls(QWidget):
         self.is_tracking = False
         self.worker_started = False
         self.worker = TrackingWorker()
-        self.worker.trackingStarted.connect(self.tracking_started)
-        self.worker.started.connect(partial(setattr, self, "worker_started", True))
-        self.worker.finished.connect(partial(setattr, self, "worker_started", False))
-        self.worker.progress.connect(
-            lambda x: (
-                (
-                    self._tracking_progress_bar.setMaximum(x[1]),
-                    self._tracking_progress_bar.setValue(x[0]),
-                )
-                if self._tracking_progress_bar.maximum() != x[1]
-                else self._tracking_progress_bar.setValue(x[0])
-            )
-        )
-        self.worker.trackingFinished.connect(self.tracking_finished)
-        self.worker.trackingStopped.connect(self.tracking_stopped)
-        self.trackingRequested.connect(self.worker.track)
-        self._tracking_stop_button.clicked.connect(self.worker.stop_tracking)
+
+        # Explicit queued connections for cross-thread delivery back to this QWidget
+        self.worker.trackingStarted.connect(self.tracking_started, Qt.QueuedConnection)
+        self.worker.started.connect(self._on_worker_started, Qt.QueuedConnection)
+        self.worker.finished.connect(self._on_worker_finished, Qt.QueuedConnection)
+        self.worker.progress.connect(self._on_worker_progress, Qt.QueuedConnection)
+        self.worker.trackingFinished.connect(self.tracking_finished, Qt.QueuedConnection)
+        self.worker.trackingStopped.connect(self.tracking_stopped, Qt.QueuedConnection)
+
+        # Main thread -> worker thread
+        self.trackingRequested.connect(self.worker.track, Qt.QueuedConnection)
+
+        # Main-thread button click, no UI work in worker
+        self._tracking_stop_button.clicked.connect(self._request_worker_stop)
 
         self.worker.start()
+
+    def _request_worker_stop(self):
+        if self.worker is not None:
+            self.worker.request_stop()
+
+    def _debug_thread(self, where: str) -> None:
+        import threading
+
+        from qtpy.QtCore import QThread
+
+        logger.debug(
+            "%s | python_thread=%s | qt_current_thread=%r | widget_thread=%r",
+            where,
+            threading.current_thread().name,
+            QThread.currentThread(),
+            self.thread(),
+        )
+
+    @Slot()
+    def _on_worker_started(self):
+        self._debug_thread("_on_worker_started")
+        self.worker_started = True
+
+    @Slot()
+    def _on_worker_finished(self):
+        self._debug_thread("_on_worker_finished")
+        self.worker_started = False
+
+    @Slot(int, int)
+    def _on_worker_progress(self, current: int, total: int):
+        self._debug_thread("_on_worker_progress")
+        if self._tracking_progress_bar.maximum() != total:
+            self._tracking_progress_bar.setMaximum(total)
+        self._tracking_progress_bar.setValue(current)
 
     @property
     def keypoint_layer(self) -> Points | None:
@@ -491,7 +522,7 @@ class TrackingControls(QWidget):
         self.is_tracking = True
         self._tracking_progress_bar.setValue(0)
 
-    @Slot(TrackingWorkerOutput)
+    @Slot(object)
     def tracking_finished(self, out: TrackingWorkerOutput):
         self.is_tracking = False
         try:
