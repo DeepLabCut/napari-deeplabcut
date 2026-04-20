@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
-from qtpy.QtCore import QCoreApplication, QObject, QThread, Signal, Slot
+from qtpy.QtCore import QObject, QThread, Signal, Slot
 
 from napari_deeplabcut.tracking.core.data import (
     RawModelOutputs,
@@ -13,6 +13,17 @@ from napari_deeplabcut.tracking.core.data import (
     TrackingWorkerOutput,
 )
 from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS
+
+"""Worker is not allowed to perform main thread operations, such as :
+- viewer.add_*
+- viewer.layers.*
+- layer.data = ...
+- QWidget updates
+- QCoreApplication.processEvents()
+- anything vispy / OpenGL / rendering-related
+
+Please be careful when editing this file.
+"""
 
 if TYPE_CHECKING:
     pass
@@ -54,7 +65,8 @@ class TrackingWorker(QObject):
 
     def __init__(self):
         super().__init__()
-        self.is_stopped = False
+        self._stop_requested = threading.Event()
+        self.thread = None
 
     @Slot(object)
     def track(self, cfg: TrackingWorkerData):
@@ -73,51 +85,69 @@ class TrackingWorker(QObject):
             self.thread(),
         )
         model = None
+        self._stop_requested.clear()
+
         try:
-            # Choose model by name from your TrackerType (cfg.tracker.value.name)
             if DEBUG:
                 debugpy.debug_this_thread()
+
+            logger.debug(
+                "TrackingWorker.track | python_thread=%s | qt_current_thread=%r | worker_thread=%r",
+                threading.current_thread().name,
+                QThread.currentThread(),
+                self.thread,
+            )
+
+            self.trackingStarted.emit()
+
             model_name = cfg.tracker_name
             try:
                 model_cls = AVAILABLE_TRACKERS[model_name]["class"]
             except KeyError:
                 logger.error(f"Unknown tracker: {model_name}")
                 self.trackingStopped.emit()
+                self.finished.emit()
                 return
 
             model = model_cls(cfg)
 
-            # Define callbacks to let the model report status
             def progress_callback(current: int, total: int):
                 self.progress.emit(int(current), int(total))
 
             def stop_callback() -> bool:
-                # Return early if requested
                 return self._should_stop()
 
             try:
-                # we let the model handle coordinate conventions internally, such that
-                # the worker and plugin can remain agnostic to these details.
                 inputs: TrackingModelInputs = model.prepare_inputs(cfg)
-
-                # Run inference; models implement their own batching and chunking
                 raw: RawModelOutputs = model.run(inputs, progress_callback, stop_callback)
 
-                # Convert to canonical output (N,3) plus features
+                if self._should_stop():
+                    self.trackingStopped.emit()
+                    self.finished.emit()
+                    return
+
                 output: TrackingWorkerOutput = model.prepare_outputs(raw, cfg)
 
                 if hasattr(model, "validate_outputs"):
                     valid, msg = model.validate_outputs(inputs, output)
                     if not valid:
                         raise ValueError(f"Invalid model outputs: {msg}")
+
             except Exception as exc:
                 logger.exception("Tracking failed", exc_info=exc)
                 self.trackingStopped.emit()
+                self.finished.emit()
                 return
 
             self.trackingFinished.emit(output)
+            self.finished.emit()
+
         finally:
-            torch.cuda.empty_cache()
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
             if model is not None:
                 del model
 
@@ -134,14 +164,12 @@ class TrackingWorker(QObject):
 
         self.thread.start()
 
+    def request_stop(self):
+        self._stop_requested.set()
+
     @Slot()
     def stop_tracking(self):
-        self.is_stopped = True
+        self.request_stop()
 
     def _should_stop(self) -> bool:
-        QCoreApplication.processEvents()
-        if self.is_stopped:
-            self.trackingStopped.emit()
-            self.is_stopped = False
-            return True
-        return False
+        return self._stop_requested.is_set()
