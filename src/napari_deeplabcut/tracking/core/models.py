@@ -120,7 +120,7 @@ class Cotracker3(TrackingModel):
 
         model = torch.hub.load(
             "facebookresearch/co-tracker",
-            "cotracker3_online",
+            "cotracker3_offline",
         ).to(device)
         model.eval()
         return model
@@ -148,44 +148,39 @@ class Cotracker3(TrackingModel):
     def run(self, inputs: TrackingModelInputs, progress_callback, stop_callback) -> RawModelOutputs:
         import torch
 
-        video = torch.from_numpy(inputs.video).to(self.device).float()
-        queries = torch.from_numpy(inputs.keypoints).to(self.device).float()
+        if stop_callback():
+            return None
 
-        window_frames = []
-        is_first_step = True
-        pred_tracks = None
-        pred_visibility = None
-
-        for i, frame in enumerate(video):
-            if i % self.model.step == 0 and i != 0:
-                pred_tracks, pred_visibility = self._process_step(
-                    window_frames,
-                    is_first_step,
-                    queries=queries,
-                )
-                is_first_step = False
-
-            window_frames.append(frame)
-            progress_callback(i, len(video))
-
-            if stop_callback():
-                logger.debug("Tracking stopped.")
-                return RawModelOutputs(
-                    keypoints=np.empty((0, 0, 2), dtype=float),
-                    keypoint_features={},
-                )
-
-        pred_tracks, pred_visibility = self._process_step(
-            window_frames[-(i % self.model.step) - self.model.step - 1 :],
-            is_first_step,
-            queries=queries,
+        # inputs.video is (T, H, W, C)
+        video = (
+            torch.from_numpy(inputs.video).to(self.device).float().permute(0, 3, 1, 2)[None]  # -> (1, T, C, H, W)
         )
-        progress_callback(len(video), len(video))
+
+        # inputs.keypoints is (K, 3), already converted in prepare_inputs()
+        queries = torch.from_numpy(inputs.keypoints).to(self.device).float()[None]  # -> (1, K, 3)
+
+        total_frames = int(inputs.video.shape[0])
+        progress_callback(0, total_frames)
+
+        with torch.inference_mode():
+            pred_tracks, pred_visibility = self.model(
+                video,
+                queries=queries,
+            )
+
+        if pred_tracks is None or pred_visibility is None:
+            raise RuntimeError("CoTracker offline returned no predictions for the provided clip and queries.")
+
+        progress_callback(total_frames, total_frames)
+
+        if stop_callback():
+            return None
 
         tracks = pred_tracks.detach().cpu().numpy()
         visibility = pred_visibility.detach().cpu().numpy()
 
-        # Normalize shapes without over-squeezing query/time dimensions
+        # Normalize shapes:
+        # expected from model: (1, T, K, 2) and (1, T, K, 1) or similar
         if tracks.ndim == 4 and tracks.shape[0] == 1:
             tracks = tracks[0]  # -> (T, K, 2)
 
