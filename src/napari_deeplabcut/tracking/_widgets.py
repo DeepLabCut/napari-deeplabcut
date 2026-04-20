@@ -56,8 +56,6 @@ TRACK_BACKWARD_END = TrackingKeybindConfig(key="j", tooltip="Track backward to s
 MOVE_FORWARD_FRAME = TrackingKeybindConfig(key="i", tooltip="Move forward one frame")
 MOVE_BACKWARD_FRAME = TrackingKeybindConfig(key="u", tooltip="Move backward one frame")
 
-logger = logging.getLogger(__name__)
-
 
 class TrackingControls(QWidget):
     trackingRequested = Signal(TrackingWorkerData)
