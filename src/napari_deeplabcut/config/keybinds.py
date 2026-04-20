@@ -10,6 +10,8 @@ from enum import Enum, auto
 import numpy as np
 from napari.layers import Points
 
+from .settings import TRACKING_SHORTCUTS_ENABLED
+
 _global_points_bindings_installed = False
 
 
@@ -118,9 +120,83 @@ SHORTCUTS: tuple[ShortcutSpec, ...] = (
     ),
 )
 
+# --------------------------------
+# Tracking shortcuts
+# --------------------------------
+
+
+@dataclass(frozen=True)
+class TrackingKeybindConfig:
+    key: str
+    tooltip: str
+
+    def get_display(self) -> str:
+        txt = self.tooltip
+        if TRACKING_SHORTCUTS_ENABLED:
+            txt += f" ({self.key})"
+        return txt
+
+
+TRACK_FORWARD = TrackingKeybindConfig(key="l", tooltip="Track forward")
+TRACK_FORWARD_END = TrackingKeybindConfig(key="k", tooltip="Track forward to end")
+TRACK_BACKWARD = TrackingKeybindConfig(key="h", tooltip="Track backward")
+TRACK_BACKWARD_END = TrackingKeybindConfig(key="j", tooltip="Track backward to start")
+MOVE_FORWARD_FRAME = TrackingKeybindConfig(key="i", tooltip="Move forward one frame")
+MOVE_BACKWARD_FRAME = TrackingKeybindConfig(key="u", tooltip="Move backward one frame")
+
+
+TRACKING_SHORTCUTS: tuple[ShortcutSpec, ...] = (
+    ShortcutSpec(
+        keys=(TRACK_FORWARD.key,),
+        description=TRACK_FORWARD.tooltip,
+        group="Tracking",
+        scope="tracking-points-layer",
+        when="Tracking widget is open",
+    ),
+    ShortcutSpec(
+        keys=(TRACK_FORWARD_END.key,),
+        description=TRACK_FORWARD_END.tooltip,
+        group="Tracking",
+        scope="tracking-points-layer",
+        when="Tracking widget is open",
+    ),
+    ShortcutSpec(
+        keys=(TRACK_BACKWARD.key,),
+        description=TRACK_BACKWARD.tooltip,
+        group="Tracking",
+        scope="tracking-points-layer",
+        when="Tracking widget is open",
+    ),
+    ShortcutSpec(
+        keys=(TRACK_BACKWARD_END.key,),
+        description=TRACK_BACKWARD_END.tooltip,
+        group="Tracking",
+        scope="tracking-points-layer",
+        when="Tracking widget is open",
+    ),
+    ShortcutSpec(
+        keys=(MOVE_FORWARD_FRAME.key,),
+        description=MOVE_FORWARD_FRAME.tooltip,
+        group="Tracking",
+        scope="tracking-points-layer",
+        when="Tracking widget is open",
+    ),
+    ShortcutSpec(
+        keys=(MOVE_BACKWARD_FRAME.key,),
+        description=MOVE_BACKWARD_FRAME.tooltip,
+        group="Tracking",
+        scope="tracking-points-layer",
+        when="Tracking widget is open",
+    ),
+)
+
+# ----- Keybind registry functions ------
+
 
 def iter_shortcuts() -> Iterable[ShortcutSpec]:
-    return SHORTCUTS
+    yield from SHORTCUTS
+    if TRACKING_SHORTCUTS_ENABLED:
+        yield from TRACKING_SHORTCUTS
 
 
 def _bind_each_key(layer: Points, keys: tuple[str, ...], callback, *, overwrite: bool = False) -> None:
