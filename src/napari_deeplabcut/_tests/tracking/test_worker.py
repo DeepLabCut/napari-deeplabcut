@@ -1,5 +1,5 @@
-from napari_deeplabcut.tracking._data import TrackingWorkerOutput
-from napari_deeplabcut.tracking._worker import TrackingWorker
+from napari_deeplabcut.tracking.core.data import TrackingWorkerOutput
+from napari_deeplabcut.tracking.ui.worker import TrackingWorker
 
 
 def test_tracking_worker(qtbot, track_worker_inputs):

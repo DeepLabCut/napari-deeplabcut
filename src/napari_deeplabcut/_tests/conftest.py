@@ -8,8 +8,8 @@ from qtpy.QtWidgets import QDockWidget
 from skimage.io import imsave
 
 from napari_deeplabcut import _writer, keypoints
-from napari_deeplabcut.tracking._data import TrackingModelInputs, TrackingWorkerData, TrackingWorkerOutput
-from napari_deeplabcut.tracking._models import AVAILABLE_TRACKERS, RawModelOutputs, TrackingModel
+from napari_deeplabcut.tracking.core.data import TrackingModelInputs, TrackingWorkerData, TrackingWorkerOutput
+from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS, RawModelOutputs, TrackingModel
 
 # os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
 

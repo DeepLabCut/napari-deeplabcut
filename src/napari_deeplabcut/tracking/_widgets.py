@@ -28,9 +28,9 @@ from qtpy.QtWidgets import (
 )
 
 from napari_deeplabcut.keypoints import KeypointStore
-from napari_deeplabcut.tracking._data import TrackingWorkerData, TrackingWorkerOutput
-from napari_deeplabcut.tracking._models import AVAILABLE_TRACKERS
-from napari_deeplabcut.tracking._worker import TrackingWorker
+from napari_deeplabcut.tracking.core.data import TrackingWorkerData, TrackingWorkerOutput
+from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS
+from napari_deeplabcut.tracking.ui.worker import TrackingWorker
 
 logger = logging.getLogger(__name__)
 # Keybinds

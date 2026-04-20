@@ -3,8 +3,8 @@ import pandas as pd
 import pytest
 from qtpy.QtCore import Qt
 
-from napari_deeplabcut.tracking._data import TrackingWorkerData
-from napari_deeplabcut.tracking._models import AVAILABLE_TRACKERS
+from napari_deeplabcut.tracking.core.data import TrackingWorkerData
+from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS
 
 _DUMMY_VIDEO_N_FRAMES = 10
 
