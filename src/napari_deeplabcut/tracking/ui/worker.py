@@ -1,4 +1,5 @@
 import logging
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -31,19 +32,31 @@ class TorchHubModel:
     model: str
 
 
+"""Worker is not allowed to perform main thread operations, such as :
+- viewer.add_*
+- viewer.layers.*
+- layer.data = ...
+- QWidget updates
+- QCoreApplication.processEvents()
+- anything vispy / OpenGL / rendering-related
+
+Please be careful when editing this file.
+"""
+
+
 class TrackingWorker(QObject):
     started = Signal()
     finished = Signal()
-    progress = Signal(tuple)
+    progress = Signal(int, int)  # current, total
     trackingStarted = Signal()
-    trackingFinished = Signal(TrackingWorkerOutput)
+    trackingFinished = Signal(object)  # emits TrackingWorkerOutput
     trackingStopped = Signal()
 
     def __init__(self):
         super().__init__()
         self.is_stopped = False
 
-    @Slot(TrackingWorkerData)
+    @Slot(object)
     def track(self, cfg: TrackingWorkerData):
         """
         Tracking core logic:
@@ -53,6 +66,12 @@ class TrackingWorker(QObject):
             4. prepare_outputs(raw, inputs)
             5. Emit results to the plugin.
         """
+        logger.debug(
+            "TrackingWorker.track | python_thread=%s | qt_current_thread=%r | worker_thread=%r",
+            threading.current_thread().name,
+            QThread.currentThread(),
+            self.thread(),
+        )
         model = None
         try:
             # Choose model by name from your TrackerType (cfg.tracker.value.name)
@@ -70,7 +89,7 @@ class TrackingWorker(QObject):
 
             # Define callbacks to let the model report status
             def progress_callback(current: int, total: int):
-                self.progress.emit((current, total))
+                self.progress.emit(int(current), int(total))
 
             def stop_callback() -> bool:
                 # Return early if requested
