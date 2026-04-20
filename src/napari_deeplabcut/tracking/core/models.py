@@ -140,7 +140,7 @@ class Cotracker3(TrackingModel):
         metadata = {
             "keypoint_range": self.cfg.keypoint_range,
             "backward_tracking": self.cfg.backward_tracking,
-            "reference_frame_idx": self.cfg.reference_frame_idx,
+            "reference_frame_index": self.cfg.reference_frame_index,
         }
 
         return TrackingModelInputs(video=video, keypoints=queries, metadata=metadata)
