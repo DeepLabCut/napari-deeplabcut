@@ -23,7 +23,7 @@ class DummyLayer:
 
 def test_iter_shortcuts_returns_registry():
     shortcuts = tuple(keybinds.iter_shortcuts())
-    assert shortcuts == keybinds.SHORTCUTS
+    assert shortcuts == keybinds.SHORTCUTS + keybinds.TRACKING_SHORTCUTS
     assert shortcuts, "SHORTCUTS should not be empty"
 
 
