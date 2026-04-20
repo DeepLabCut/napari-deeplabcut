@@ -49,6 +49,7 @@ from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS
 from napari_deeplabcut.tracking.ui.worker import TrackingWorker
 
 logger = logging.getLogger(__name__)
+# TODO @C-Achard: fix the sliders sync not firing (on existing layers ?)
 
 
 class TrackingControls(QWidget):
@@ -340,12 +341,12 @@ class TrackingControls(QWidget):
 
         # Distinguish tracking results visually
         try:
-            layer.symbol = "diamond"
+            layer.symbol = "cross"
         except Exception:
             pass
 
         try:
-            layer.opacity = 0.55
+            layer.opacity = 0.85
         except Exception:
             pass
 
@@ -363,7 +364,7 @@ class TrackingControls(QWidget):
 
         try:
             layer.border_width = 0.15
-            layer.border_color = "yellow"
+            layer.border_color = "green"
         except Exception:
             pass
 

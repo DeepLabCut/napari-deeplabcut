@@ -82,7 +82,7 @@ class TrackingWorker(QObject):
             "TrackingWorker.track | python_thread=%s | qt_current_thread=%r | worker_thread=%r",
             threading.current_thread().name,
             QThread.currentThread(),
-            self.thread(),
+            self.thread,
         )
         model = None
         self._stop_requested.clear()
