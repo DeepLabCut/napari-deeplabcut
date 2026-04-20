@@ -479,7 +479,7 @@ class TrackingControls(QWidget):
             where,
             threading.current_thread().name,
             QThread.currentThread(),
-            self.thread(),
+            self.thread,
         )
 
     @Slot()
@@ -532,11 +532,17 @@ class TrackingControls(QWidget):
                 else pd.DataFrame(out.keypoint_features)
             )
 
+            ref_frame_idx = (
+                int(new_features_df["tracking_query_frame"].iloc[0])
+                if "tracking_query_frame" in new_features_df.columns and len(new_features_df)
+                else int(self._reference_spinbox.value())
+            )
+
             layer = self._create_tracking_result_layer(
                 out.keypoints,
                 new_features_df,
                 tracker_name=self._tracking_method_combo.currentText(),
-                ref_frame_idx=int(self._reference_spinbox.value()),
+                ref_frame_idx=ref_frame_idx,
             )
 
             self._viewer.layers.selection.active = layer
@@ -678,7 +684,12 @@ class TrackingControls(QWidget):
         else:
             video_slice = self.video_layer.data[keypoint_range[0] : keypoint_range[1]]
 
-        seed_keypoints, seed_features = self._seed_query_points_and_features(ref_frame_idx)
+        try:
+            seed_keypoints, seed_features = self._seed_query_points_and_features(ref_frame_idx)
+        except ValueError as e:
+            logger.warning(str(e))
+            napari.utils.notifications.show_warning(str(e))
+            return
 
         tracking_data = TrackingWorkerData(
             tracker_name=self._tracking_method_combo.currentText(),
