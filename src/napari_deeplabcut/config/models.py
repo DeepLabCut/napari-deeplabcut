@@ -10,6 +10,8 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# TODO @C-Achard: move to core/
+
 
 def unsorted_unique(array: Sequence) -> np.ndarray:
     """Return the unsorted unique elements of an array."""
