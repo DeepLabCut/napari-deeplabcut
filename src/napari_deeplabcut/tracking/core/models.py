@@ -237,8 +237,30 @@ class Cotracker3(TrackingModel):
             return False, "Outputs keypoints is not a 2D array."
         if not outputs.keypoints.shape[1] == 3:
             return False, "Outputs keypoints does not have 3 columns."
-        if not outputs.keypoints.shape[0] == inputs.keypoints.shape[0]:
-            return False, "Number of output keypoints does not match number of input keypoints."
+        # For CoTracker3, outputs contain tracked keypoints for every frame in the
+        # keypoint_range. If keypoint_range = (T1, T2) and there are K input
+        # keypoints, we expect (T2 - T1) * K output rows.
+        metadata = getattr(inputs, "metadata", None)
+        if metadata is None or "keypoint_range" not in metadata:
+            return False, "Missing keypoint_range metadata required for validation."
+        keypoint_range = metadata["keypoint_range"]
+        if not isinstance(keypoint_range, (tuple, list)) or len(keypoint_range) != 2:
+            return False, "Invalid keypoint_range metadata; expected (T1, T2)."
+        T1, T2 = keypoint_range
+        try:
+            T1_int = int(T1)
+            T2_int = int(T2)
+        except (TypeError, ValueError):
+            return False, "keypoint_range values must be integers."
+        if T2_int <= T1_int:
+            return False, "keypoint_range must satisfy T2 > T1."
+        K = inputs.keypoints.shape[0]
+        expected_n_keypoints = (T2_int - T1_int) * K
+        if outputs.keypoints.shape[0] != expected_n_keypoints:
+            return (
+                False,
+                f"Number of output keypoints does not match expected ((T2 - T1) * K) = {expected_n_keypoints}.",
+            )
         return True, ""
 
 
