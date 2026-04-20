@@ -67,6 +67,27 @@ def setup_tracking_widget(qtbot, viewer, monkeypatch):
     return _setup_tracking_data
 
 
+def _put_all_points_on_frame(points_layer, frame: int) -> None:
+    """
+    Move all test points onto a specific frame so tracking has a valid seed frame.
+    Keeps the same number/order of points and therefore preserves features alignment.
+    """
+    data = np.asarray(points_layer.data, dtype=float).copy()
+    assert data.size > 0, "Test fixture produced no points."
+    data[:, 0] = float(frame)
+    points_layer.data = data
+
+
+def _set_current_tracking_frame(tc, viewer, frame: int) -> None:
+    """
+    Drive the tracking widget the same way the real UI does:
+    the reference frame follows the viewer's current step.
+    """
+    viewer.dims.current_step = (frame,) + (0,) * (viewer.dims.ndim - 1)
+    tc._video_layer_changed()
+    assert tc._reference_spinbox.value() == frame
+
+
 @pytest.mark.usefixtures("qtbot")
 def test_tracking_controls_initial_state(setup_tracking_widget):
     tc = setup_tracking_widget(add_data=False)
@@ -159,17 +180,30 @@ def test_backward_track(setup_tracking_widget, qtbot, viewer):
 
     tc._start_worker = MethodType(lambda self: setattr(self, "worker_started", True), tc)
 
+    _put_all_points_on_frame(points_layer, 2)
+    _set_current_tracking_frame(tc, viewer, 2)
+
     # Set ref frame to 2; backward absolute to 0 so it’s < ref
-    viewer.dims.current_step = (2,) + (0,) * (viewer.dims.ndim - 1)
-    tc._video_layer_changed()
     tc._backward_spinbox_absolute.setValue(0)
 
     with qtbot.waitSignal(tc.trackingRequested, timeout=1500) as req:
         qtbot.mouseClick(tc._tracking_backward_button, Qt.LeftButton)
     twd = req.args[0]
     assert twd.backward_tracking is True
+    assert twd.reference_frame_index == 2
     # For backward, track() reverses the video slice
     assert twd.video.shape[0] == (2 - 0 + 1)  # inclusive range when +1 is applied in TrackControls
+
+    # Seed keypoints are re-based to local frame 0 inside the sliced tracking video.
+    assert np.all(twd.keypoints[:, 0] == 0)
+    # Original point properties should still be present on the worker input.
+    assert "id" in twd.keypoint_features.columns
+    assert "name" in twd.keypoint_features.columns
+
+    # New tracking identity columns should also be present.
+    assert "tracking_query_index" in twd.keypoint_features.columns
+    assert "tracking_query_frame" in twd.keypoint_features.columns
+    assert set(twd.keypoint_features["tracking_query_frame"]) == {2}
 
 
 @pytest.mark.usefixtures("qtbot")
@@ -179,29 +213,43 @@ def test_bothway_track(setup_tracking_widget, qtbot, viewer):
 
     tc._start_worker = MethodType(lambda self: setattr(self, "worker_started", True), tc)
 
-    viewer.dims.current_step = (3,) + (0,) * (viewer.dims.ndim - 1)
-    tc._video_layer_changed()
-    tc._reference_spinbox.setValue(0)
+    # New invariant: current/reference frame must actually contain seed keypoints.
+    _put_all_points_on_frame(points_layer, 3)
+    _set_current_tracking_frame(tc, viewer, 3)
+
+    # Forward target > ref, backward target < ref
     tc._forward_spinbox_absolute.setValue(6)
     tc._backward_spinbox_absolute.setValue(0)
 
     captured = []
     tc.trackingRequested.connect(lambda d: captured.append(d))
+
     # Ensure backward path doesn't fail due to missing keypoint_widget
     tc.keypoint_widget = object()
 
     with qtbot.waitSignals([tc.trackingRequested, tc.trackingRequested], timeout=2000):
         qtbot.mouseClick(tc._tracking_bothway_button, Qt.LeftButton)
         tc.trackedKeypointsAdded.emit()
+
     assert len(captured) == 2
     assert captured[0].backward_tracking is False
     assert captured[1].backward_tracking is True
 
-    # Do the same when forward == reference (should only do backward tracking)
+    # Both requests should use the same seed frame, because the ref frame is still 3.
+    assert captured[0].reference_frame_index == 3
+    assert captured[1].reference_frame_index == 3
+
+    # Do the same when forward == reference -> only backward tracking should run.
     captured.clear()
-    tc._forward_spinbox_absolute.setValue(0)
-    tc._video_layer_changed()
+
+    # Since the widget keeps reference == current frame, make that explicit.
+    _set_current_tracking_frame(tc, viewer, 3)
+    tc._forward_spinbox_absolute.setValue(3)  # == ref, so forward is invalid
+    tc._backward_spinbox_absolute.setValue(0)
+
     with qtbot.waitSignal(tc.trackingRequested, timeout=1500):
         qtbot.mouseClick(tc._tracking_bothway_button, Qt.LeftButton)
+
     assert len(captured) == 1
     assert captured[0].backward_tracking is True
+    assert captured[0].reference_frame_index == 3
