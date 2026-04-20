@@ -129,6 +129,8 @@ def expand_query_features_over_time(
         vis = np.asarray(visibility)
         if vis.ndim == 3 and vis.shape[-1] == 1:
             vis = vis[..., 0]
+        elif vis.ndim == 3 and vis.shape[0] == 1:
+            vis = vis.squeeze(0)
 
         expected = (T, K)
         if vis.shape != expected:
