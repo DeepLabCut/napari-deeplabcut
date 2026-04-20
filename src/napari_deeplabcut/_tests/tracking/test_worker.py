@@ -24,7 +24,7 @@ def test_progress_emitted(track_worker_inputs):
     worker = TrackingWorker()
 
     progress_events = []
-    worker.progress.connect(lambda current, total: progress_events.append((current, total)))
+    worker.progress.connect(lambda tpl: progress_events.append(tuple(tpl)))
     worker.track(track_worker_inputs)
 
     T = track_worker_inputs.video.shape[0]
@@ -36,7 +36,7 @@ def test_stop_tracking_emits_stopped(qtbot, track_worker_inputs):
     worker = TrackingWorker()
     await_stopped = qtbot.waitSignal(worker.trackingStopped, timeout=1000)
 
-    def stop_on_first_progress(current, total):
+    def stop_on_first_progress(tpl):
         worker.stop_tracking()
 
     worker.progress.connect(stop_on_first_progress)

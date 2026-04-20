@@ -1,5 +1,6 @@
 import logging
-from copy import deepcopy
+import os
+from dataclasses import dataclass
 from functools import partial
 
 import napari
@@ -8,6 +9,7 @@ import pandas as pd
 from magicgui.widgets import ComboBox, create_widget
 from napari.layers import Image, Points
 from napari.viewer import Viewer
+from napari_deeplabcut.keypoints import KeypointStore
 from qtpy.QtCore import Qt, Signal, Slot
 from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import (
@@ -26,43 +28,44 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from napari_deeplabcut._widgets import KeypointControls
-from napari_deeplabcut.config.keybinds import (
-    MOVE_BACKWARD_FRAME,
-    MOVE_FORWARD_FRAME,
-    TRACK_BACKWARD,
-    TRACK_BACKWARD_END,
-    TRACK_FORWARD,
-    TRACK_FORWARD_END,
-)
-
-# Keybinds
-from napari_deeplabcut.config.settings import TRACKING_SHORTCUTS_ENABLED
-from napari_deeplabcut.core.keypoints import KeypointStore
-from napari_deeplabcut.core.layer_lifecycle import get_or_create_layer_manager
-from napari_deeplabcut.tracking.core.data import (
-    TrackingWorkerData,
-    TrackingWorkerOutput,
-    add_query_identity_columns,
-    build_tracking_result_metadata,
-)
+from napari_deeplabcut.tracking.core.data import TrackingWorkerData, TrackingWorkerOutput
 from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS
 from napari_deeplabcut.tracking.ui.worker import TrackingWorker
 
 logger = logging.getLogger(__name__)
-# TODO @C-Achard: fix the sliders sync not firing (on existing layers ?)
+# Keybinds
+TRACKING_SHORTCUTS_ENABLED = os.environ.get("NAPARI_DLC_TRACKING_SHORTCUTS_ENABLED", "1") == "1"
+
+
+@dataclass(frozen=True)
+class TrackingKeybindConfig:
+    key: str
+    tooltip: str
+
+    def get_display(self) -> str:
+        txt = self.tooltip
+        if TRACKING_SHORTCUTS_ENABLED:
+            txt += f" ({self.key})"
+        return txt
+
+
+TRACK_FORWARD = TrackingKeybindConfig(key="l", tooltip="Track forward")
+TRACK_FORWARD_END = TrackingKeybindConfig(key="k", tooltip="Track forward to end")
+TRACK_BACKWARD = TrackingKeybindConfig(key="h", tooltip="Track backward")
+TRACK_BACKWARD_END = TrackingKeybindConfig(key="j", tooltip="Track backward to start")
+MOVE_FORWARD_FRAME = TrackingKeybindConfig(key="i", tooltip="Move forward one frame")
+MOVE_BACKWARD_FRAME = TrackingKeybindConfig(key="u", tooltip="Move backward one frame")
 
 
 class TrackingControls(QWidget):
-    trackingRequested = Signal(object)
+    trackingRequested = Signal(TrackingWorkerData)
     trackedKeypointsAdded = Signal()
 
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
+        from napari_deeplabcut._widgets import KeypointControls
+
         self._viewer: Viewer = viewer
-        self.lifecycle_manager = get_or_create_layer_manager(viewer)
-        # self.setObjectName("napari-deeplabcut-tracking-controls")
-        self.setProperty("ndlc_tracking_controls", True)
 
         # Layout
         ## Data and model selection
@@ -157,54 +160,25 @@ class TrackingControls(QWidget):
         self._tracking_stop_button.setToolTip("Stop tracking")
         self._set_ref_button.setToolTip("Set reference frame")
 
-    def _dock_widget(self):
-        try:
-            for dock in self._viewer.window._dock_widgets.values():
-                if dock.widget() is self:
-                    return dock
-        except Exception:
-            return None
-        return None
-
-    def _tracking_shortcuts_active(self) -> bool:
-        if not TRACKING_SHORTCUTS_ENABLED:
-            return False
-        dock = self._dock_widget()
-        return dock is not None and dock.isVisible()
-
     def _setup_keybindings(self, viewer: "napari.viewer.Viewer"):
-        if not TRACKING_SHORTCUTS_ENABLED:
-            self._set_tooltips()
-            return
-
         @Points.bind_key(TRACK_FORWARD.key, overwrite=True)
         def track_forward(event):
-            if not self._tracking_shortcuts_active():
-                return
             self.track_forward()
 
         @Points.bind_key(TRACK_FORWARD_END.key, overwrite=True)
         def track_forward_end(event):
-            if not self._tracking_shortcuts_active():
-                return
             self.track_forward_end()
 
         @Points.bind_key(TRACK_BACKWARD.key, overwrite=True)
         def track_backward(event):
-            if not self._tracking_shortcuts_active():
-                return
             self.track_backward()
 
         @Points.bind_key(TRACK_BACKWARD_END.key, overwrite=True)
         def track_backward_end(event):
-            if not self._tracking_shortcuts_active():
-                return
             self.track_backward_end()
 
         @Points.bind_key(MOVE_FORWARD_FRAME.key, overwrite=True)
         def move_forward_frame(event):
-            if not self._tracking_shortcuts_active():
-                return
             viewer.dims.current_step = (
                 viewer.dims.current_step[0] + 1,
                 *viewer.dims.current_step[1:],
@@ -212,8 +186,6 @@ class TrackingControls(QWidget):
 
         @Points.bind_key(MOVE_BACKWARD_FRAME.key, overwrite=True)
         def move_backward_frame(event):
-            if not self._tracking_shortcuts_active():
-                return
             viewer.dims.current_step = (
                 viewer.dims.current_step[0] - 1,
                 *viewer.dims.current_step[1:],
@@ -268,108 +240,6 @@ class TrackingControls(QWidget):
                 absolute_spinbox.setValue(reference_spinbox.value() + value)
         finally:
             self._updating_controls = False
-
-    def _seed_query_points_and_features(
-        self,
-        ref_frame_idx: int,
-    ) -> tuple[np.ndarray, pd.DataFrame]:
-        """
-        Extract the points/features from the chosen reference frame and attach
-        stable query identity columns before sending them to the model.
-        """
-        layer = self.keypoint_layer
-        if layer is None:
-            raise ValueError("No keypoint layer selected.")
-
-        mask = np.asarray(layer.data[:, 0]).astype(int) == int(ref_frame_idx)
-
-        keypoints = np.asarray(layer.data[mask], dtype=float).copy()
-        if len(keypoints) == 0:
-            raise ValueError(f"No keypoints found on reference frame {ref_frame_idx}.")
-
-        layer_features = layer.features
-        if isinstance(layer_features, pd.DataFrame):
-            seed_features = layer_features.loc[mask].reset_index(drop=True).copy()
-        else:
-            seed_features = pd.DataFrame(layer_features).loc[mask].reset_index(drop=True).copy()
-
-        if len(seed_features) != len(keypoints):
-            raise ValueError(
-                f"Seed feature row count mismatch: got {len(seed_features)} feature rows "
-                f"for {len(keypoints)} keypoints."
-            )
-
-        seed_features = add_query_identity_columns(
-            seed_features,
-            query_frame=ref_frame_idx,
-            source_layer_name=layer.name,
-        )
-
-        # In the sliced tracking video, the query frame is always time 0
-        keypoints[:, 0] = 0.0
-
-        return keypoints, seed_features
-
-    def _create_tracking_result_layer(
-        self,
-        keypoints: np.ndarray,
-        features: pd.DataFrame,
-        *,
-        tracker_name: str,
-        ref_frame_idx: int,
-    ) -> Points:
-        """
-        Create a new Points layer holding the tracking result.
-        This must NOT modify the original DLC annotation layer.
-        """
-        source = self.keypoint_layer
-        if source is None:
-            raise ValueError("No source keypoint layer selected.")
-
-        metadata = build_tracking_result_metadata(
-            source.metadata,
-            tracker_name=tracker_name,
-            source_layer_name=source.name,
-            query_frame=ref_frame_idx,
-        )
-
-        layer = self._viewer.add_points(
-            data=keypoints,
-            features=features,
-            name=f"[Tracked] {source.name}",
-            metadata=metadata,
-        )
-
-        # Distinguish tracking results visually
-        try:
-            layer.symbol = "cross"
-        except Exception:
-            pass
-
-        try:
-            layer.opacity = 0.85
-        except Exception:
-            pass
-
-        try:
-            layer.size = deepcopy(source.size)
-        except Exception:
-            pass
-
-        try:
-            # Optional: keep source colors if useful, but still visually distinct
-            layer.face_color = deepcopy(source.face_color)
-            layer.face_color_mode = source.face_color_mode
-        except Exception:
-            pass
-
-        try:
-            layer.border_width = 0.15
-            layer.border_color = "green"
-        except Exception:
-            pass
-
-        return layer
 
     def _forward_update(self, value: int, from_absolute: bool, from_slider: bool):
         """Helper to update forward controls.
@@ -450,56 +320,25 @@ class TrackingControls(QWidget):
         self.is_tracking = False
         self.worker_started = False
         self.worker = TrackingWorker()
-
-        # Explicit queued connections for cross-thread delivery back to this QWidget
-        self.worker.trackingStarted.connect(self.tracking_started, Qt.QueuedConnection)
-        self.worker.started.connect(self._on_worker_started, Qt.QueuedConnection)
-        self.worker.finished.connect(self._on_worker_finished, Qt.QueuedConnection)
-        self.worker.progress.connect(self._on_worker_progress, Qt.QueuedConnection)
-        self.worker.trackingFinished.connect(self.tracking_finished, Qt.QueuedConnection)
-        self.worker.trackingStopped.connect(self.tracking_stopped, Qt.QueuedConnection)
-
-        # Main thread -> worker thread
-        self.trackingRequested.connect(self.worker.track, Qt.QueuedConnection)
-
-        # Main-thread button click, no UI work in worker
-        self._tracking_stop_button.clicked.connect(self._request_worker_stop)
+        self.worker.trackingStarted.connect(self.tracking_started)
+        self.worker.started.connect(partial(setattr, self, "worker_started", True))
+        self.worker.finished.connect(partial(setattr, self, "worker_started", False))
+        self.worker.progress.connect(
+            lambda x: (
+                (
+                    self._tracking_progress_bar.setMaximum(x[1]),
+                    self._tracking_progress_bar.setValue(x[0]),
+                )
+                if self._tracking_progress_bar.maximum() != x[1]
+                else self._tracking_progress_bar.setValue(x[0])
+            )
+        )
+        self.worker.trackingFinished.connect(self.tracking_finished)
+        self.worker.trackingStopped.connect(self.tracking_stopped)
+        self.trackingRequested.connect(self.worker.track)
+        self._tracking_stop_button.clicked.connect(self.worker.stop_tracking)
 
         self.worker.start()
-
-    def _request_worker_stop(self):
-        if self.worker is not None:
-            self.worker.request_stop()
-
-    def _debug_thread(self, where: str) -> None:
-        import threading
-
-        from qtpy.QtCore import QThread
-
-        logger.debug(
-            "%s | python_thread=%s | qt_current_thread=%r | widget_thread=%r",
-            where,
-            threading.current_thread().name,
-            QThread.currentThread(),
-            self.thread,
-        )
-
-    @Slot()
-    def _on_worker_started(self):
-        self._debug_thread("_on_worker_started")
-        self.worker_started = True
-
-    @Slot()
-    def _on_worker_finished(self):
-        self._debug_thread("_on_worker_finished")
-        self.worker_started = False
-
-    @Slot(int, int)
-    def _on_worker_progress(self, current: int, total: int):
-        self._debug_thread("_on_worker_progress")
-        if self._tracking_progress_bar.maximum() != total:
-            self._tracking_progress_bar.setMaximum(total)
-        self._tracking_progress_bar.setValue(current)
 
     @property
     def keypoint_layer(self) -> Points | None:
@@ -524,34 +363,22 @@ class TrackingControls(QWidget):
         self.is_tracking = True
         self._tracking_progress_bar.setValue(0)
 
-    @Slot(object)
+    @Slot(TrackingWorkerOutput)
     def tracking_finished(self, out: TrackingWorkerOutput):
         self.is_tracking = False
         try:
-            new_features_df = (
-                out.keypoint_features
-                if isinstance(out.keypoint_features, pd.DataFrame)
-                else pd.DataFrame(out.keypoint_features)
-            )
-
-            ref_frame_idx = (
-                int(new_features_df["tracking_query_frame"].iloc[0])
-                if "tracking_query_frame" in new_features_df.columns and len(new_features_df)
-                else int(self._reference_spinbox.value())
-            )
-
-            layer = self._create_tracking_result_layer(
-                out.keypoints,
-                new_features_df,
-                tracker_name=self._tracking_method_combo.currentText(),
-                ref_frame_idx=ref_frame_idx,
-            )
-
-            self._viewer.layers.selection.active = layer
-            self._viewer.status = f'Created tracking result layer "{layer.name}"'
+            try:
+                new_features_df = (
+                    out.keypoint_features
+                    if isinstance(out.keypoint_features, pd.DataFrame)
+                    else pd.DataFrame(out.keypoint_features)
+                )
+            except ValueError as e:
+                logger.error(f"Failed to convert keypoint features to DataFrame: {e}")
+                new_features_df = pd.DataFrame()
+            self.add_keypoints_to_layer(out.keypoints, new_features_df)
         except Exception as e:
-            logger.exception("Error creating tracking result layer", exc_info=e)
-
+            logger.error(f"Error adding keypoints to layer: {e}")
         self._tracking_progress_bar.setValue(self._tracking_progress_bar.maximum())
         self._tracking_progress_bar.setFormat("%p% Done")
         self.trackedKeypointsAdded.emit()
@@ -562,40 +389,40 @@ class TrackingControls(QWidget):
         self._tracking_progress_bar.setValue(self._tracking_progress_bar.maximum())
         self._tracking_progress_bar.setFormat("%p% Stopped")
 
-    # def add_keypoints_to_layer(self, new_keypoints: np.ndarray, new_features: pd.DataFrame):
-    #     current_keypoints = self.keypoint_layer.data
-    #     current_features: pd.DataFrame = self.keypoint_layer.features
+    def add_keypoints_to_layer(self, new_keypoints: np.ndarray, new_features: pd.DataFrame):
+        current_keypoints = self.keypoint_layer.data
+        current_features: pd.DataFrame = self.keypoint_layer.features
 
-    #     # Extract unique frame indices
-    #     unique_frames = np.sort(np.unique(np.concatenate((current_keypoints[:, 0], new_keypoints[:, 0]))))
+        # Extract unique frame indices
+        unique_frames = np.sort(np.unique(np.concatenate((current_keypoints[:, 0], new_keypoints[:, 0]))))
 
-    #     merged_keypoints = []
-    #     merged_features = []
+        merged_keypoints = []
+        merged_features = []
 
-    #     for frame in unique_frames:
-    #         # Select keypoints and features for the current frame
-    #         frame_old_keypoints = current_keypoints[current_keypoints[:, 0] == frame]
-    #         frame_old_features = current_features[current_keypoints[:, 0] == frame]
+        for frame in unique_frames:
+            # Select keypoints and features for the current frame
+            frame_old_keypoints = current_keypoints[current_keypoints[:, 0] == frame]
+            frame_old_features = current_features[current_keypoints[:, 0] == frame]
 
-    #         frame_new_keypoints = new_keypoints[new_keypoints[:, 0] == frame]
-    #         frame_new_features = new_features[new_keypoints[:, 0] == frame]
+            frame_new_keypoints = new_keypoints[new_keypoints[:, 0] == frame]
+            frame_new_features = new_features[new_keypoints[:, 0] == frame]
 
-    #         # Here we can add custom logic when merging. Right now we overwrite any previous keypoints.
-    #         if len(frame_new_keypoints) > 0:
-    #             # If there are keypoints in new, take those
-    #             merged_keypoints.append(frame_new_keypoints)
-    #             merged_features.append(frame_new_features)
-    #         else:
-    #             merged_keypoints.append(frame_old_keypoints)
-    #             merged_features.append(frame_old_features)
+            # Here we can add custom logic when merging. Right now we overwrite any previous keypoints.
+            if len(frame_new_keypoints) > 0:
+                # If there are keypoints in new, take those
+                merged_keypoints.append(frame_new_keypoints)
+                merged_features.append(frame_new_features)
+            else:
+                merged_keypoints.append(frame_old_keypoints)
+                merged_features.append(frame_old_features)
 
-    #     merged_keypoints = (
-    #         np.vstack(merged_keypoints) if merged_keypoints else np.empty((0, current_keypoints.shape[1]))
-    #     )
-    #     merged_feature_df = pd.concat(merged_features, ignore_index=True)
+        merged_keypoints = (
+            np.vstack(merged_keypoints) if merged_keypoints else np.empty((0, current_keypoints.shape[1]))
+        )
+        merged_feature_df = pd.concat(merged_features, ignore_index=True)
 
-    #     self.keypoint_layer.data = merged_keypoints
-    #     self.keypoint_layer.features = merged_feature_df
+        self.keypoint_layer.data = merged_keypoints
+        self.keypoint_layer.features = merged_feature_df
 
     @Slot()
     def track_forward(self):
@@ -661,46 +488,29 @@ class TrackingControls(QWidget):
     def track(self, keypoint_range: tuple[int, int], ref_frame_idx, backward_tracking=False):
         if not self.worker_started:
             self._start_worker()
-
         if not self.keypoint_widget:
             for k, v in self._viewer.window._dock_widgets.items():
                 if "Keypoint controls" in k and "napari-deeplabcut" in k:
                     self.keypoint_widget = v.widget()
                     break
-
         if self.is_tracking:
             return
-
-        if self.video_layer is None:
-            logger.warning("No video layer selected.")
-            return
-
-        if self.keypoint_layer is None:
-            logger.warning("No keypoint layer selected.")
-            return
-
         self._tracking_progress_bar.setFormat("%p%")
 
         if backward_tracking:
             video_slice = self.video_layer.data[keypoint_range[0] : keypoint_range[1]][::-1]
         else:
             video_slice = self.video_layer.data[keypoint_range[0] : keypoint_range[1]]
-
-        try:
-            seed_keypoints, seed_features = self._seed_query_points_and_features(ref_frame_idx)
-        except ValueError as e:
-            logger.warning(str(e))
-            napari.utils.notifications.show_warning(str(e))
-            return
-
+        keypoints = self.keypoint_layer.data[self.keypoint_layer.data[:, 0] == ref_frame_idx]
+        keypoints[:, 0] = 0
+        keypoint_features = self.keypoint_layer.features[self.keypoint_layer.data[:, 0] == ref_frame_idx]
         tracking_data = TrackingWorkerData(
-            tracker_name=self._tracking_method_combo.currentText(),
+            tracker_name=self._tracking_method_combo.currentText(),  # do not instantiate yet
             video=video_slice,
-            keypoints=seed_keypoints,
-            keypoint_features=seed_features,
+            keypoints=keypoints,
+            keypoint_features=keypoint_features,
             keypoint_range=keypoint_range,
             backward_tracking=backward_tracking,
-            reference_frame_index=int(ref_frame_idx),
         )
         self.trackingRequested.emit(tracking_data)
 
