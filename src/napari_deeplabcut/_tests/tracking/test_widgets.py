@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 from qtpy.QtCore import Qt
 
+from napari_deeplabcut.tracking._widgets import TrackingControls
 from napari_deeplabcut.tracking.core.data import TrackingWorkerData
 from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS
 
@@ -10,8 +11,13 @@ _DUMMY_VIDEO_N_FRAMES = 10
 
 
 def _get_tracking_controls(viewer):
-    for title, dock in viewer.window.dock_widgets.items():
-        if "Tracking controls" in title and "napari-deeplabcut" in title:
+    viewer.window.add_dock_widget(
+        TrackingControls(viewer),
+        name="Tracking controls",
+        area="right",
+    )
+    for _title, dock in viewer.window.dock_widgets.items():
+        if dock.property("ndlc_tracking_controls"):
             return dock
     raise RuntimeError("Tracking controls dock widget not found")
 
@@ -39,7 +45,7 @@ def setup_tracking_widget(qtbot, viewer, monkeypatch):
                 raising=False,
             )
             monkeypatch.setattr(
-                "napari_deeplabcut._widgets.KeypointMatplotlibCanvas._load_dataframe",
+                "napari_deeplabcut.ui.plots.trajectory.TrajectoryMatplotlibCanvas._load_dataframe",
                 lambda *args, **kwargs: None,
                 raising=False,
             )
@@ -61,6 +67,7 @@ def setup_tracking_widget(qtbot, viewer, monkeypatch):
     return _setup_tracking_data
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_tracking_controls_initial_state(setup_tracking_widget):
     tc = setup_tracking_widget(add_data=False)
 
@@ -112,6 +119,7 @@ def test_tracking_frame_controls_layer_selection_and_ranges(setup_tracking_widge
     assert tc._reference_spinbox.maximum() == big_video_n_frames - 1
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_forward_track(setup_tracking_widget, qtbot, viewer):
     tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
 
@@ -144,6 +152,7 @@ def test_forward_track(setup_tracking_widget, qtbot, viewer):
     assert len(twd.keypoint_features) == len(points_layer.features)
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_backward_track(setup_tracking_widget, qtbot, viewer):
     tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
     from types import MethodType
@@ -163,6 +172,7 @@ def test_backward_track(setup_tracking_widget, qtbot, viewer):
     assert twd.video.shape[0] == (2 - 0 + 1)  # inclusive range when +1 is applied in TrackControls
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_bothway_track(setup_tracking_widget, qtbot, viewer):
     tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
     from types import MethodType
