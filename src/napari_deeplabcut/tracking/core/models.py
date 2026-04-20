@@ -3,13 +3,14 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import pandas as pd
 
 from napari_deeplabcut.tracking.core.data import (
     RawModelOutputs,
     TrackingModelInputs,
     TrackingWorkerData,
     TrackingWorkerOutput,
+    coerce_features_df,
+    expand_query_features_over_time,
 )
 
 if TYPE_CHECKING:
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
 # Automatically populated via the @register_backbone decorator.
 AVAILABLE_TRACKERS: dict[str, dict[str, Any]] = {}
 
+# TODO @C-Achard: consider splitting into base.py (TrackingModel) and putting models in core/models/
 
 logger = logging.getLogger(__name__)
 
@@ -125,21 +127,23 @@ class Cotracker3(TrackingModel):
 
     def prepare_inputs(self, cfg: "TrackingWorkerData", **kwargs):
         self.cfg = cfg
-        # video is originally of shape (num_frames, height, width, channels)
-        video = np.array(self.cfg.video)
 
-        # We need to swap x, y so that it matches what cotracker expects
-        self.cfg.keypoints[:, [1, 2]] = self.cfg.keypoints[:, [2, 1]]
-        queries = np.asarray(self.cfg.keypoints)
+        # video is originally (num_frames, H, W, C)
+        video = np.asarray(self.cfg.video)
+
+        # IMPORTANT: do NOT mutate worker_inputs in place
+        queries = np.asarray(self.cfg.keypoints, dtype=float).copy()
+
+        # CoTracker expects [t, y, x]
+        queries[:, [1, 2]] = queries[:, [2, 1]]
+
         metadata = {
             "keypoint_range": self.cfg.keypoint_range,
             "backward_tracking": self.cfg.backward_tracking,
+            "reference_frame_idx": self.cfg.reference_frame_idx,
         }
-        return TrackingModelInputs(
-            video=video,
-            keypoints=queries,
-            metadata=metadata,
-        )
+
+        return TrackingModelInputs(video=video, keypoints=queries, metadata=metadata)
 
     def run(self, inputs: TrackingModelInputs, progress_callback, stop_callback) -> RawModelOutputs:
         import torch
@@ -149,65 +153,114 @@ class Cotracker3(TrackingModel):
 
         window_frames = []
         is_first_step = True
+        pred_tracks = None
+        pred_visibility = None
+
         for i, frame in enumerate(video):
             if i % self.model.step == 0 and i != 0:
-                pred_tracks, _pred_visibility = self._process_step(window_frames, is_first_step, queries=queries)
+                pred_tracks, pred_visibility = self._process_step(
+                    window_frames,
+                    is_first_step,
+                    queries=queries,
+                )
                 is_first_step = False
+
             window_frames.append(frame)
             progress_callback(i, len(video))
+
             if stop_callback():
                 logger.debug("Tracking stopped.")
-                return
+                return RawModelOutputs(
+                    keypoints=np.empty((0, 0, 2), dtype=float),
+                    keypoint_features={},
+                )
 
-        pred_tracks, _pred_visibility = self._process_step(
+        pred_tracks, pred_visibility = self._process_step(
             window_frames[-(i % self.model.step) - self.model.step - 1 :],
             is_first_step,
             queries=queries,
         )
         progress_callback(len(video), len(video))
 
-        tracks = pred_tracks.squeeze().cpu().numpy()
-        _pred_visibility = _pred_visibility.squeeze().cpu().numpy()  #
+        tracks = pred_tracks.detach().cpu().numpy()
+        visibility = pred_visibility.detach().cpu().numpy()
+
+        # Normalize shapes without over-squeezing query/time dimensions
+        if tracks.ndim == 4 and tracks.shape[0] == 1:
+            tracks = tracks[0]  # -> (T, K, 2)
+
+        if visibility.ndim == 4 and visibility.shape[0] == 1:
+            visibility = visibility[0]  # -> (T, K, 1)
+
+        if visibility.ndim == 3 and visibility.shape[-1] == 1:
+            visibility = visibility[..., 0]  # -> (T, K)
 
         return RawModelOutputs(
             keypoints=tracks,
-            keypoint_features={"visibility": _pred_visibility},
+            keypoint_features={"visibility": visibility},
         )
 
     def prepare_outputs(
-        self, model_outputs: RawModelOutputs, worker_inputs: TrackingWorkerData = None, **kwargs
+        self,
+        model_outputs: RawModelOutputs,
+        worker_inputs: TrackingWorkerData = None,
+        **kwargs,
     ) -> "TrackingWorkerOutput":
         """
-        Convert raw outputs into canonical format:
-        - Flatten tracks into (N, 3): [frame_idx, x, y]
-        - Restore original x/y order for worker.
+        Convert CoTracker outputs into canonical plugin format while preserving
+        original per-query semantic identity.
+
+        Result:
+        - keypoints: (N, 3) = [frame_idx, x, y]
+        - keypoint_features: one row per tracked point, aligned with keypoints
         """
-        tracks = model_outputs.keypoints  # shape: (T, K, 2)
-        T1, T2 = worker_inputs.keypoint_range
-        K = worker_inputs.keypoints.shape[0]
+        tracks = np.asarray(model_outputs.keypoints, dtype=float)  # expected (T, K, 2)
 
-        # Flatten and add frame indices
-        frame_ids = np.repeat(np.arange(T1, T2), K)
-        tracks = tracks.reshape(-1, 2)
+        if tracks.ndim != 3 or tracks.shape[-1] != 2:
+            raise ValueError(f"Expected tracks with shape (T, K, 2), got {tracks.shape}.")
 
-        # If backward tracking requested
+        visibility = model_outputs.keypoint_features.get("visibility")
+        if visibility is not None:
+            visibility = np.asarray(visibility)
+            if visibility.ndim == 3 and visibility.shape[-1] == 1:
+                visibility = visibility[..., 0]
+
+        T1, T2 = map(int, worker_inputs.keypoint_range)
+        frame_ids = np.arange(T1, T2, dtype=int)
+
+        # IMPORTANT:
+        # When backward_tracking=True, the model saw the time-reversed video slice.
+        # So we must reverse the TIME axis before flattening, not the flattened rows.
         if worker_inputs.backward_tracking:
-            tracks = tracks[::-1]
-        # Combine into (N, 3)
-        keypoints = np.column_stack((frame_ids, tracks))
+            tracks = tracks[::-1, :, :]
+            if visibility is not None:
+                visibility = visibility[::-1, :]
 
-        keypoints_features = model_outputs.keypoint_features
-        keypoints_features = pd.concat(
-            [worker_inputs.keypoint_features] * len(np.unique(keypoints[:, 0])),
-            ignore_index=True,
-        )
+        T, K, _ = tracks.shape
+        if T != len(frame_ids):
+            raise ValueError(f"Time dimension mismatch. tracks has T={T}, frame_ids has len={len(frame_ids)}.")
 
-        # Restore original x/y order
+        seed_features = coerce_features_df(worker_inputs.keypoint_features)
+        if len(seed_features) != K:
+            raise ValueError(f"Seed feature row count mismatch. Expected K={K}, got {len(seed_features)}.")
+
+        # Flatten frame-major, preserving query order inside each frame
+        xy = tracks.reshape(T * K, 2)
+        keypoints = np.column_stack((np.repeat(frame_ids, K), xy))
+
+        # Restore plugin convention from [frame, y, x] -> [frame, x, y]
         keypoints[:, [1, 2]] = keypoints[:, [2, 1]]
+
+        keypoint_features = expand_query_features_over_time(
+            seed_features,
+            frame_ids=frame_ids,
+            visibility=visibility,
+            tracker_name=self.name,
+        )
 
         return TrackingWorkerOutput(
             keypoints=keypoints,
-            keypoint_features=keypoints_features,
+            keypoint_features=keypoint_features,
         )
 
     def _process_step(self, window_frames, is_first_step, queries):
