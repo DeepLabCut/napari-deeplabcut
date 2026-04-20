@@ -1,6 +1,4 @@
 import logging
-import os
-from dataclasses import dataclass
 from functools import partial
 
 import napari
@@ -9,7 +7,6 @@ import pandas as pd
 from magicgui.widgets import ComboBox, create_widget
 from napari.layers import Image, Points
 from napari.viewer import Viewer
-from napari_deeplabcut.keypoints import KeypointStore
 from qtpy.QtCore import Qt, Signal, Slot
 from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import (
@@ -28,33 +25,24 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from napari_deeplabcut._widgets import KeypointControls
+from napari_deeplabcut.config.keybinds import (
+    MOVE_BACKWARD_FRAME,
+    MOVE_FORWARD_FRAME,
+    TRACK_BACKWARD,
+    TRACK_BACKWARD_END,
+    TRACK_FORWARD,
+    TRACK_FORWARD_END,
+)
+
+# Keybinds
+from napari_deeplabcut.config.settings import TRACKING_SHORTCUTS_ENABLED
+from napari_deeplabcut.core.keypoints import KeypointStore
 from napari_deeplabcut.tracking.core.data import TrackingWorkerData, TrackingWorkerOutput
 from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS
 from napari_deeplabcut.tracking.ui.worker import TrackingWorker
 
 logger = logging.getLogger(__name__)
-# Keybinds
-TRACKING_SHORTCUTS_ENABLED = os.environ.get("NAPARI_DLC_TRACKING_SHORTCUTS_ENABLED", "1") == "1"
-
-
-@dataclass(frozen=True)
-class TrackingKeybindConfig:
-    key: str
-    tooltip: str
-
-    def get_display(self) -> str:
-        txt = self.tooltip
-        if TRACKING_SHORTCUTS_ENABLED:
-            txt += f" ({self.key})"
-        return txt
-
-
-TRACK_FORWARD = TrackingKeybindConfig(key="l", tooltip="Track forward")
-TRACK_FORWARD_END = TrackingKeybindConfig(key="k", tooltip="Track forward to end")
-TRACK_BACKWARD = TrackingKeybindConfig(key="h", tooltip="Track backward")
-TRACK_BACKWARD_END = TrackingKeybindConfig(key="j", tooltip="Track backward to start")
-MOVE_FORWARD_FRAME = TrackingKeybindConfig(key="i", tooltip="Move forward one frame")
-MOVE_BACKWARD_FRAME = TrackingKeybindConfig(key="u", tooltip="Move backward one frame")
 
 
 class TrackingControls(QWidget):
@@ -63,7 +51,8 @@ class TrackingControls(QWidget):
 
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
-        from napari_deeplabcut._widgets import KeypointControls
+        self.setObjectName("napari-deeplabcut-tracking-controls")
+        self.setProperty("ndlc_tracking_controls", True)
 
         self._viewer: Viewer = viewer
 
@@ -160,25 +149,54 @@ class TrackingControls(QWidget):
         self._tracking_stop_button.setToolTip("Stop tracking")
         self._set_ref_button.setToolTip("Set reference frame")
 
+    def _dock_widget(self):
+        try:
+            for dock in self._viewer.window._dock_widgets.values():
+                if dock.widget() is self:
+                    return dock
+        except Exception:
+            return None
+        return None
+
+    def _tracking_shortcuts_active(self) -> bool:
+        if not TRACKING_SHORTCUTS_ENABLED:
+            return False
+        dock = self._dock_widget()
+        return dock is not None and dock.isVisible()
+
     def _setup_keybindings(self, viewer: "napari.viewer.Viewer"):
+        if not TRACKING_SHORTCUTS_ENABLED:
+            self._set_tooltips()
+            return
+
         @Points.bind_key(TRACK_FORWARD.key, overwrite=True)
         def track_forward(event):
+            if not self._tracking_shortcuts_active():
+                return
             self.track_forward()
 
         @Points.bind_key(TRACK_FORWARD_END.key, overwrite=True)
         def track_forward_end(event):
+            if not self._tracking_shortcuts_active():
+                return
             self.track_forward_end()
 
         @Points.bind_key(TRACK_BACKWARD.key, overwrite=True)
         def track_backward(event):
+            if not self._tracking_shortcuts_active():
+                return
             self.track_backward()
 
         @Points.bind_key(TRACK_BACKWARD_END.key, overwrite=True)
         def track_backward_end(event):
+            if not self._tracking_shortcuts_active():
+                return
             self.track_backward_end()
 
         @Points.bind_key(MOVE_FORWARD_FRAME.key, overwrite=True)
         def move_forward_frame(event):
+            if not self._tracking_shortcuts_active():
+                return
             viewer.dims.current_step = (
                 viewer.dims.current_step[0] + 1,
                 *viewer.dims.current_step[1:],
@@ -186,6 +204,8 @@ class TrackingControls(QWidget):
 
         @Points.bind_key(MOVE_BACKWARD_FRAME.key, overwrite=True)
         def move_backward_frame(event):
+            if not self._tracking_shortcuts_active():
+                return
             viewer.dims.current_step = (
                 viewer.dims.current_step[0] - 1,
                 *viewer.dims.current_step[1:],
