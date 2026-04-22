@@ -194,6 +194,16 @@ class KeypointControls(QWidget):
         self._debug_window = None
         ###########
 
+        ## Debug ##
+        self._debug_recorder = install_debug_recorder()
+        self._debug_window = None
+
+        show_debug_action = QAction("&Generate napari-dlc log", self)
+        show_debug_action.setToolTip("Show a debug report with recent plugin logs")
+        show_debug_action.triggered.connect(self._show_debug_window)
+        self.viewer.window.help_menu.addAction(show_debug_action)
+        ###########
+
         # self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
         #     _get_and_try_preferred_reader,
         #     self.viewer.window.qt_viewer,
@@ -769,6 +779,12 @@ class KeypointControls(QWidget):
 
         self._set_points_controls_enabled(True)
         self._update_color_scheme()
+        logger.debug(
+            "Setup points layer=%r allow_merge=%s metadata_keys=%s",
+            getattr(layer, "name", layer),
+            allow_merge,
+            sorted((layer.metadata or {}).keys()),
+        )
 
     def _on_points_layer_removed_ui(self, layer: Points, *, remaining_points_layers: int) -> None:
         """UI-only cleanup after lifecycle manager removed a managed Points layer."""
