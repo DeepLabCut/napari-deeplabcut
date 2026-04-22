@@ -28,7 +28,6 @@ Please be careful when editing this file.
 if TYPE_CHECKING:
     pass
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 DEBUG = False
