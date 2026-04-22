@@ -510,6 +510,7 @@ class KeypointControls(QWidget):
     # Layer setup core methods #
     # ######################## #
 
+    @deprecated("This should be moved to LayerLifecycleManager. It is currently used there but should be moved.")
     def _setup_image_layer(self, layer: Image, index: int | None = None, *, reorder: bool = True) -> None:
         md = layer.metadata or {}
         paths = md.get("paths")
@@ -637,6 +638,7 @@ class KeypointControls(QWidget):
     def get_layer_store(layer: Points) -> keypoints.KeypointStore | None:
         return getattr(layer, "_dlc_store", None)
 
+    @deprecated("This should be moved to LayerLifecycleManager.")
     def _wire_points_layer(self, layer: Points) -> keypoints.KeypointStore | None:
         if not self._validate_header(layer):
             return None
@@ -730,6 +732,10 @@ class KeypointControls(QWidget):
 
         return store
 
+    @deprecated(
+        "This is still used in LayerLifecycleManager.on_insert(), "
+        "but should be instead moved to the LayerLifecycleManager itself instead."
+    )
     def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
         if not self._validate_header(layer):
             return
