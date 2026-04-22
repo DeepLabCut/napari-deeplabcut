@@ -310,6 +310,3 @@ class Cotracker3(TrackingModel):
                 f"Number of output keypoints does not match expected ((T2 - T1) * K) = {expected_n_keypoints}.",
             )
         return True, ""
-
-
-# pragma: cover
