@@ -174,8 +174,11 @@ class InMemoryDebugRecorder(logging.Handler):
             base = records[0].created
             for rec in records:
                 ts = datetime.fromtimestamp(rec.created).strftime("%H:%M:%S.%f")[:-3]
-                rel_ms = (rec.created - base) * 1000.0
-                lines.append(f"{ts} (+{rel_ms:8.1f} ms) | {rec.level:<8} | {rec.logger_name} | {rec.message}")
+                if NAPARI_DLC_LOG_TIMING:
+                    rel_ms = (rec.created - base) * 1000.0
+                    lines.append(f"{ts} (+{rel_ms:8.1f} ms) | {rec.level:<8} | {rec.logger_name} | {rec.message}")
+                else:
+                    lines.append(f"{ts} | {rec.level:<8} | {rec.logger_name} | {rec.message}")
                 if rec.exc_text:
                     lines.append(rec.exc_text.rstrip())
 
