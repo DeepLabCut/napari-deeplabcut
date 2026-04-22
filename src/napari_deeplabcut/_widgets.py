@@ -146,6 +146,7 @@ from napari_deeplabcut.ui.labels_and_dropdown import (
 from napari_deeplabcut.ui.layer_stats import LayerStatusPanel
 from napari_deeplabcut.ui.plots.trajectory import TrajectoryMatplotlibCanvas
 from napari_deeplabcut.utils.debug import get_debug_recorder, install_debug_recorder
+from napari_deeplabcut.utils.deprecations import deprecated
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
 # logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
@@ -758,6 +759,10 @@ class KeypointControls(QWidget):
             sorted((layer.metadata or {}).keys()),
         )
 
+    @deprecated(
+        "This method is no longer used. Layer adoption is now handled by LayerLifecycleManager.",
+        replacement="self.layer_manager.schedule_initial_adoption()",
+    )
     def _adopt_existing_layers(self) -> None:
         """
         When the widget is opened after layers already exist, we need to
@@ -784,6 +789,10 @@ class KeypointControls(QWidget):
         # (e.g. drag-and-drop DLC data triggering the reader automatically).
         self._refresh_trajectory_plot_from_layers()
 
+    @deprecated(
+        "This method is no longer used. Layer adoption is now handled by LayerLifecycleManager.",
+        replacement="LayerLifecycleManager.on_insert()",
+    )
     def _adopt_layer(self, layer, index: int) -> None:
         """
         Run the relevant portion of on_insert() for an already-existing layer.
@@ -1614,6 +1623,9 @@ class KeypointControls(QWidget):
             logger.exception("Failed to remap frame indices for layer %s", getattr(layer, "name", str(layer)))
             return
 
+    @deprecated(
+        replacement="self.layer_manager", reason="Direct layer management is now handled by LayerLifecycleManager"
+    )
     def on_insert(self, event):
         logger.debug("on_insert event received: event=%r", event)
         layer = event.source[-1]
