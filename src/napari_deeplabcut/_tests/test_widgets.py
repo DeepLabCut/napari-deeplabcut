@@ -485,7 +485,7 @@ def test_widget_map_keypoints_writes_to_config(keypoint_controls, qtbot, points,
 
     # neighbors indices correspond to ordering of list(dummy_superkpts)
     # Here: ["nose", "upper_jaw"] -> indices [0, 1]
-    monkeypatch.setattr(keypoints, "_find_nearest_neighbors", lambda xy, xy_ref: np.array([0, 1]))
+    monkeypatch.setattr(keypoints, "find_nearest_neighbors", lambda xy, xy_ref: np.array([0, 1]))
 
     # If your io.load_config / io.write_config do more than YAML I/O,
     # you can keep them. Otherwise stubbing them makes the test isolated.

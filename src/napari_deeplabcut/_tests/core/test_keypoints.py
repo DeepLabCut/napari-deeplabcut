@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from napari_deeplabcut.core import keypoints
 
@@ -11,8 +12,8 @@ def test_store_advance_step(store):
 
 
 def test_store_labels(store, fake_keypoints):
+    assert store.layer_id == id(store.layer)
     assert store.n_steps == fake_keypoints.shape[0]
-    # Labels are derived from the header (bodyparts level); this asserts the store mirrors header order
     assert store.labels == list(fake_keypoints.columns.get_level_values("bodyparts").unique())
 
 
@@ -76,7 +77,7 @@ def test_add_unannotated(store):
 
     # IMPORTANT: pass coord with the CURRENT frame index so we truly add to the frame we're on
     # Data layout is (frame, y, x)
-    keypoints._add(store, coord=(ind_to_remove, 1, 1))
+    keypoints.add(store, coord=(ind_to_remove, 1, 1))
 
     # Exactly one new point should be appended
     assert store.layer.data.shape[0] == n_points + 1
@@ -99,7 +100,7 @@ def test_add_quick(store):
 
     # Add (or move) at the CURRENT frame; coord uses (frame, y, x)
     coord = store.current_step, -1, -1
-    keypoints._add(store, coord=coord)
+    keypoints.add(store, coord=coord)
 
     # After QUICK add/move, the point for the current frame should match the requested coord
     # (If it existed, it was moved; if not, it was added.)
@@ -107,3 +108,47 @@ def test_add_quick(store):
         store.layer.data[store.current_step],
         coord,
     )
+
+
+def test_store_can_attach_layer_resolver(store):
+    original_layer = store.layer
+    layer_id = id(original_layer)
+
+    # Resolver returns the original live layer by id.
+    store.attach_layer_resolver(lambda requested_id: original_layer if requested_id == layer_id else None)
+
+    assert store.layer_id == layer_id
+    assert store.maybe_layer() is original_layer
+    assert store.layer is original_layer
+
+
+def test_store_layer_raises_when_resolver_returns_none(store):
+    store.attach_layer_resolver(lambda requested_id: None)
+
+    assert store.maybe_layer() is None
+
+    with pytest.raises(keypoints.LayerUnavailableError):
+        _ = store.layer
+
+
+def test_store_resolver_is_authoritative_over_local_fallback(store):
+
+    # Even though the store still has fallback refs, resolver should dominate.
+    store.attach_layer_resolver(lambda requested_id: None)
+
+    assert store.maybe_layer() is None
+
+    with pytest.raises(keypoints.LayerUnavailableError):
+        _ = store.layer
+
+
+def test_store_layer_setter_updates_layer_id_and_keypoints(store, viewer):
+    old_layer = store.layer
+    old_layer_id = store.layer_id
+
+    new_layer = viewer.layers[0].copy() if hasattr(viewer.layers[0], "copy") else old_layer
+    store.layer = new_layer
+
+    assert store.layer is new_layer
+    assert store.layer_id == id(new_layer)
+    assert store.layer_id != old_layer_id or new_layer is old_layer
