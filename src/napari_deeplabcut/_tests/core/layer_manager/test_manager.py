@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from types import SimpleNamespace
 
 import numpy as np
@@ -108,6 +109,9 @@ def test_manager_register_and_query_managed_points(qtbot):
     assert manager.has_managed_points() is False
     assert manager.managed_points_count() == 0
     assert manager.managed_points_layers() == ()
+    assert manager.resolve_live_layer(pts) is None
+    assert manager.get_live_runtime(pts) is None
+    assert manager.get_store(pts) is None
 
     manager.register_managed_points_layer(pts, store)
 
@@ -117,9 +121,24 @@ def test_manager_register_and_query_managed_points(qtbot):
     assert manager.managed_points_layers() == (pts,)
     assert list(manager.iter_managed_points()) == [(pts, store)]
 
+    assert manager.resolve_live_layer(pts) is pts
+    runtime = manager.get_live_runtime(pts)
+    assert runtime is not None
+    assert runtime.layer_id == id(pts)
+    assert runtime.store is store
+    assert manager.get_store(pts) is store
+    assert manager.require_store(pts) is store
+
     removed = manager.unregister_managed_layer(pts)
     assert removed is store
+
+    assert manager.is_managed(pts) is False
     assert manager.has_managed_points() is False
+    assert manager.managed_points_count() == 0
+    assert manager.managed_points_layers() == ()
+    assert manager.resolve_live_layer(pts) is None
+    assert manager.get_live_runtime(pts) is None
+    assert manager.get_store(pts) is None
 
 
 def test_manager_on_insert_points_delegates_to_owner_and_remaps_non_images(qtbot):
@@ -215,3 +234,49 @@ def test_manager_resolve_inserted_layer_prefers_value_then_index_then_source(qtb
 
     assert layer is pts
     assert layer.name == expected_name
+
+
+def test_manager_reap_dead_entries_removes_stale_entry(qtbot):
+    viewer = DummyViewer()
+    owner = DummyOwner(viewer)
+    manager = LayerLifecycleManager(owner=owner)
+
+    pts = make_points()
+    store = object()
+
+    manager.register_managed_points_layer(pts, store)
+
+    layer_id = id(pts)
+    del pts
+    gc.collect()
+
+    # Before reaping, the entry may still exist by id but not be live.
+    report_before = manager.audit_registry()
+    assert report_before.dead_count == 1
+    assert any(issue.code == "dead-entry" and issue.layer_id == layer_id for issue in report_before.issues)
+
+    reaped = manager.reap_dead_entries(log=False)
+
+    assert len(reaped) == 1
+    assert reaped[0].layer_id == layer_id
+    assert reaped[0].runtime.store is store
+
+    report_after = manager.audit_registry()
+    assert report_after.dead_count == 0
+    assert report_after.issues == ()
+
+
+def test_manager_unregister_by_layer_id_returns_store(qtbot):
+    viewer = DummyViewer()
+    owner = DummyOwner(viewer)
+    manager = LayerLifecycleManager(owner=owner)
+
+    pts = make_points()
+    store = object()
+
+    manager.register_managed_points_layer(pts, store)
+
+    removed = manager.unregister_managed_layer(id(pts))
+
+    assert removed is store
+    assert manager.has_managed_points() is False
