@@ -661,65 +661,44 @@ def _lazy_imread(
         ) from e
 
 
+def _build_image_layer_kwargs(
+    *,
+    filepaths: list[Path],
+    dlc_meta: dict | None = None,
+    name: str = "images",
+) -> dict[str, Any]:
+    metadata = {
+        "paths": [canonicalize_path(fp, 3) for fp in filepaths],
+        "root": str(filepaths[0].parent),
+    }
+    if dlc_meta is not None:
+        metadata["dlc"] = dlc_meta
+
+    return {
+        "name": name,
+        "metadata": metadata,
+    }
+
+
 # Read images from a list of files or a glob/string path
-def read_images(path: str | Path | list[str | Path]):
-    """Reads one or multiple images and returns a Napari Image layer.
-
-    Uses `_expand_image_paths` to resolve the input into a list of valid
-    image files. Supports single paths, glob expressions, directories,
-    and lists or tuples of such paths.
-
-    Behavior:
-        * If one file is found:
-            - Loaded using `dask_image.imread.imread`.
-        * If multiple files are found:
-            - Loaded lazily using `lazy_imread` into a stacked image
-              layer.
-
-    Args:
-        path (str | Path | list[str | Path]):
-            Input path(s), directory, or glob pattern(s) to expand into
-            supported image files.
-
-    Returns:
-        list[LayerData]:
-            A list containing one Napari layer tuple of the form
-            `(data, metadata, "image")`.
-
-    Raises:
-        OSError: If no supported images are found after expansion.
-    """
+def read_images(
+    path: str | Path | list[str | Path],
+    *,
+    dlc_meta: dict | None = None,
+) -> list[LayerData]:
     filepaths = _expand_image_paths(path)
-
     if not filepaths:
         raise OSError(f"No supported images were found in {path}")
 
     filepaths = natsorted(filepaths, key=str)
+    kwargs = _build_image_layer_kwargs(filepaths=filepaths, dlc_meta=dlc_meta, name="images")
 
-    # Multiple images → lazy-imread stack
     if len(filepaths) > 1:
-        # NOTE: canonicalize_path(fp, 3) stores a stable relative-ish path for the UI/metadata.
-        relative_paths = [canonicalize_path(fp, 3) for fp in filepaths]
-        params = {
-            "name": "images",
-            "metadata": {
-                "paths": relative_paths,
-                "root": str(filepaths[0].parent),
-            },
-        }
         data = _lazy_imread(filepaths, use_dask=True, stack=True)
-        return [(data, params, "image")]
+    else:
+        data = imread(str(filepaths[0]))
 
-    # Single image → old behavior
-    image_path = filepaths[0]
-    params = {
-        "name": "images",
-        "metadata": {
-            "paths": [canonicalize_path(image_path, 3)],
-            "root": str(image_path.parent),
-        },
-    }
-    return [(imread(str(image_path)), params, "image")]
+    return [(data, kwargs, "image")]
 
 
 # =============================================================================
@@ -772,7 +751,7 @@ class Video:
         self.stream.release()
 
 
-def read_video(filename: str, opencv: bool = True):
+def read_video(filename: str, opencv: bool = True, *, dlc_meta: dict | None = None):
     if opencv:
         stream = Video(filename)
         # NOTE construct output shape tuple in (H, W, C) order to match read_frame() data
@@ -805,4 +784,7 @@ def read_video(filename: str, opencv: bool = True):
             "root": root,
         },
     }
+    if dlc_meta is not None:
+        params["metadata"]["dlc"] = dlc_meta
+
     return [(movie, params, "image")]

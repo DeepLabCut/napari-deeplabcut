@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import logging
+from functools import partial
 from pathlib import Path
 
 from napari_deeplabcut.config._autostart import maybe_install_keypoint_controls_autostart
+from napari_deeplabcut.config.models import DLCProjectContext
 from napari_deeplabcut.core.discovery import discover_annotations
 from napari_deeplabcut.core.io import (
     SUPPORTED_IMAGES,
@@ -17,9 +19,39 @@ from napari_deeplabcut.core.io import (
     read_images,
     read_video,
 )
-from napari_deeplabcut.core.project_paths import looks_like_dlc_labeled_folder
+from napari_deeplabcut.core.project_paths import (
+    infer_dlc_project_from_labeled_folder,
+    infer_dlc_project_from_video_path,
+    looks_like_dlc_labeled_folder,
+    session_key_from_project_context,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _build_dlc_layer_meta(
+    *,
+    session_role: str | None,
+    project_context: DLCProjectContext | None,
+) -> dict:
+    """
+    Build explicit DLC lifecycle metadata for image/video layers.
+
+    If session_role is None or project_context is None, the layer should be
+    treated as a non-session image/video by lifecycle code.
+    """
+    if session_role is None or project_context is None:
+        return {
+            "session_role": None,
+            "project_context": None,
+            "session_key": None,
+        }
+
+    return {
+        "session_role": session_role,
+        "project_context": project_context.model_dump(mode="python", exclude_none=True),
+        "session_key": session_key_from_project_context(project_context),
+    }
 
 
 def get_hdf_reader(path):
@@ -40,9 +72,28 @@ def get_image_reader(path):
 
 
 def get_video_reader(path):
-    if isinstance(path, str) and any(path.lower().endswith(ext) for ext in SUPPORTED_VIDEOS):
-        return read_video
-    return None
+    if not isinstance(path, str) or not any(path.lower().endswith(ext) for ext in SUPPORTED_VIDEOS):
+        return None
+
+    ctx = infer_dlc_project_from_video_path(path)
+    if ctx is None:
+        # Generic non-DLC video layer: allowed, but ignored by lifecycle session context.
+        return partial(
+            read_video,
+            dlc_meta=_build_dlc_layer_meta(
+                session_role=None,
+                project_context=None,
+            ),
+        )
+
+    maybe_install_keypoint_controls_autostart()
+    return partial(
+        read_video,
+        dlc_meta=_build_dlc_layer_meta(
+            session_role="video",
+            project_context=ctx,
+        ),
+    )
 
 
 def get_config_reader(path):
@@ -87,7 +138,17 @@ def get_folder_parser(path):
             )
         return None
 
-    layers.extend(read_images(images))
+    ctx = infer_dlc_project_from_labeled_folder(path)
+
+    layers.extend(
+        read_images(
+            images,
+            dlc_meta=_build_dlc_layer_meta(
+                session_role="image",
+                project_context=ctx,
+            ),
+        )
+    )
 
     # Deterministic discovery: load ALL H5 artifacts
     artifacts = discover_annotations(path)

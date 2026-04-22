@@ -13,6 +13,7 @@ from qtpy.QtCore import QTimer
 
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 from napari_deeplabcut.core.keypoints import build_color_cycles
+from napari_deeplabcut.utils.deprecations import deprecated
 
 T = TypeVar("T")
 
@@ -554,6 +555,7 @@ def infer_folder_display_name(
     return "—"
 
 
+@deprecated(reason="Use LayerLifecycleManager.active_dlc_image_layer instead")
 def find_relevant_image_layer(viewer) -> Image | None:
     active = viewer.layers.selection.active
     if isinstance(active, Image):

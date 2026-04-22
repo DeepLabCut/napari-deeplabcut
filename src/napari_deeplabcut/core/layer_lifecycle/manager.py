@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator
-from functools import partial
 from types import MethodType
 from typing import TYPE_CHECKING, Any
 
@@ -75,6 +74,7 @@ class LayerLifecycleManager(QObject):
         self.registry: RuntimeRegistry[Any] = RuntimeRegistry()
 
         # Lifecycle-owned viewer/image context
+        self._active_dlc_image_layer_id: int | None = None
         self._image_meta = ImageMetadata()
         self._project_path: str | None = None
 
@@ -185,6 +185,48 @@ class LayerLifecycleManager(QObject):
     def schedule_initial_adoption(self) -> None:
         """Schedule adoption of existing layers after the event loop starts."""
         self._initial_adopt_timer.start(0)
+
+    def _dlc_meta_for_layer(self, layer: Layer) -> dict | None:
+        md = layer.metadata or {}
+        if not isinstance(md, dict):
+            return None
+        payload = md.get("dlc", None)
+        return payload if isinstance(payload, dict) else None
+
+    def is_dlc_session_image_layer(self, layer: Image) -> bool:
+        payload = self._dlc_meta_for_layer(layer)
+        if not payload:
+            return False
+
+        role = payload.get("session_role", None)
+        ctx = payload.get("project_context", None)
+
+        return role in {"image", "video"} and isinstance(ctx, dict) and bool(ctx)
+
+    def active_dlc_image_layer(self) -> Image | None:
+        if self._active_dlc_image_layer_id is None:
+            return None
+        layer = self.resolve_live_layer(self._active_dlc_image_layer_id)
+        return layer if isinstance(layer, Image) else None
+
+    def can_accept_dlc_session_image(self, layer: Image) -> tuple[bool, str | None]:
+        active = self.active_dlc_image_layer()
+        if active is None:
+            return True, None
+        if active is layer:
+            return True, None
+        return (
+            False,
+            "A DLC project/video is already open. Clear the viewer layers first before opening another project.",
+        )
+
+    def _reject_conflicting_dlc_image_layer(self, layer: Image, reason: str) -> None:
+        self.viewer.status = reason
+        try:
+            if layer in self.viewer.layers:
+                self.viewer.layers.remove(layer)
+        except Exception:
+            logger.debug("Failed to remove conflicting DLC image layer", exc_info=True)
 
     # ------------------------------------------------------------------ #
     # Layer setup managers                                               #
@@ -298,6 +340,7 @@ class LayerLifecycleManager(QObject):
             except Exception:
                 pass
 
+        self._active_dlc_image_layer_id = id(layer)
         self._update_image_meta_from_layer(layer)
 
         if not self._project_path:
@@ -326,7 +369,7 @@ class LayerLifecycleManager(QObject):
         )
 
         if reorder and index is not None:
-            QTimer.singleShot(10, partial(self.owner._move_image_layer_to_bottom, index))
+            QTimer.singleShot(10, lambda ly=layer: self.owner._move_image_layer_to_bottom(ly))
 
     def _wire_points_layer(self, layer: Points) -> KeypointStore | None:
         """Lifecycle-owned wiring of a managed Points layer.
@@ -428,6 +471,23 @@ class LayerLifecycleManager(QObject):
 
         return store
 
+    def _remove_layer_if_present(self, layer: Layer) -> None:
+        try:
+            if layer in self.viewer.layers:
+                self.viewer.layers.remove(layer)
+        except Exception:
+            logger.debug("Failed to remove layer=%r", getattr(layer, "name", layer), exc_info=True)
+
+    @staticmethod
+    def _set_layer_visible(layer: Layer, visible: bool) -> None:
+        try:
+            layer.visible = visible
+        except Exception:
+            try:
+                layer.shown = visible
+            except Exception:
+                logger.debug("Failed to set visibility for layer=%r", getattr(layer, "name", layer), exc_info=True)
+
     def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
         """Lifecycle-owned setup for an inserted/adopted Points layer."""
         if not self.owner._validate_header(layer):
@@ -465,10 +525,19 @@ class LayerLifecycleManager(QObject):
             self.owner._on_points_layer_removed_ui(layer, remaining_points_layers=n_points_layer)
 
         elif isinstance(layer, Image):
-            self._image_meta = ImageMetadata()
-            paths = layer.metadata.get("paths")
-            if paths is None:
-                self.owner.video_widget.setVisible(False)
+            if self._active_dlc_image_layer_id == id(layer):
+                self._active_dlc_image_layer_id = None
+                self._image_meta = ImageMetadata()
+                self._project_path = None
+
+                paths = layer.metadata.get("paths")
+                if paths is None:
+                    self.owner.video_widget.setVisible(False)
+            else:
+                logger.debug(
+                    "Removed non-session or inactive image layer=%r; keeping current DLC session context.",
+                    getattr(layer, "name", layer),
+                )
 
         elif isinstance(layer, Tracks):
             was_trails = self.owner._trails_controller.on_tracks_layer_removed(layer)
@@ -688,7 +757,7 @@ class LayerLifecycleManager(QObject):
         )
 
         if isinstance(layer, Image):
-            self._setup_image_layer(layer, getattr(event, "index", None), reorder=True)
+            self._maybe_accept_and_setup_image_layer(layer, getattr(event, "index", None))
         elif isinstance(layer, Points):
             self._setup_points_layer(layer, allow_merge=True)
 
@@ -715,6 +784,25 @@ class LayerLifecycleManager(QObject):
         self._handle_removed_layer(layer)
         self.layer_remove_processed.emit(layer)
 
+    def _maybe_accept_and_setup_image_layer(self, layer: Image, index: int | None) -> bool:
+        if not self.is_dlc_session_image_layer(layer):
+            logger.debug(
+                "Ignoring non-DLC image layer during lifecycle setup: %r",
+                getattr(layer, "name", layer),
+            )
+            return False
+
+        ok, reason = self.can_accept_dlc_session_image(layer)
+        if not ok:
+            self._reject_conflicting_dlc_image_layer(
+                layer,
+                reason or "Conflicting DLC project/video layer",
+            )
+            return False
+
+        self._setup_image_layer(layer, index, reorder=True)
+        return True
+
     def _adopt_layer(self, layer: Any, index: int) -> None:
         logger.debug(
             "Lifecycle manager adopt layer=%r type=%s index=%s",
@@ -724,7 +812,7 @@ class LayerLifecycleManager(QObject):
         )
 
         if isinstance(layer, Image):
-            self._setup_image_layer(layer, index, reorder=True)
+            self._maybe_accept_and_setup_image_layer(layer, index)
         elif isinstance(layer, Points):
             if not self.registry.is_managed(layer):
                 self._setup_points_layer(layer, allow_merge=False)

@@ -79,7 +79,6 @@ from .core.layers import (
     PointsInteractionEvent,
     PointsInteractionObserver,
     compute_label_progress,
-    find_relevant_image_layer,
     get_first_points_layer,
     get_points_layer_with_tables,
     get_uniform_point_size,
@@ -546,14 +545,28 @@ class KeypointControls(QWidget):
         new_keypoint_set = set(hdr.bodyparts)
         diff = new_keypoint_set.difference(current_keypoint_set)
 
+        placeholder_layer = layer  # newly inserted temporary config layer
+        visible_existing_layer = None
+        for managed_layer, _store in managed:
+            if managed_layer is placeholder_layer:
+                continue
+            try:
+                if getattr(managed_layer, "visible", True):
+                    visible_existing_layer = managed_layer
+                    break
+            except Exception:
+                visible_existing_layer = managed_layer
+                break
+
         if diff:
             answer = QMessageBox.question(self, "", "Do you want to display the new keypoints only?")
-            if answer == QMessageBox.Yes:
-                self.viewer.layers[-2].shown = False
+            if answer == QMessageBox.Yes and visible_existing_layer is not None:
+                self.layer_manager._set_layer_visible(visible_existing_layer, False)
                 logger.debug(
-                    "Merging config points layer=%r new_keypoints=%s",
+                    "Merging config points layer=%r new_keypoints=%s hid_existing_layer=%r",
                     getattr(layer, "name", layer),
                     sorted(diff),
+                    getattr(visible_existing_layer, "name", visible_existing_layer),
                 )
 
             self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
@@ -568,7 +581,7 @@ class KeypointControls(QWidget):
                 menu._map_individuals_to_bodyparts()
                 menu._update_items()
 
-        QTimer.singleShot(10, self.viewer.layers.pop)
+        QTimer.singleShot(0, lambda: self.layer_manager._remove_layer_if_present(placeholder_layer))
 
         # apply the new color cycles + recolor safely
         for _layer, store in managed:
@@ -877,10 +890,18 @@ class KeypointControls(QWidget):
     def display_shortcuts(self):
         Shortcuts(self.viewer.window._qt_window.current(), viewer=self.viewer).show()
 
-    def _move_image_layer_to_bottom(self, index):
-        if (ind := index) != 0:
-            self.viewer.layers.move_selected(ind, 0)
-            self.viewer.layers.select_next()  # Auto-select the Points layer
+    def _move_image_layer_to_bottom(self, layer: Image):
+        try:
+            if layer not in self.viewer.layers:
+                return
+            ind = list(self.viewer.layers).index(layer)
+            if ind != 0:
+                self.viewer.layers.selection.clear()
+                self.viewer.layers.selection.add(layer)
+                self.viewer.layers.move_selected(ind, 0)
+                self.viewer.layers.select_next()
+        except Exception:
+            logger.debug("Failed to move image layer to bottom", exc_info=True)
 
     # ------------------------------------------------------------------
     # Metadata helpers (authoritative models + napari-friendly dict sync)
@@ -916,7 +937,7 @@ class KeypointControls(QWidget):
         if layer is None:
             return None
 
-        image_layer = find_relevant_image_layer(self.viewer)
+        image_layer = self.layer_manager.active_dlc_image_layer()
 
         return resolve_config_path_from_layer(
             layer,
@@ -1053,7 +1074,7 @@ class KeypointControls(QWidget):
     def _refresh_layer_status_panel(self) -> None:
         active_layer = self.viewer.layers.selection.active
         active_dlc_points = self._current_dlc_points_layer()
-        active_image = find_relevant_image_layer(self.viewer)
+        active_image = self.layer_manager.active_dlc_image_layer()
 
         folder_name = infer_folder_display_name(
             active_image if active_image is not None else active_layer,
