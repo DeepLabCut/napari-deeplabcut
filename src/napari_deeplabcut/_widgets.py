@@ -510,7 +510,9 @@ class KeypointControls(QWidget):
     # Layer setup core methods #
     # ######################## #
 
-    @deprecated("This should be moved to LayerLifecycleManager. It is currently used there but should be moved.")
+    @deprecated(
+        details="This should be moved to LayerLifecycleManager. It is currently used there but should be moved."
+    )
     def _setup_image_layer(self, layer: Image, index: int | None = None, *, reorder: bool = True) -> None:
         md = layer.metadata or {}
         paths = md.get("paths")
@@ -638,7 +640,7 @@ class KeypointControls(QWidget):
     def get_layer_store(layer: Points) -> keypoints.KeypointStore | None:
         return getattr(layer, "_dlc_store", None)
 
-    @deprecated("This should be moved to LayerLifecycleManager.")
+    @deprecated(details="This should be moved to LayerLifecycleManager.")
     def _wire_points_layer(self, layer: Points) -> keypoints.KeypointStore | None:
         if not self._validate_header(layer):
             return None
@@ -733,7 +735,7 @@ class KeypointControls(QWidget):
         return store
 
     @deprecated(
-        "This is still used in LayerLifecycleManager.on_insert(), "
+        details="This is still used in LayerLifecycleManager.on_insert(), "
         "but should be instead moved to the LayerLifecycleManager itself instead."
     )
     def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
@@ -766,7 +768,7 @@ class KeypointControls(QWidget):
         )
 
     @deprecated(
-        "This method is no longer used. Layer adoption is now handled by LayerLifecycleManager.",
+        details="This method is no longer used. Layer adoption is now handled by LayerLifecycleManager.",
         replacement="self.layer_manager.schedule_initial_adoption()",
     )
     def _adopt_existing_layers(self) -> None:
@@ -796,7 +798,7 @@ class KeypointControls(QWidget):
         self._refresh_trajectory_plot_from_layers()
 
     @deprecated(
-        "This method is no longer used. Layer adoption is now handled by LayerLifecycleManager.",
+        details="This method is no longer used. Layer adoption is now handled by LayerLifecycleManager.",
         replacement="LayerLifecycleManager.on_insert()",
     )
     def _adopt_layer(self, layer, index: int) -> None:
@@ -1630,7 +1632,7 @@ class KeypointControls(QWidget):
             return
 
     @deprecated(
-        replacement="self.layer_manager", reason="Direct layer management is now handled by LayerLifecycleManager"
+        replacement="self.layer_manager", details="Direct layer management is now handled by LayerLifecycleManager"
     )
     def on_insert(self, event):
         logger.debug("on_insert event received: event=%r", event)
