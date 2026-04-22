@@ -63,6 +63,9 @@ class LayerLifecycleManager(QObject):
     layer_insert_processed = Signal(object)
     layer_remove_processed = Signal(object)
 
+    # Session management
+    session_conflict_rejected = Signal(str)  # if a new DLC folder is loaded on top of the current one
+
     def __init__(self, owner: Any) -> None:
         if isinstance(owner, QObject):
             super().__init__(parent=owner)
@@ -221,16 +224,36 @@ class LayerLifecycleManager(QObject):
             return True, None
         return (
             False,
-            "A DLC project/video is already open. Clear the viewer layers first before opening another project.",
+            "A DLC project/video is already open.\n"
+            "The plugin will attempt to load annotations from the new project, "
+            "but will not load the video.\n\n"
+            "If you meant to load extra annotations for the current video, "
+            "please only load the corresponding h5 files.\n"
+            "If you meant to switch to a different project/video, "
+            "please save and clear the current layers before loading the new labeled data folder.",
         )
 
     def _reject_conflicting_dlc_image_layer(self, layer: Image, reason: str) -> None:
+        """Reject a conflicting DLC session image safely.
+
+        Do not remove synchronously inside the insert callback:
+        napari may still be finalizing list insertion / selection.
+        """
         self.viewer.status = reason
-        try:
-            if layer in self.viewer.layers:
-                self.viewer.layers.remove(layer)
-        except Exception:
-            logger.debug("Failed to remove conflicting DLC image layer", exc_info=True)
+        self.session_conflict_rejected.emit(reason)
+
+        def _remove_later(ly=layer):
+            try:
+                if ly in self.viewer.layers:
+                    self.viewer.layers.remove(ly)
+            except Exception:
+                logger.debug(
+                    "Failed to remove conflicting DLC image layer %r",
+                    getattr(ly, "name", ly),
+                    exc_info=True,
+                )
+
+        QTimer.singleShot(0, _remove_later)
 
     # ------------------------------------------------------------------ #
     # Layer setup managers                                               #

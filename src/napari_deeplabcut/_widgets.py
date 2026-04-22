@@ -179,8 +179,13 @@ class KeypointControls(QWidget):
 
         self.viewer = napari_viewer
 
+        # Layer lifecycle manager
         self.layer_manager = LayerLifecycleManager(owner=self)
         self.layer_manager.attach()
+        ## Hook up signals for layer lifecycle events as needed, e.g.:
+        self.layer_manager.session_conflict_rejected.connect(
+            self._on_session_conflict_detected,
+        )
         # self.viewer.layers.events.inserted.connect(self.on_insert)
         # self.viewer.layers.events.removed.connect(self.on_remove)
 
@@ -487,6 +492,14 @@ class KeypointControls(QWidget):
                 return True
 
         return False
+
+    def _on_session_conflict_detected(self, reason: str) -> None:
+        QMessageBox.warning(
+            self,
+            "A labeled data folder is already loaded!",
+            f"{reason}\n\n",
+            QMessageBox.Ok,
+        )
 
     def _show_debug_window(self) -> None:
         try:
