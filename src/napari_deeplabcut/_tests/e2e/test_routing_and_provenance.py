@@ -89,7 +89,7 @@ def test_save_routes_to_correct_gt_when_multiple_gt_exist(
     points_b = next((ly for ly in viewer.layers if isinstance(ly, Points) and ly.name == gt_b.stem), None)
     assert points_b is not None, f"Expected a Points layer named {gt_b.stem}"
 
-    store_b = keypoint_controls._stores.get(points_b)
+    store_b = keypoint_controls.get_layer_store(points_b)
     assert store_b is not None
 
     # Fill NaNs for bodypart2 in B only (no overwrite dialog)
@@ -136,7 +136,7 @@ def test_machine_layer_does_not_modify_gt_on_save(viewer, keypoint_controls, qtb
     machine_layer = next((ly for ly in viewer.layers if isinstance(ly, Points) and ly.name == machine_path.stem), None)
     assert machine_layer is not None
 
-    store = keypoint_controls._stores.get(machine_layer)
+    store = keypoint_controls.get_layer_store(machine_layer)
     assert store is not None
 
     # Fill NaNs in machine file (no overwrite prompt)
@@ -177,7 +177,7 @@ def test_layer_rename_does_not_change_save_target(viewer, keypoint_controls, qtb
 
     layer = next((ly for ly in viewer.layers if isinstance(ly, Points) and ly.name == gt_a.stem), None)
     assert layer is not None
-    store = keypoint_controls._stores.get(layer)
+    store = keypoint_controls.get_layer_store(layer)
     assert store is not None
 
     # Rename in UI
@@ -230,7 +230,7 @@ def test_ambiguous_placeholder_save_aborts_when_multiple_gt_exist(
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
     qtbot.wait(200)
 
-    store = keypoint_controls._stores.get(placeholder)
+    store = keypoint_controls.get_layer_store(placeholder)
     assert store is not None
 
     # Add a point to placeholder
@@ -311,7 +311,7 @@ def test_config_first_save_writes_gt_into_dataset_folder(viewer, keypoint_contro
     assert pts_layers, "Expected a Points layer from config.yaml"
 
     points = pts_layers[0]
-    store = keypoint_controls._stores.get(points)
+    store = keypoint_controls.get_layer_store(points)
     assert store is not None
 
     # Add a point and save
@@ -357,7 +357,7 @@ def test_promotion_first_save_skip_config_then_prompt_scorer_and_create_sidecar(
     machine_layer = next(p for p in pts_layers if p.name == "machinelabels-iter0")
 
     # Edit: add bodypart2 (use helper that works across versions)
-    store = keypoint_controls._stores.get(machine_layer)
+    store = keypoint_controls.get_layer_store(machine_layer)
     assert store is not None
     _set_or_add_bodypart_xy(machine_layer, store, "bodypart2", x=44.0, y=33.0)
 
@@ -429,7 +429,7 @@ def test_promotion_second_save_skip_config_then_use_sidecar_without_scorer_promp
     pts_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
     machine_layer = next(p for p in pts_layers if p.name == "machinelabels-iter0")
 
-    store = controls._stores.get(machine_layer)
+    store = controls.get_layer_store(machine_layer)
     assert store is not None
     _set_or_add_bodypart_xy(machine_layer, store, "bodypart1", x=99.0, y=88.0)
 
@@ -506,7 +506,7 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
 
     points = next(ly for ly in viewer.layers if isinstance(ly, Points))
-    store = keypoint_controls._stores.get(points)
+    store = keypoint_controls.get_layer_store(points)
     assert store is not None
 
     # Simulate project-less folder metadata:
@@ -636,7 +636,7 @@ def test_projectless_folder_save_refuses_when_target_dataset_folder_already_cont
     qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
 
     points = next(ly for ly in viewer.layers if isinstance(ly, Points))
-    store = keypoint_controls._stores.get(points)
+    store = keypoint_controls.get_layer_store(points)
     assert store is not None
 
     points.metadata = dict(points.metadata or {})
@@ -728,7 +728,7 @@ def test_promotion_nearby_config_wins_no_dialog_no_prompt(
     pts_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
     machine_layer = next(p for p in pts_layers if p.name == machine_path.stem)
 
-    store = keypoint_controls._stores.get(machine_layer)
+    store = keypoint_controls.get_layer_store(machine_layer)
     assert store is not None
     _set_or_add_bodypart_xy(machine_layer, store, "bodypart2", x=54.0, y=43.0)
 
@@ -811,7 +811,7 @@ def test_promotion_selected_external_config_wins_no_scorer_prompt(
     pts_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
     machine_layer = next(p for p in pts_layers if p.name == "machinelabels-iter0")
 
-    store = keypoint_controls._stores.get(machine_layer)
+    store = keypoint_controls.get_layer_store(machine_layer)
     assert store is not None
     _set_or_add_bodypart_xy(machine_layer, store, "bodypart1", x=91.0, y=82.0)
 
