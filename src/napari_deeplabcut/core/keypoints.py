@@ -179,6 +179,8 @@ class KeypointStore:
 
     @layer.setter
     def layer(self, layer: Points):
+        same_layer = self._layer_id == id(layer)
+
         self._layer_id = id(layer)
 
         try:
@@ -188,6 +190,15 @@ class KeypointStore:
             # Fallback if a given object cannot be weak-referenced.
             self._layer_ref = None
             self._strong_layer_ref = layer
+
+        # Avoid repeated validated metadata reads when rebinding the same live layer.
+        if same_layer:
+            logger.debug(
+                "Skipping KeypointStore header refresh for same layer_id=%r name=%r",
+                self._layer_id,
+                getattr(layer, "name", layer),
+            )
+            return
 
         self._refresh_header_from_layer(layer)
 

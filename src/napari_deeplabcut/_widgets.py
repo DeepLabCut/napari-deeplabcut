@@ -778,9 +778,11 @@ class KeypointControls(QWidget):
         if remaining_points_layers == 0:
             while self._menus:
                 menu = self._menus.pop()
-                self._layout.removeWidget(menu)
+                try:
+                    self._layout.removeWidget(menu)
+                except Exception:
+                    pass
                 menu.deleteLater()
-                menu.destroy()
 
             self._layer_to_menu = {}
             self._set_points_controls_enabled(False)

@@ -81,9 +81,15 @@ class LayerLifecycleManager(QObject):
         self._image_meta = ImageMetadata()
         self._project_path: str | None = None
 
+        # Layers management
+        ## Layer insertion
         self._initial_adopt_timer = QTimer(self)
         self._initial_adopt_timer.setSingleShot(True)
         self._initial_adopt_timer.timeout.connect(self.adopt_existing_layers)
+        ## Layer removal
+        self._post_remove_refresh_timer = QTimer(self)
+        self._post_remove_refresh_timer.setSingleShot(True)
+        self._post_remove_refresh_timer.timeout.connect(self._flush_post_remove_refresh)
 
         self._attached = False
 
@@ -268,8 +274,14 @@ class LayerLifecycleManager(QObject):
         except Exception:
             return None
 
-    def _update_image_meta_from_layer(self, layer: Image) -> None:
-        """Update lifecycle-owned image metadata from an Image layer."""
+    def _update_image_meta_from_layer(self, layer: Image) -> bool:
+        """Update lifecycle-owned image metadata from an Image layer.
+
+        Returns
+        -------
+        bool
+            True if the authoritative image context changed, else False.
+        """
         md = layer.metadata or {}
 
         paths = md.get("paths")
@@ -297,7 +309,9 @@ class LayerLifecycleManager(QObject):
             if getattr(merged, field) in (None, "", []) and value not in (None, "", []):
                 setattr(merged, field, value)
 
+        changed = merged != self._image_meta
         self._image_meta = merged
+        return changed
 
     def _sync_points_layers_from_image_meta(self) -> None:
         """Sync managed/all points metadata from lifecycle-owned image context."""
@@ -368,7 +382,7 @@ class LayerLifecycleManager(QObject):
                 pass
 
         self._active_dlc_image_layer_id = id(layer)
-        self._update_image_meta_from_layer(layer)
+        context_changed = self._update_image_meta_from_layer(layer)
 
         if not self._project_path:
             self._cache_project_path_from_image_layer(layer)
@@ -383,16 +397,19 @@ class LayerLifecycleManager(QObject):
                         exc_info=True,
                     )
 
-        self._sync_points_layers_from_image_meta()
+        if context_changed:
+            self._sync_points_layers_from_image_meta()
+
         self.owner._refresh_video_panel_context()
 
         logger.debug(
-            "Setup image layer=%r index=%s reorder=%s paths_count=%s root=%r",
+            "Setup image layer=%r index=%s reorder=%s paths_count=%s root=%r context_changed=%s",
             getattr(layer, "name", layer),
             index,
             reorder,
             len(md.get("paths") or []),
             md.get("root"),
+            context_changed,
         )
 
         if reorder and index is not None:
@@ -544,6 +561,21 @@ class LayerLifecycleManager(QObject):
             sorted((layer.metadata or {}).keys()),
         )
 
+    def _schedule_post_remove_refresh(self) -> None:
+        """Coalesce repeated UI refreshes during layer removal bursts."""
+        self._post_remove_refresh_timer.start(0)
+
+    def _flush_post_remove_refresh(self) -> None:
+        try:
+            self.owner._refresh_video_panel_context()
+        except Exception:
+            logger.debug("Failed to refresh video panel context after removal", exc_info=True)
+
+        try:
+            self.owner._refresh_layer_status_panel()
+        except Exception:
+            logger.debug("Failed to refresh layer status panel after removal", exc_info=True)
+
     def _handle_removed_layer(self, layer: Any) -> None:
         """Lifecycle-owned remove handling.
 
@@ -578,8 +610,7 @@ class LayerLifecycleManager(QObject):
                 with QSignalBlocker(self.owner._trail_cb):
                     self.owner._trail_cb.setChecked(False)
 
-        self.owner._refresh_video_panel_context()
-        self.owner._refresh_layer_status_panel()
+        self._schedule_post_remove_refresh()
 
     def _remap_frame_indices(self, layer: Any) -> None:
         """Lifecycle-owned remap of non-Image layer time/frame indices."""
@@ -789,14 +820,21 @@ class LayerLifecycleManager(QObject):
             getattr(event, "index", None),
         )
 
+        should_remap = False
+
         if isinstance(layer, Image):
-            self._maybe_accept_and_setup_image_layer(layer, getattr(event, "index", None))
+            should_remap = self._maybe_accept_and_setup_image_layer(
+                layer,
+                getattr(event, "index", None),
+            )
         elif isinstance(layer, Points):
             self._setup_points_layer(layer, allow_merge=True)
+            should_remap = True
 
-        for layer_ in self.viewer.layers:
-            if not isinstance(layer_, Image):
-                self._remap_frame_indices(layer_)
+        if should_remap:
+            for layer_ in self.viewer.layers:
+                if not isinstance(layer_, Image):
+                    self._remap_frame_indices(layer_)
 
         self.owner._refresh_video_panel_context()
         self.owner._refresh_layer_status_panel()
