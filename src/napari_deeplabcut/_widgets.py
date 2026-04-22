@@ -780,9 +780,8 @@ class KeypointControls(QWidget):
         self._set_points_controls_enabled(True)
         self._update_color_scheme()
         logger.debug(
-            "Setup points layer=%r allow_merge=%s metadata_keys=%s",
+            "Setup points layer=%r metadata_keys=%s",
             getattr(layer, "name", layer),
-            allow_merge,
             sorted((layer.metadata or {}).keys()),
         )
 

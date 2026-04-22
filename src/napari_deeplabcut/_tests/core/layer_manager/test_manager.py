@@ -413,6 +413,10 @@ def test_manager_on_remove_triggers_ui_cleanup_and_refresh(qtbot):
         pts,
         remaining_points_layers=1,
     )
+
+    # Let the deferred QTimer(0) refresh run
+    qtbot.wait(1)
+
     owner._refresh_video_panel_context.assert_called()
     owner._refresh_layer_status_panel.assert_called()
 
