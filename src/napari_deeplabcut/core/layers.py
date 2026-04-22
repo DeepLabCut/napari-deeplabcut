@@ -555,7 +555,7 @@ def infer_folder_display_name(
     return "—"
 
 
-@deprecated(reason="Use LayerLifecycleManager.active_dlc_image_layer instead")
+@deprecated(details="Use LayerLifecycleManager.active_dlc_image_layer instead")
 def find_relevant_image_layer(viewer) -> Image | None:
     active = viewer.layers.selection.active
     if isinstance(active, Image):

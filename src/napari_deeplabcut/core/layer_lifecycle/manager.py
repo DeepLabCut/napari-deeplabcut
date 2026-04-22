@@ -206,8 +206,12 @@ class LayerLifecycleManager(QObject):
     def active_dlc_image_layer(self) -> Image | None:
         if self._active_dlc_image_layer_id is None:
             return None
-        layer = self.resolve_live_layer(self._active_dlc_image_layer_id)
-        return layer if isinstance(layer, Image) else None
+
+        for layer in self.viewer.layers:
+            if id(layer) == self._active_dlc_image_layer_id and isinstance(layer, Image):
+                return layer
+
+        return None
 
     def can_accept_dlc_session_image(self, layer: Image) -> tuple[bool, str | None]:
         active = self.active_dlc_image_layer()
@@ -494,8 +498,14 @@ class LayerLifecycleManager(QObject):
             return
 
         # Transitional: merge policy still lives in the widget for now.
-        if allow_merge and self.owner._maybe_merge_config_points_layer(layer):
-            return
+        if allow_merge:
+            consumed = self.owner._maybe_merge_config_points_layer(layer)
+            if consumed:
+                logger.debug(
+                    "Consumed temporary config placeholder layer=%r during merge path",
+                    getattr(layer, "name", layer),
+                )
+                return
 
         store = self._wire_points_layer(layer)
         if store is None:

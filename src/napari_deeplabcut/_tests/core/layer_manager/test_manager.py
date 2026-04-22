@@ -12,6 +12,21 @@ from napari_deeplabcut.core.layer_lifecycle.manager import LayerLifecycleManager
 from napari_deeplabcut.core.layer_lifecycle.registry import PointsRuntimeResources
 
 
+def mark_as_dlc_session_image(layer, *, role="image"):
+    layer.metadata = dict(layer.metadata or {})
+    layer.metadata["dlc"] = {
+        "session_role": role,
+        "project_context": {
+            "root_anchor": "C:/project/labeled-data/test",
+            "project_root": "C:/project",
+            "config_path": "C:/project/config.yaml",
+            "dataset_folder": "C:/project/labeled-data/test",
+        },
+        "session_key": "C:/project",
+    }
+    return layer
+
+
 # ---------------------------------------------------------------------------
 # Minimal fake viewer/layer event infrastructure
 # ---------------------------------------------------------------------------
@@ -326,7 +341,7 @@ def test_manager_on_insert_points_sets_up_points_and_refreshes_ui(
 
 
 def test_manager_on_insert_image_updates_context_and_refreshes_ui(qtbot):
-    img = make_image("inserted-image")
+    img = mark_as_dlc_session_image(make_image("inserted-image"))
     pts = make_points()
 
     viewer = DummyViewer([img, pts])
@@ -340,11 +355,15 @@ def test_manager_on_insert_image_updates_context_and_refreshes_ui(qtbot):
 
     manager.on_insert(event)
 
-    owner._update_image_meta_from_layer.assert_called_once_with(img)
-    owner._sync_points_layers_from_image_meta.assert_called_once()
+    assert manager.active_dlc_image_layer() is img
+    assert manager.image_meta.name == "inserted-image"
     owner._refresh_video_panel_context.assert_called()
     owner._refresh_layer_status_panel.assert_called()
-    owner._move_image_layer_to_bottom.assert_called_once_with(0)
+    owner._move_image_layer_to_bottom.assert_called_once_with(img)
+    assert pts in remap_calls
+
+    owner._refresh_video_panel_context.assert_called()
+    owner._refresh_layer_status_panel.assert_called()
 
     assert pts in remap_calls
 
@@ -354,7 +373,7 @@ def test_manager_adopt_existing_layers_skips_already_managed_points(
     fake_store,
     fake_runtime_attachment,
 ):
-    img = make_image()
+    img = mark_as_dlc_session_image(make_image())
     pts_managed = make_points("managed")
     pts_unmanaged = make_points("unmanaged")
 
@@ -369,11 +388,11 @@ def test_manager_adopt_existing_layers_skips_already_managed_points(
 
     manager.adopt_existing_layers()
 
-    owner._update_image_meta_from_layer.assert_called_once_with(img)
-
-    # Only the unmanaged points layer should go through UI completion.
+    assert manager.active_dlc_image_layer() is img
+    assert manager.image_meta.name == img.name
+    owner._move_image_layer_to_bottom.assert_called_once_with(img)
     owner._complete_points_layer_ui_setup.assert_called_once()
-    ui_args, ui_kwargs = owner._complete_points_layer_ui_setup.call_args
+    ui_args, _ui_kwargs = owner._complete_points_layer_ui_setup.call_args
     assert ui_args[0] is pts_unmanaged
 
     assert pts_managed in remap_calls

@@ -523,29 +523,86 @@ class KeypointControls(QWidget):
     def _setup_image_layer(self, layer: Image, index: int | None = None, *, reorder: bool = True) -> None:
         self.layer_manager._setup_image_layer(layer, index=index, reorder=reorder)
 
+    def _is_config_placeholder_points_layer(self, layer: Points) -> bool:
+        """Return True if this looks like the temporary config placeholder layer.
+
+        Conservative rule:
+        - must be a Points layer
+        - must carry a project hint
+        - must not already be tied to image/root/paths context
+        - must not contain actual point data
+        """
+        if layer is None or not isinstance(layer, Points):
+            return False
+
+        md = layer.metadata or {}
+        if not md.get("project"):
+            return False
+
+        # Real labeled/prediction layers usually carry image/root/paths context.
+        if md.get("root") or md.get("paths"):
+            return False
+
+        try:
+            data = np.asarray(layer.data) if layer.data is not None else np.empty((0, 3))
+        except Exception:
+            data = np.empty((0, 3))
+
+        return data.size == 0
+
     def _maybe_merge_config_points_layer(self, layer: Points) -> bool:
+        """Merge a temporary config placeholder layer into existing managed layers.
+
+        Semantics
+        ---------
+        - Only consumes true config placeholder layers.
+        - The placeholder layer is temporary and is removed after merge.
+        - Existing managed points layers remain authoritative.
+        - If new keypoints are introduced, the user may optionally hide the
+          currently visible managed layer to focus on the new keypoints.
+        """
+        if not self._is_config_placeholder_points_layer(layer):
+            return False
+
+        managed = list(self.layer_manager.iter_managed_points())
+        if not managed:
+            return False
+
         md = layer.metadata or {}
         logger.debug(
-            "Maybe merge config points layer=%r project=%r stores=%d",
+            "Maybe merge config placeholder layer=%r project=%r managed_layers=%d",
             getattr(layer, "name", layer),
             md.get("project"),
-            self.layer_manager.managed_points_count(),
+            len(managed),
         )
-        managed = list(self.layer_manager.iter_managed_points())
-        if not md.get("project", "") or not managed:
-            return False
 
         new_metadata = md.copy()
-
-        keypoints_menu = self._menus[0].menus["label"]
-        current_keypoint_set = {keypoints_menu.itemText(i) for i in range(keypoints_menu.count())}
-        hdr = self._get_header_model_from_metadata(new_metadata)
-        if hdr is None:
+        new_header = self._get_header_model_from_metadata(new_metadata)
+        if new_header is None:
+            logger.debug(
+                "Skipping config placeholder merge for layer=%r: missing/invalid header",
+                getattr(layer, "name", layer),
+            )
             return False
-        new_keypoint_set = set(hdr.bodyparts)
+
+        # Use an actual managed layer as the reference source of truth,
+        # not the first dropdown menu.
+        reference_layer, _reference_store = managed[0]
+        reference_header = self._get_header_model_from_metadata(reference_layer.metadata or {})
+        if reference_header is None:
+            logger.debug(
+                "Skipping config placeholder merge for layer=%r: reference managed layer has no valid header",
+                getattr(layer, "name", layer),
+            )
+            return False
+
+        current_keypoint_set = set(reference_header.bodyparts)
+        new_keypoint_set = set(new_header.bodyparts)
         diff = new_keypoint_set.difference(current_keypoint_set)
 
-        placeholder_layer = layer  # newly inserted temporary config layer
+        placeholder_layer = layer
+
+        # Identify the currently visible existing managed layer that we may hide.
         visible_existing_layer = None
         for managed_layer, _store in managed:
             if managed_layer is placeholder_layer:
@@ -559,40 +616,70 @@ class KeypointControls(QWidget):
                 break
 
         if diff:
-            answer = QMessageBox.question(self, "", "Do you want to display the new keypoints only?")
+            answer = QMessageBox.question(
+                self,
+                "",
+                "Do you want to display the new keypoints only?",
+            )
             if answer == QMessageBox.Yes and visible_existing_layer is not None:
                 self.layer_manager._set_layer_visible(visible_existing_layer, False)
                 logger.debug(
-                    "Merging config points layer=%r new_keypoints=%s hid_existing_layer=%r",
+                    "Config placeholder merge layer=%r new_keypoints=%s hid_existing_layer=%r",
                     getattr(layer, "name", layer),
                     sorted(diff),
                     getattr(visible_existing_layer, "name", visible_existing_layer),
                 )
 
-            self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
-            for _layer, store in managed:
-                pts = read_points_meta(_layer, migrate_legacy=True, drop_controls=True, drop_header=False)
-                if not hasattr(pts, "errors"):
-                    updated = pts.model_copy(update={"header": hdr})
-                    write_points_meta(_layer, updated, merge_policy=MergePolicy.MERGE, fields={"header"})
-                store.layer = _layer
+            self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(sorted(diff))} found."
 
-            for menu in self._menus:
+        # Merge header into all managed layers.
+        for managed_layer, store in managed:
+            pts = read_points_meta(
+                managed_layer,
+                migrate_legacy=True,
+                drop_controls=True,
+                drop_header=False,
+            )
+            if not hasattr(pts, "errors"):
+                updated = pts.model_copy(update={"header": new_header})
+                write_points_meta(
+                    managed_layer,
+                    updated,
+                    merge_policy=MergePolicy.MERGE,
+                    fields={"header"},
+                )
+            store.layer = managed_layer
+
+        # Refresh dropdown menus after header/bodypart changes.
+        for menu in self._menus:
+            try:
                 menu._map_individuals_to_bodyparts()
                 menu._update_items()
+            except Exception:
+                logger.debug("Failed to refresh dropdown menu after config merge", exc_info=True)
 
-        QTimer.singleShot(0, lambda: self.layer_manager._remove_layer_if_present(placeholder_layer))
-
-        # apply the new color cycles + recolor safely
-        for _layer, store in managed:
-            _layer.metadata["config_colormap"] = new_metadata.get(
-                "config_colormap", _layer.metadata.get("config_colormap")
+        # Apply updated presentation metadata to existing managed layers.
+        for managed_layer, store in managed:
+            managed_layer.metadata["config_colormap"] = new_metadata.get(
+                "config_colormap",
+                managed_layer.metadata.get("config_colormap"),
             )
-            _layer.metadata["face_color_cycles"] = new_metadata["face_color_cycles"]
-            _layer.metadata["colormap_name"] = new_metadata.get("colormap_name", _layer.metadata.get("colormap_name"))
-            mark_layer_presentation_changed(_layer)
-            self._apply_points_coloring_from_metadata(_layer)
-            store.layer = _layer
+            if "face_color_cycles" in new_metadata:
+                managed_layer.metadata["face_color_cycles"] = new_metadata["face_color_cycles"]
+            managed_layer.metadata["colormap_name"] = new_metadata.get(
+                "colormap_name",
+                managed_layer.metadata.get("colormap_name"),
+            )
+
+            mark_layer_presentation_changed(managed_layer)
+            self._apply_points_coloring_from_metadata(managed_layer)
+            store.layer = managed_layer
+
+        # Remove the temporary placeholder layer explicitly by identity.
+        QTimer.singleShot(
+            0,
+            lambda ly=placeholder_layer: self.layer_manager._remove_layer_if_present(ly),
+        )
 
         self._update_color_scheme()
         return True
