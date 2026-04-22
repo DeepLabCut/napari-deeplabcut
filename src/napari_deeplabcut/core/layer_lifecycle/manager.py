@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Any
 from napari.layers import Image, Layer, Points
 from qtpy.QtCore import QObject, QTimer, Signal
 
-from .registry import ManagedPointsRuntime, RuntimeRegistry
+from .registry import (
+    ClearedRegistryEntry,
+    ManagedPointsRuntime,
+    RegistryAuditReport,
+    RuntimeRegistry,
+)
 
 if TYPE_CHECKING:
     from ..keypoints import KeypointStore
@@ -19,14 +24,14 @@ class LayerLifecycleManager(QObject):
     """Lifecycle wrapper around existing widget behavior.
 
     Goals
-    ----------------
-    - put a clear boundary in place
+    -----
     - centralize viewer layer event entry points
-    - keep current behavior by delegating back into small widget-owned hooks
     - own the runtime registry for managed Points layers
+    - centralize layer liveness / store resolution
+    - keep current behavior by delegating back into widget-owned hooks
 
     Non-goals (for now)
-    --------------------
+    -------------------
     - full reconciliation engine
     - moving all logic out of the widget
     - changing merge/remap policies
@@ -41,6 +46,7 @@ class LayerLifecycleManager(QObject):
             super().__init__(parent=owner)
         else:
             super().__init__()
+
         self.owner = owner
         self.viewer = owner.viewer
         self.registry: RuntimeRegistry[Any] = RuntimeRegistry()
@@ -51,9 +57,28 @@ class LayerLifecycleManager(QObject):
 
         self._attached = False
 
+    # ------------------------------------------------------------------ #
+    # Centralized access API                                             #
+    # ------------------------------------------------------------------ #
+
+    def resolve_live_layer(self, layer_or_id: Any) -> Layer | None:
+        layer = self.registry.resolve_live_layer(layer_or_id)
+        return layer if isinstance(layer, Layer) else None
+
+    def get_live_runtime(self, layer_or_id: Any) -> ManagedPointsRuntime[Any] | None:
+        return self.registry.get_live_runtime(layer_or_id)
+
+    def get_store(self, layer_or_id: Any) -> KeypointStore | None:
+        store = self.registry.get_store(layer_or_id)
+        return store  # typed via TYPE_CHECKING
+
+    def require_store(self, layer_or_id: Any) -> KeypointStore:
+        store = self.registry.require_store(layer_or_id)
+        return store  # typed via TYPE_CHECKING
+
     def iter_managed_points(self) -> Iterator[tuple[Points, KeypointStore]]:
-        """Iterate (layer, store) pairs of currently managed points layers."""
-        for layer, runtime in self.registry.items():
+        """Iterate only live managed Points layers and their stores."""
+        for layer, runtime in self.registry.iter_live_items():
             if isinstance(layer, Points):
                 yield layer, runtime.store
 
@@ -61,17 +86,19 @@ class LayerLifecycleManager(QObject):
         return tuple(layer for layer, _ in self.iter_managed_points())
 
     def managed_points_count(self) -> int:
-        """Number of currently managed layers."""
-        # registry len() could later have non-Points entries,
-        # so this is safer
-        return sum(1 for layer, _ in self.iter_managed_points())
+        return sum(1 for _ in self.iter_managed_points())
 
     def has_managed_points(self) -> bool:
-        """Whether there are any currently managed layers."""
-        return self.managed_points_count() > 0
+        return any(True for _ in self.iter_managed_points())
+
+    def clear_dead_entries(self, *, log: bool = True) -> tuple[ClearedRegistryEntry[Any], ...]:
+        return self.registry.clear_dead_entries(log=log)
+
+    def audit_registry(self) -> RegistryAuditReport:
+        return self.registry.audit()
 
     # ------------------------------------------------------------------ #
-    # lifecycle wiring                                                    #
+    # Lifecycle wiring                                                   #
     # ------------------------------------------------------------------ #
 
     def attach(self) -> None:
@@ -101,45 +128,44 @@ class LayerLifecycleManager(QObject):
         self._attached = False
 
     def schedule_initial_adoption(self) -> None:
-        """Schedule adoption of existing layers after event loop starts."""
+        """Schedule adoption of existing layers after the event loop starts."""
         self._initial_adopt_timer.start(0)
 
     # ------------------------------------------------------------------ #
-    # registry façade                                                    #
+    # Registry facade                                                    #
     # ------------------------------------------------------------------ #
 
     def is_managed(self, layer: Any) -> bool:
-        """Check if a layer is managed here."""
+        """Whether this exact currently live layer is registered."""
         return self.registry.is_managed(layer)
 
     def register_managed_layer(self, layer: Layer, store: KeypointStore, **resources: Any) -> None:
         if isinstance(layer, Points):
             self.register_managed_points_layer(layer, store, **resources)
-        # elif: future managed layer types
         else:
             raise ValueError(f"Unsupported layer type for management: {type(layer).__name__}")
 
     def register_managed_points_layer(self, layer: Points, store: KeypointStore, **resources: Any) -> None:
-        """Register a managed Points layer."""
+        """Register a managed Points layer if not already registered."""
         if self.registry.is_managed(layer):
             return
 
         self.registry.register(
             layer,
             ManagedPointsRuntime(
-                layer=layer,
+                layer_id=id(layer),
                 store=store,
                 resources=dict(resources),
             ),
         )
 
-    def unregister_managed_layer(self, layer: Any) -> Any | None:
-        """Unregister a managed layer."""
-        runtime = self.registry.unregister(layer)
+    def unregister_managed_layer(self, layer_or_id: Any) -> Any | None:
+        """Unregister a managed layer by layer object or layer id."""
+        runtime = self.registry.unregister(layer_or_id)
         return None if runtime is None else runtime.store
 
     # ------------------------------------------------------------------ #
-    # event entry points                                                 #
+    # Event entry points                                                 #
     # ------------------------------------------------------------------ #
 
     def adopt_existing_layers(self) -> None:

@@ -1950,6 +1950,12 @@ class KeypointControls(QWidget):
                 event.ignore()
         else:
             event.accept()
+        cleared = self.layer_manager.clear_dead_entries(log=True)
+        if cleared:
+            logger.debug("Cleared %d dead entries from layer manager on close", cleared)
+        report = self.layer_manager.audit_registry()
+        if report.issues:
+            logger.warning("Layer manager audit on close reported issues:\n%s", report.format_for_logging())
 
     def on_active_layer_change(self, event) -> None:
         """Updates the GUI when the active layer changes
