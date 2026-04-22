@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any
 
-from napari.layers import Image, Points
+from napari.layers import Image, Layer, Points
 from qtpy.QtCore import QObject, QTimer, Signal
 
 from .registry import ManagedPointsRuntime, RuntimeRegistry
+
+if TYPE_CHECKING:
+    from ..keypoints import KeypointStore
 
 logger = logging.getLogger("napari-deeplabcut.lifecycle")
 
@@ -32,10 +36,13 @@ class LayerLifecycleManager(QObject):
     layer_insert_processed = Signal(object)
     layer_remove_processed = Signal(object)
 
-    def __init__(self, viewer: Any, *, owner: Any) -> None:
-        super().__init__(parent=owner)
-        self.viewer = viewer
+    def __init__(self, owner: Any) -> None:
+        if isinstance(owner, QObject):
+            super().__init__(parent=owner)
+        else:
+            super().__init__()
         self.owner = owner
+        self.viewer = owner.viewer
         self.registry: RuntimeRegistry[Any] = RuntimeRegistry()
 
         self._initial_adopt_timer = QTimer(self)
@@ -43,6 +50,25 @@ class LayerLifecycleManager(QObject):
         self._initial_adopt_timer.timeout.connect(self.adopt_existing_layers)
 
         self._attached = False
+
+    def iter_managed_points(self) -> Iterator[tuple[Points, KeypointStore]]:
+        """Iterate (layer, store) pairs of currently managed points layers."""
+        for layer, runtime in self.registry.items():
+            if isinstance(layer, Points):
+                yield layer, runtime.store
+
+    def managed_points_layers(self) -> tuple[Points, ...]:
+        return tuple(layer for layer, _ in self.iter_managed_points())
+
+    def managed_points_count(self) -> int:
+        """Number of currently managed layers."""
+        # registry len() could later have non-Points entries,
+        # so this is safer
+        return sum(1 for layer, _ in self.iter_managed_points())
+
+    def has_managed_points(self) -> bool:
+        """Whether there are any currently managed layers."""
+        return self.managed_points_count() > 0
 
     # ------------------------------------------------------------------ #
     # lifecycle wiring                                                    #
@@ -86,7 +112,14 @@ class LayerLifecycleManager(QObject):
         """Check if a layer is managed here."""
         return self.registry.is_managed(layer)
 
-    def register_managed_points_layer(self, layer: Points, store: Any, **resources: Any) -> None:
+    def register_managed_layer(self, layer: Layer, store: KeypointStore, **resources: Any) -> None:
+        if isinstance(layer, Points):
+            self.register_managed_points_layer(layer, store, **resources)
+        # elif: future managed layer types
+        else:
+            raise ValueError(f"Unsupported layer type for management: {type(layer).__name__}")
+
+    def register_managed_points_layer(self, layer: Points, store: KeypointStore, **resources: Any) -> None:
         """Register a managed Points layer."""
         if self.registry.is_managed(layer):
             return
@@ -104,10 +137,6 @@ class LayerLifecycleManager(QObject):
         """Unregister a managed layer."""
         runtime = self.registry.unregister(layer)
         return None if runtime is None else runtime.store
-
-    def managed_points_layers(self) -> tuple[Points, ...]:
-        """Get all managed Points layers."""
-        return tuple(layer for layer in self.registry.layers() if isinstance(layer, Points))
 
     # ------------------------------------------------------------------ #
     # event entry points                                                 #

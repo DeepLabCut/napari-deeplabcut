@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
+logger = logging.getLogger("napari-deeplabcut.lifecycle.registry")
 StoreT = TypeVar("StoreT")
 
 

@@ -190,7 +190,8 @@ class KeypointControls(QWidget):
 
         self.viewer = napari_viewer
 
-        self.layer_manager = LayerLifecycleManager(self.viewer)
+        self.layer_manager = LayerLifecycleManager(owner=self)
+        self.layer_manager.attach()
         # self.viewer.layers.events.inserted.connect(self.on_insert)
         # self.viewer.layers.events.removed.connect(self.on_remove)
 
@@ -215,7 +216,8 @@ class KeypointControls(QWidget):
         self._label_mode = keypoints.LabelMode.default()
 
         # Hold references to the KeypointStores
-        self._stores = {}
+        # self._stores = {} # DEPRECATED, use self.layer_manager instead
+
         # Intercept close event if data were not saved
         qt_win = self.viewer.window._qt_window
         orig_close_event = qt_win.closeEvent
@@ -280,7 +282,7 @@ class KeypointControls(QWidget):
         self._trail_cb.stateChanged.connect(self._on_show_trails_toggled)
         self._trails_controller = TrailsController(
             self.viewer,
-            managed_points_layers_getter=lambda: tuple(self._stores.keys()),
+            managed_points_layers_getter=self.layer_manager.managed_points_layers,
             color_mode_getter=lambda: self.color_mode,
             resolved_cycle_getter=self._resolved_cycle_for_layer,
         )
@@ -437,7 +439,7 @@ class KeypointControls(QWidget):
     def color_mode(self, mode: str | keypoints.ColorMode):
         self._color_mode = keypoints.ColorMode(mode)
 
-        for layer in list(self._stores.keys()):
+        for layer in list(self.layer_manager.managed_points_layers()):
             if isinstance(layer, Points) and layer.metadata:
                 self._apply_points_coloring_from_metadata(layer)
 
@@ -548,9 +550,10 @@ class KeypointControls(QWidget):
             "Maybe merge config points layer=%r project=%r stores=%d",
             getattr(layer, "name", layer),
             md.get("project"),
-            len(self._stores),
+            self.layer_manager.managed_points_count(),
         )
-        if not md.get("project", "") or not self._stores:
+        managed = list(self.layer_manager.iter_managed_points())
+        if not md.get("project", "") or not managed:
             return False
 
         new_metadata = md.copy()
@@ -574,7 +577,7 @@ class KeypointControls(QWidget):
                 )
 
             self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
-            for _layer, store in self._stores.items():
+            for _layer, store in managed:
                 pts = read_points_meta(_layer, migrate_legacy=True, drop_controls=True, drop_header=False)
                 if not hasattr(pts, "errors"):
                     updated = pts.model_copy(update={"header": hdr})
@@ -588,7 +591,7 @@ class KeypointControls(QWidget):
         QTimer.singleShot(10, self.viewer.layers.pop)
 
         # apply the new color cycles + recolor safely
-        for _layer, store in self._stores.items():
+        for _layer, store in managed:
             _layer.metadata["config_colormap"] = new_metadata.get(
                 "config_colormap", _layer.metadata.get("config_colormap")
             )
@@ -638,7 +641,8 @@ class KeypointControls(QWidget):
             return None
         existing = getattr(layer, "_dlc_store", None)
         if existing is not None:
-            self._stores[layer] = existing
+            # self._stores[layer] = existing
+            self.layer_manager.register_managed_points_layer(layer, existing)
             layer._dlc_controls = self
             return existing
 
@@ -652,7 +656,7 @@ class KeypointControls(QWidget):
             )
 
         store = keypoints.KeypointStore(self.viewer, layer)
-        self._stores[layer] = store
+        # self._stores[layer] = store
         self.layer_manager.register_managed_points_layer(layer, store)
         layer._dlc_store = store
         layer._dlc_controls = self
@@ -683,7 +687,7 @@ class KeypointControls(QWidget):
         # Install keybinds
         install_points_layer_keybindings(layer, self, store)
 
-        if len(self._stores) == 1 and self._is_multianimal(layer):
+        if self.layer_manager.managed_points_count() == 1 and self._is_multianimal(layer):
             # set internal mode without triggering recolor storms
             self._color_mode = keypoints.ColorMode.INDIVIDUAL
             # update button state so UI matches (optional but good)
@@ -794,7 +798,7 @@ class KeypointControls(QWidget):
         if isinstance(layer, Image):
             self._setup_image_layer(layer, index, reorder=True)
         elif isinstance(layer, Points):
-            if layer not in self._stores:
+            if not self.layer_manager.is_managed(layer):
                 self._setup_points_layer(layer, allow_merge=False)  # typically don’t merge during adopt
         if not isinstance(layer, Image):
             self._remap_frame_indices(layer)
@@ -1634,8 +1638,8 @@ class KeypointControls(QWidget):
         n_points_layer = sum(isinstance(l, Points) for l in self.viewer.layers)
 
         if isinstance(layer, Points):
-            self._stores.pop(layer, None)
-            self._lifecycle.unregister_managed_layer(layer)
+            # self._stores.pop(layer, None)
+            self.layer_manager.unregister_managed_layer(layer)
 
             self._update_color_scheme()
             self._trails_controller.on_points_layer_removed(layer)
@@ -1915,7 +1919,7 @@ class KeypointControls(QWidget):
                     if selected:
                         candidate_layers = [ly for ly in selected_layers if isinstance(ly, Points)]
                     else:
-                        candidate_layers = list(self._stores.keys())
+                        candidate_layers = list(self.layer_manager.managed_points_layers())
 
                     for ly in candidate_layers:
                         if ly in self.viewer.layers:
@@ -1933,7 +1937,7 @@ class KeypointControls(QWidget):
         self.last_saved_label.show()
 
     def on_close(self, event):
-        if self._stores and not self._is_saved:
+        if self.layer_manager.has_managed_points() and not self._is_saved:
             choice = QMessageBox.warning(
                 self,
                 "Warning",
