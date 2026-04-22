@@ -223,7 +223,7 @@ class LayerLifecycleManager(QObject):
                 resolve_layer_by_id=self.resolve_live_layer,
                 get_label_mode=lambda: self.owner._label_mode,
                 schedule_recolor=self.owner._schedule_recolor,
-                existing=existing_resources,
+                existing_resources=existing_resources,
             )
 
             runtime = self.get_live_runtime(layer)

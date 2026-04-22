@@ -81,7 +81,7 @@ def test_registry_iter_live_items_layers_runtimes_are_consistent():
     registry.assert_consistent()
 
 
-def test_registry_reap_dead_entries_removes_stale_entry_and_reports_it():
+def test_registry_clear_dead_entries_removes_stale_entry_and_reports_it():
     registry = RuntimeRegistry()
 
     layer = DummyLayer()

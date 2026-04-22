@@ -77,7 +77,7 @@ def test_add_unannotated(store):
 
     # IMPORTANT: pass coord with the CURRENT frame index so we truly add to the frame we're on
     # Data layout is (frame, y, x)
-    keypoints.add(store, coord=(ind_to_remove, 1, 1))
+    store.add((ind_to_remove, 1, 1))
 
     # Exactly one new point should be appended
     assert store.layer.data.shape[0] == n_points + 1
@@ -100,7 +100,7 @@ def test_add_quick(store):
 
     # Add (or move) at the CURRENT frame; coord uses (frame, y, x)
     coord = store.current_step, -1, -1
-    keypoints.add(store, coord=coord)
+    store.add(coord)
 
     # After QUICK add/move, the point for the current frame should match the requested coord
     # (If it existed, it was moved; if not, it was added.)

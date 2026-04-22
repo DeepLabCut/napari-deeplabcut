@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import gc
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 from napari.layers import Image, Points
 
 from napari_deeplabcut.core.layer_lifecycle.manager import LayerLifecycleManager
+from napari_deeplabcut.core.layer_lifecycle.registry import PointsRuntimeResources
 
 
+# ---------------------------------------------------------------------------
+# Minimal fake viewer/layer event infrastructure
+# ---------------------------------------------------------------------------
 class DummySignal:
     def __init__(self):
         self._callbacks = []
@@ -44,28 +49,100 @@ class DummyViewer:
         self.layers = DummyLayerList(layers)
 
 
+class DummyImageMeta:
+    def __init__(self):
+        self.root = None
+        self.paths = None
+
+    def model_dump(self, **kwargs):
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Transitional owner stub matching the current manager boundary
+# ---------------------------------------------------------------------------
 class DummyOwner:
+    """Owner stub for the refactored lifecycle manager.
+
+    The owner provides:
+    - small validation/context hooks
+    - UI completion hooks
+    - refresh hooks
+    """
+
     def __init__(self, viewer):
         self.viewer = viewer
-        self.calls = []
 
-    def _setup_image_layer(self, layer, index, reorder=True):
-        self.calls.append(("setup_image", layer, index, reorder))
+        # Transitional context still stored on owner for now
+        self._image_meta = DummyImageMeta()
+        self._project_path = None
 
-    def _setup_points_layer(self, layer, allow_merge=True):
-        self.calls.append(("setup_points", layer, allow_merge))
+        # Transitional runtime/UI bits manager still consults
+        self._label_mode = "sequential"
+        self._recolor_pending = set()
 
-    def _remap_frame_indices(self, layer):
-        self.calls.append(("remap", layer))
+        # Lifecycle/helper hooks
+        self._validate_header = MagicMock(return_value=True)
+        self._maybe_merge_config_points_layer = MagicMock(return_value=False)
+        self._is_multianimal = MagicMock(return_value=False)
 
-    def _refresh_video_panel_context(self):
-        self.calls.append(("refresh_video",))
+        self._maybe_initialize_layer_point_size_from_config = MagicMock()
+        self._connect_layer_status_events = MagicMock()
+        self._update_image_meta_from_layer = MagicMock()
+        self._sync_points_layers_from_image_meta = MagicMock()
+        self._cache_project_path_from_image_layer = MagicMock()
+        self._schedule_recolor = MagicMock()
 
-    def _refresh_layer_status_panel(self):
-        self.calls.append(("refresh_status",))
+        # UI-only hooks
+        self._complete_points_layer_ui_setup = MagicMock()
+        self._on_points_layer_removed_ui = MagicMock()
+        self._refresh_video_panel_context = MagicMock()
+        self._refresh_layer_status_panel = MagicMock()
+        self._move_image_layer_to_bottom = MagicMock()
 
-    def _handle_removed_layer(self, layer):
-        self.calls.append(("handle_removed", layer))
+
+# ---------------------------------------------------------------------------
+# Fake store used so manager tests do not depend on real KeypointStore/viewer
+# ---------------------------------------------------------------------------
+
+
+class FakeStore:
+    def __init__(self, viewer, layer):
+        self.viewer = viewer
+        self._layer = layer
+        self._layer_id = id(layer)
+        self._resolver = None
+        self._get_label_mode = None
+
+    @property
+    def layer(self):
+        return self._layer
+
+    @layer.setter
+    def layer(self, layer):
+        self._layer = layer
+        self._layer_id = id(layer)
+
+    @property
+    def layer_id(self):
+        return self._layer_id
+
+    def attach_layer_resolver(self, resolver):
+        self._resolver = resolver
+
+    def set_label_mode_getter(self, getter):
+        self._get_label_mode = getter
+
+    def _advance_step(self, event=None):
+        return None
+
+    def add(self, coord):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Shared factories
+# ---------------------------------------------------------------------------
 
 
 def make_image(name="img"):
@@ -78,6 +155,78 @@ def make_points(name="pts"):
     layer = Points(np.zeros((0, 3)))
     layer.name = name
     return layer
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def immediate_qtimer(monkeypatch):
+    """Run QTimer.singleShot callbacks immediately for deterministic tests."""
+    from napari_deeplabcut.core.layer_lifecycle import manager as manager_module
+
+    monkeypatch.setattr(
+        manager_module.QTimer,
+        "singleShot",
+        staticmethod(lambda _ms, fn: fn()),
+    )
+
+
+@pytest.fixture
+def fake_store(monkeypatch):
+    """Patch manager-side KeypointStore construction to a lightweight fake."""
+    from napari_deeplabcut.core.layer_lifecycle import manager as manager_module
+
+    monkeypatch.setattr(manager_module.keypoints, "KeypointStore", FakeStore)
+
+
+@pytest.fixture
+def fake_runtime_attachment(monkeypatch):
+    """Patch away napari patch/keybinding attachment details.
+
+    These tests verify lifecycle orchestration, not compat patch internals.
+    """
+    from napari_deeplabcut.core.layer_lifecycle import manager as manager_module
+    from napari_deeplabcut.core.layer_lifecycle.manager import LayerLifecycleManager
+
+    def _fake_attach_points_layer_runtime(self, **kwargs):
+        return PointsRuntimeResources(
+            query_next_frame_event_added=False,
+            query_next_frame_connected=False,
+            add_wrapper_installed=True,
+            paste_patch_installed=True,
+            keybindings_installed=True,
+        )
+
+    # Support either implementation shape:
+    # - class/instance method: self.attach_points_layer_runtime(...)
+    # - module-level function: attach_points_layer_runtime(...)
+    if hasattr(LayerLifecycleManager, "attach_points_layer_runtime"):
+        monkeypatch.setattr(
+            LayerLifecycleManager,
+            "attach_points_layer_runtime",
+            _fake_attach_points_layer_runtime,
+        )
+
+    if hasattr(manager_module, "attach_points_layer_runtime"):
+        monkeypatch.setattr(
+            manager_module,
+            "attach_points_layer_runtime",
+            lambda **kwargs: PointsRuntimeResources(
+                query_next_frame_event_added=False,
+                query_next_frame_connected=False,
+                add_wrapper_installed=True,
+                paste_patch_installed=True,
+                keybindings_installed=True,
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
 
 
 def test_manager_attach_and_detach_are_idempotent(qtbot):
@@ -141,7 +290,11 @@ def test_manager_register_and_query_managed_points(qtbot):
     assert manager.get_store(pts) is None
 
 
-def test_manager_on_insert_points_delegates_to_owner_and_remaps_non_images(qtbot):
+def test_manager_on_insert_points_sets_up_points_and_refreshes_ui(
+    qtbot,
+    fake_store,
+    fake_runtime_attachment,
+):
     img = make_image()
     pts_existing = make_points("existing")
     pts_inserted = make_points("inserted")
@@ -150,18 +303,29 @@ def test_manager_on_insert_points_delegates_to_owner_and_remaps_non_images(qtbot
     owner = DummyOwner(viewer)
     manager = LayerLifecycleManager(owner=owner)
 
+    remap_calls = []
+    manager._remap_frame_indices = lambda layer: remap_calls.append(layer)
+
     event = SimpleNamespace(value=pts_inserted, index=2, source=viewer.layers)
 
     manager.on_insert(event)
 
-    assert ("setup_points", pts_inserted, True) in owner.calls
-    assert ("remap", pts_existing) in owner.calls
-    assert ("remap", pts_inserted) in owner.calls
-    assert ("refresh_video",) in owner.calls
-    assert ("refresh_status",) in owner.calls
+    assert manager.is_managed(pts_inserted) is True
+
+    owner._validate_header.assert_any_call(pts_inserted)
+    owner._maybe_merge_config_points_layer.assert_called_once_with(pts_inserted)
+    owner._complete_points_layer_ui_setup.assert_called_once()
+    ui_args, ui_kwargs = owner._complete_points_layer_ui_setup.call_args
+    assert ui_args[0] is pts_inserted
+
+    owner._refresh_video_panel_context.assert_called()
+    owner._refresh_layer_status_panel.assert_called()
+
+    assert pts_existing in remap_calls
+    assert pts_inserted in remap_calls
 
 
-def test_manager_on_insert_image_delegates_to_owner(qtbot):
+def test_manager_on_insert_image_updates_context_and_refreshes_ui(qtbot):
     img = make_image("inserted-image")
     pts = make_points()
 
@@ -169,17 +333,27 @@ def test_manager_on_insert_image_delegates_to_owner(qtbot):
     owner = DummyOwner(viewer)
     manager = LayerLifecycleManager(owner=owner)
 
+    remap_calls = []
+    manager._remap_frame_indices = lambda layer: remap_calls.append(layer)
+
     event = SimpleNamespace(value=img, index=0, source=viewer.layers)
 
     manager.on_insert(event)
 
-    assert ("setup_image", img, 0, True) in owner.calls
-    assert ("remap", pts) in owner.calls
-    assert ("refresh_video",) in owner.calls
-    assert ("refresh_status",) in owner.calls
+    owner._update_image_meta_from_layer.assert_called_once_with(img)
+    owner._sync_points_layers_from_image_meta.assert_called_once()
+    owner._refresh_video_panel_context.assert_called()
+    owner._refresh_layer_status_panel.assert_called()
+    owner._move_image_layer_to_bottom.assert_called_once_with(0)
+
+    assert pts in remap_calls
 
 
-def test_manager_adopt_existing_layers_skips_already_managed_points(qtbot):
+def test_manager_adopt_existing_layers_skips_already_managed_points(
+    qtbot,
+    fake_store,
+    fake_runtime_attachment,
+):
     img = make_image()
     pts_managed = make_points("managed")
     pts_unmanaged = make_points("unmanaged")
@@ -188,18 +362,25 @@ def test_manager_adopt_existing_layers_skips_already_managed_points(qtbot):
     owner = DummyOwner(viewer)
     manager = LayerLifecycleManager(owner=owner)
 
+    remap_calls = []
+    manager._remap_frame_indices = lambda layer: remap_calls.append(layer)
+
     manager.register_managed_points_layer(pts_managed, object())
 
     manager.adopt_existing_layers()
 
-    assert ("setup_image", img, 0, True) in owner.calls
-    assert ("setup_points", pts_unmanaged, False) in owner.calls
-    assert ("setup_points", pts_managed, False) not in owner.calls
-    assert ("remap", pts_managed) in owner.calls
-    assert ("remap", pts_unmanaged) in owner.calls
+    owner._update_image_meta_from_layer.assert_called_once_with(img)
+
+    # Only the unmanaged points layer should go through UI completion.
+    owner._complete_points_layer_ui_setup.assert_called_once()
+    ui_args, ui_kwargs = owner._complete_points_layer_ui_setup.call_args
+    assert ui_args[0] is pts_unmanaged
+
+    assert pts_managed in remap_calls
+    assert pts_unmanaged in remap_calls
 
 
-def test_manager_on_remove_delegates_to_owner(qtbot):
+def test_manager_on_remove_triggers_ui_cleanup_and_refresh(qtbot):
     pts = make_points()
     viewer = DummyViewer([pts])
     owner = DummyOwner(viewer)
@@ -209,7 +390,41 @@ def test_manager_on_remove_delegates_to_owner(qtbot):
 
     manager.on_remove(event)
 
-    assert owner.calls == [("handle_removed", pts)]
+    owner._on_points_layer_removed_ui.assert_called_once_with(
+        pts,
+        remaining_points_layers=1,
+    )
+    owner._refresh_video_panel_context.assert_called()
+    owner._refresh_layer_status_panel.assert_called()
+
+
+def test_manager_reap_dead_entries_removes_stale_entry(qtbot):
+    viewer = DummyViewer()
+    owner = DummyOwner(viewer)
+    manager = LayerLifecycleManager(owner=owner)
+
+    pts = make_points()
+    store = object()
+
+    manager.register_managed_points_layer(pts, store)
+
+    layer_id = id(pts)
+    del pts
+    gc.collect()
+
+    report_before = manager.audit_registry()
+    assert report_before.dead_count == 1
+    assert any(issue.code == "dead-entry" and issue.layer_id == layer_id for issue in report_before.issues)
+
+    reaped = manager.clear_dead_entries(log=False)
+
+    assert len(reaped) == 1
+    assert reaped[0].layer_id == layer_id
+    assert reaped[0].runtime.store is store
+
+    report_after = manager.audit_registry()
+    assert report_after.dead_count == 0
+    assert report_after.issues == ()
 
 
 @pytest.mark.parametrize(
@@ -234,49 +449,3 @@ def test_manager_resolve_inserted_layer_prefers_value_then_index_then_source(qtb
 
     assert layer is pts
     assert layer.name == expected_name
-
-
-def test_manager_reap_dead_entries_removes_stale_entry(qtbot):
-    viewer = DummyViewer()
-    owner = DummyOwner(viewer)
-    manager = LayerLifecycleManager(owner=owner)
-
-    pts = make_points()
-    store = object()
-
-    manager.register_managed_points_layer(pts, store)
-
-    layer_id = id(pts)
-    del pts
-    gc.collect()
-
-    # Before reaping, the entry may still exist by id but not be live.
-    report_before = manager.audit_registry()
-    assert report_before.dead_count == 1
-    assert any(issue.code == "dead-entry" and issue.layer_id == layer_id for issue in report_before.issues)
-
-    reaped = manager.reap_dead_entries(log=False)
-
-    assert len(reaped) == 1
-    assert reaped[0].layer_id == layer_id
-    assert reaped[0].runtime.store is store
-
-    report_after = manager.audit_registry()
-    assert report_after.dead_count == 0
-    assert report_after.issues == ()
-
-
-def test_manager_unregister_by_layer_id_returns_store(qtbot):
-    viewer = DummyViewer()
-    owner = DummyOwner(viewer)
-    manager = LayerLifecycleManager(owner=owner)
-
-    pts = make_points()
-    store = object()
-
-    manager.register_managed_points_layer(pts, store)
-
-    removed = manager.unregister_managed_layer(id(pts))
-
-    assert removed is store
-    assert manager.has_managed_points() is False

@@ -360,7 +360,7 @@ class KeypointStore:
 
 
 @deprecated(details="Temporary compat shuim, remove once KeypointStore.add is properly integrated.")
-def _add(store: KeypointStore, coord):
+def add(store: KeypointStore, coord):
     return store.add(coord)
 
 
