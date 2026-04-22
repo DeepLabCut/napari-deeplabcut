@@ -739,7 +739,7 @@ def session_key_from_project_context(ctx: DLCProjectContext | None) -> str | Non
 
     Priority:
     - project_root
-    - config_path parent/project_root
+    - config_path parent (project_root)
     - dataset_folder
     - root_anchor
 
