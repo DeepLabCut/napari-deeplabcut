@@ -133,7 +133,7 @@ from .ui.labels_and_dropdown import (
 )
 from .ui.layer_stats import LayerStatusPanel
 from .ui.plots.trajectory import TrajectoryMatplotlibCanvas
-from .utils.debug import get_debug_recorder, install_debug_recorder
+from .utils.debug import get_debug_recorder, install_debug_recorder, log_timing
 from .utils.deprecations import deprecated
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
@@ -772,21 +772,42 @@ class KeypointControls(QWidget):
 
     def _on_points_layer_removed_ui(self, layer: Points, *, remaining_points_layers: int) -> None:
         """UI-only cleanup after lifecycle manager removed a managed Points layer."""
-        self._update_color_scheme()
-        self._trails_controller.on_points_layer_removed(layer)
+        with log_timing(
+            logger,
+            f"_on_points_layer_removed_ui total layer={getattr(layer, 'name', layer)!r}",
+            threshold_ms=0.01,
+        ):
+            with log_timing(
+                logger,
+                "color scheme update after points removal",
+                threshold_ms=0.01,
+            ):
+                self._update_color_scheme()
 
-        if remaining_points_layers == 0:
-            while self._menus:
-                menu = self._menus.pop()
-                try:
-                    self._layout.removeWidget(menu)
-                except Exception:
-                    pass
-                menu.deleteLater()
+            with log_timing(
+                logger,
+                f"trails_controller.on_points_layer_removed layer={getattr(layer, 'name', layer)!r}",
+                threshold_ms=0.01,
+            ):
+                self._trails_controller.on_points_layer_removed(layer)
 
-            self._layer_to_menu = {}
-            self._set_points_controls_enabled(False)
-            self.last_saved_label.hide()
+            if remaining_points_layers == 0:
+                with log_timing(
+                    logger,
+                    "points menu teardown",
+                    threshold_ms=0.01,
+                ):
+                    while self._menus:
+                        menu = self._menus.pop()
+                        try:
+                            self._layout.removeWidget(menu)
+                        except Exception:
+                            pass
+                        menu.deleteLater()
+
+                self._layer_to_menu = {}
+                self._set_points_controls_enabled(False)
+                self.last_saved_label.hide()
 
     @deprecated(
         details="Lifecycle-owned points setup has moved to LayerLifecycleManager.",
@@ -1757,20 +1778,23 @@ class KeypointControls(QWidget):
         * Sets the visibility of the "Color mode" box to True if the selected layer
             is a multi-animal one, or False otherwise
         """
-        self._color_grp.setVisible(self._is_multianimal(event.value))
-        # self._update_color_scheme() # if needed
-        menu_idx = -1
-        if event.value is not None and isinstance(event.value, Points):
-            menu_idx = self._layer_to_menu.get(event.value, -1)
+        with log_timing(
+            logger, f"on_active_layer_change value={getattr(event.value, 'name', None)!r}", threshold_ms=0.0
+        ):
+            self._color_grp.setVisible(self._is_multianimal(event.value))
+            # self._update_color_scheme() # if needed
+            menu_idx = -1
+            if event.value is not None and isinstance(event.value, Points):
+                menu_idx = self._layer_to_menu.get(event.value, -1)
 
-        for idx, menu in enumerate(self._menus):
-            if idx == menu_idx:
-                menu.setHidden(False)
-            else:
-                menu.setHidden(True)
+            for idx, menu in enumerate(self._menus):
+                if idx == menu_idx:
+                    menu.setHidden(False)
+                else:
+                    menu.setHidden(True)
 
-        self._refresh_video_panel_context()
-        self._refresh_layer_status_panel()
+            self._refresh_video_panel_context()
+            self._refresh_layer_status_panel()
 
     def _update_colormap(self, colormap_name: str):
         for layer in self.viewer.layers.selection:

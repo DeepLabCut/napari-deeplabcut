@@ -7,13 +7,45 @@ import sys
 import threading
 import traceback
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import metadata
 from pathlib import Path
+from time import perf_counter_ns
 
 _DEBUG_HANDLER_ATTR = "_napari_dlc_debug_recorder"
 LOG_QUEUE_MAXLEN = 1000
+
+# FIXME disable for release to avoid any overhead, or make configurable via env var/settings
+NAPARI_DLC_LOG_TIMING = True
+
+
+@contextmanager
+def log_timing(
+    logger: logging.Logger,
+    label: str,
+    *,
+    level: int = logging.DEBUG,
+    threshold_ms: float | None = None,
+):
+    """Lightweight scoped timer for debug instrumentation.
+
+    Uses perf_counter_ns() for monotonic timing.
+    Logs only if logger is enabled for the requested level.
+    Optionally suppresses tiny timings below threshold_ms.
+    """
+    if not logger.isEnabledFor(level) or not NAPARI_DLC_LOG_TIMING:
+        yield
+        return
+
+    t0 = perf_counter_ns()
+    try:
+        yield
+    finally:
+        dt_ms = (perf_counter_ns() - t0) / 1e6
+        if threshold_ms is None or dt_ms >= threshold_ms:
+            logger.log(level, "%s took %.3f ms", label, dt_ms)
 
 
 def install_debug_recorder(
@@ -136,11 +168,17 @@ class InMemoryDebugRecorder(logging.Handler):
         lines: list[str] = []
         try:
             records = self.snapshot()[-max(1, int(limit)) :]
+            if not records:
+                return ""
+
+            base = records[0].created
             for rec in records:
-                ts = datetime.fromtimestamp(rec.created).strftime("%H:%M:%S")
-                lines.append(f"{ts} | {rec.level:<8} | {rec.logger_name} | {rec.message}")
+                ts = datetime.fromtimestamp(rec.created).strftime("%H:%M:%S.%f")[:-3]
+                rel_ms = (rec.created - base) * 1000.0
+                lines.append(f"{ts} (+{rel_ms:8.1f} ms) | {rec.level:<8} | {rec.logger_name} | {rec.message}")
                 if rec.exc_text:
                     lines.append(rec.exc_text.rstrip())
+
             if self._dropped:
                 lines.append(f"[debug-recorder] dropped internal failures: {self._dropped}")
         except Exception:

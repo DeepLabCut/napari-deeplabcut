@@ -28,6 +28,7 @@ from ...core.remap import remap_layer_data_by_paths
 from ...napari_compat import install_add_wrapper, install_paste_patch
 from ...napari_compat.points_layer import make_paste_data
 from ...ui.cropping import resolve_project_path_from_image_layer
+from ...utils.debug import log_timing
 from .registry import (
     ClearedRegistryEntry,
     ManagedPointsRuntime,
@@ -518,7 +519,12 @@ class LayerLifecycleManager(QObject):
     def _remove_layer_if_present(self, layer: Layer) -> None:
         try:
             if layer in self.viewer.layers:
-                self.viewer.layers.remove(layer)
+                with log_timing(
+                    logger,
+                    f"viewer.layers.remove layer={getattr(layer, 'name', layer)!r}",
+                    threshold_ms=0.01,
+                ):
+                    self.viewer.layers.remove(layer)
         except Exception:
             logger.debug("Failed to remove layer=%r", getattr(layer, "name", layer), exc_info=True)
 
@@ -566,15 +572,18 @@ class LayerLifecycleManager(QObject):
         self._post_remove_refresh_timer.start(0)
 
     def _flush_post_remove_refresh(self) -> None:
-        try:
-            self.owner._refresh_video_panel_context()
-        except Exception:
-            logger.debug("Failed to refresh video panel context after removal", exc_info=True)
+        with log_timing(logger, "_flush_post_remove_refresh total", threshold_ms=0.01):
+            try:
+                with log_timing(logger, "_refresh_video_panel_context", threshold_ms=0.01):
+                    self.owner._refresh_video_panel_context()
+            except Exception:
+                logger.debug("Failed to refresh video panel context after removal", exc_info=True)
 
-        try:
-            self.owner._refresh_layer_status_panel()
-        except Exception:
-            logger.debug("Failed to refresh layer status panel after removal", exc_info=True)
+            try:
+                with log_timing(logger, "_refresh_layer_status_panel", threshold_ms=0.01):
+                    self.owner._refresh_layer_status_panel()
+            except Exception:
+                logger.debug("Failed to refresh layer status panel after removal", exc_info=True)
 
     def _handle_removed_layer(self, layer: Any) -> None:
         """Lifecycle-owned remove handling.
@@ -583,34 +592,55 @@ class LayerLifecycleManager(QObject):
         ------------------
         UI/menu cleanup still delegates to a widget-owned UI hook.
         """
-        n_points_layer = sum(isinstance(l, Points) for l in self.viewer.layers)
+        with log_timing(
+            logger,
+            f"_handle_removed_layer total layer={getattr(layer, 'name', layer)!r}",
+            threshold_ms=0.01,
+        ):
+            n_points_layer = sum(isinstance(l, Points) for l in self.viewer.layers)
 
-        if isinstance(layer, Points):
-            self.unregister_managed_layer(layer)
-            self.owner._on_points_layer_removed_ui(layer, remaining_points_layers=n_points_layer)
+            if isinstance(layer, Points):
+                with log_timing(
+                    logger,
+                    f"unregister_managed_layer layer={getattr(layer, 'name', layer)!r}",
+                    threshold_ms=0.01,
+                ):
+                    self.unregister_managed_layer(layer)
 
-        elif isinstance(layer, Image):
-            if self._active_dlc_image_layer_id == id(layer):
-                self._active_dlc_image_layer_id = None
-                self._image_meta = ImageMetadata()
-                self._project_path = None
+                with log_timing(
+                    logger,
+                    f"_on_points_layer_removed_ui layer={getattr(layer, 'name', layer)!r}",
+                    threshold_ms=0.01,
+                ):
+                    self.owner._on_points_layer_removed_ui(layer, remaining_points_layers=n_points_layer)
 
-                paths = layer.metadata.get("paths")
-                if paths is None:
-                    self.owner.video_widget.setVisible(False)
-            else:
-                logger.debug(
-                    "Removed non-session or inactive image layer=%r; keeping current DLC session context.",
-                    getattr(layer, "name", layer),
-                )
+            elif isinstance(layer, Image):
+                if self._active_dlc_image_layer_id == id(layer):
+                    self._active_dlc_image_layer_id = None
+                    self._image_meta = ImageMetadata()
+                    self._project_path = None
 
-        elif isinstance(layer, Tracks):
-            was_trails = self.owner._trails_controller.on_tracks_layer_removed(layer)
-            if was_trails:
-                with QSignalBlocker(self.owner._trail_cb):
-                    self.owner._trail_cb.setChecked(False)
+                    paths = layer.metadata.get("paths")
+                    if paths is None:
+                        self.owner.video_widget.setVisible(False)
+                else:
+                    logger.debug(
+                        "Removed non-session or inactive image layer=%r; keeping current DLC session context.",
+                        getattr(layer, "name", layer),
+                    )
 
-        self._schedule_post_remove_refresh()
+            elif isinstance(layer, Tracks):
+                with log_timing(
+                    logger,
+                    f"tracks removal hook layer={getattr(layer, 'name', layer)!r}",
+                    threshold_ms=0.01,
+                ):
+                    was_trails = self.owner._trails_controller.on_tracks_layer_removed(layer)
+                if was_trails:
+                    with QSignalBlocker(self.owner._trail_cb):
+                        self.owner._trail_cb.setChecked(False)
+
+            self._schedule_post_remove_refresh()
 
     def _remap_frame_indices(self, layer: Any) -> None:
         """Lifecycle-owned remap of non-Image layer time/frame indices."""
@@ -852,8 +882,13 @@ class LayerLifecycleManager(QObject):
             type(layer).__name__,
         )
 
-        self._handle_removed_layer(layer)
-        self.layer_remove_processed.emit(layer)
+        with log_timing(
+            logger,
+            f"on_remove total layer={getattr(layer, 'name', layer)!r}",
+            threshold_ms=0.01,
+        ):
+            self._handle_removed_layer(layer)
+            self.layer_remove_processed.emit(layer)
 
     def _maybe_accept_and_setup_image_layer(self, layer: Image, index: int | None) -> bool:
         if not self.is_dlc_session_image_layer(layer):
