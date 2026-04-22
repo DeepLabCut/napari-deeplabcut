@@ -13,14 +13,22 @@ from napari.utils.history import update_save_history
 from qtpy.QtCore import QObject, QSignalBlocker, QTimer, Signal
 
 from ...config.keybinds import install_points_layer_keybindings
-from ...config.models import ImageMetadata
+from ...config.models import ImageMetadata, PointsMetadata
 from ...core import keypoints
 from ...core.layer_versioning import mark_layer_presentation_changed
-from ...core.metadata import migrate_points_layer_metadata
+from ...core.metadata import (
+    MergePolicy,
+    infer_image_root,
+    migrate_points_layer_metadata,
+    read_points_meta,
+    sync_points_from_image,
+    write_points_meta,
+)
 from ...core.project_paths import PathMatchPolicy
 from ...core.remap import remap_layer_data_by_paths
 from ...napari_compat import install_add_wrapper, install_paste_patch
 from ...napari_compat.points_layer import make_paste_data
+from ...ui.cropping import resolve_project_path_from_image_layer
 from .registry import (
     ClearedRegistryEntry,
     ManagedPointsRuntime,
@@ -65,6 +73,10 @@ class LayerLifecycleManager(QObject):
         self.owner = owner
         self.viewer = owner.viewer
         self.registry: RuntimeRegistry[Any] = RuntimeRegistry()
+
+        # Lifecycle-owned viewer/image context
+        self._image_meta = ImageMetadata()
+        self._project_path: str | None = None
 
         self._initial_adopt_timer = QTimer(self)
         self._initial_adopt_timer.setSingleShot(True)
@@ -113,6 +125,34 @@ class LayerLifecycleManager(QObject):
         return self.registry.audit()
 
     # ------------------------------------------------------------------ #
+    # lifecycle-owned image/project context                              #
+    # ------------------------------------------------------------------ #
+
+    @property
+    def image_meta(self) -> ImageMetadata:
+        return self._image_meta
+
+    @property
+    def project_path(self) -> str | None:
+        return self._project_path
+
+    @project_path.setter
+    def project_path(self, value: str | None) -> None:
+        self._project_path = value
+
+    @property
+    def image_root(self) -> str | None:
+        return self._image_meta.root
+
+    @property
+    def image_paths(self) -> list[str] | None:
+        return self._image_meta.paths
+
+    @property
+    def image_name(self) -> str | None:
+        return self._image_meta.name
+
+    # ------------------------------------------------------------------ #
     # Lifecycle wiring                                                   #
     # ------------------------------------------------------------------ #
 
@@ -149,32 +189,123 @@ class LayerLifecycleManager(QObject):
     # ------------------------------------------------------------------ #
     # Layer setup managers                                               #
     # ------------------------------------------------------------------ #
-    def _setup_image_layer(self, layer: Image, index: int | None = None, *, reorder: bool = True) -> None:
-        """Lifecycle-owned setup for an inserted/adopted Image layer.
+    @staticmethod
+    def _layer_source_path(layer) -> str | None:
+        """Best-effort access to napari layer source path (may not exist)."""
+        try:
+            src = getattr(layer, "source", None)
+            p = getattr(src, "path", None) if src is not None else None
+            return str(p) if p else None
+        except Exception:
+            return None
 
-        Transitional note:
-        ------------------
-        For now this still uses owner-held image/project context fields and UI hooks.
-        Step 2 should move image/project context ownership into the manager itself.
-        """
+    def _update_image_meta_from_layer(self, layer: Image) -> None:
+        """Update lifecycle-owned image metadata from an Image layer."""
+        md = layer.metadata or {}
+
+        paths = md.get("paths")
+        try:
+            shape = layer.level_shapes[0]
+        except Exception:
+            shape = None
+
+        root = infer_image_root(
+            explicit_root=md.get("root"),
+            paths=paths,
+            source_path=self._layer_source_path(layer),
+        )
+
+        incoming = ImageMetadata(
+            paths=list(paths) if paths else None,
+            root=str(root) if root else None,
+            shape=tuple(shape) if shape is not None else None,
+            name=getattr(layer, "name", None),
+        )
+
+        base = self._image_meta
+        merged = base.model_copy(deep=True)
+        for field, value in incoming.model_dump().items():
+            if getattr(merged, field) in (None, "", []) and value not in (None, "", []):
+                setattr(merged, field, value)
+
+        self._image_meta = merged
+
+    def _sync_points_layers_from_image_meta(self) -> None:
+        """Sync managed/all points metadata from lifecycle-owned image context."""
+        if self._image_meta is None:
+            return
+
+        for ly in list(self.viewer.layers):
+            if not isinstance(ly, Points):
+                continue
+
+            if ly.metadata is None:
+                ly.metadata = {}
+
+            res = read_points_meta(ly, migrate_legacy=True, drop_controls=False, drop_header=False)
+            if hasattr(res, "errors"):
+                logger.warning(
+                    "Points metadata validation failed during sync for layer=%r: %s",
+                    getattr(ly, "name", ly),
+                    res,
+                )
+                continue
+
+            pts_model: PointsMetadata = res
+            synced = sync_points_from_image(self._image_meta, pts_model)
+
+            out = write_points_meta(
+                ly,
+                synced,
+                merge_policy=MergePolicy.MERGE_MISSING,
+                migrate_legacy=True,
+                validate=True,
+            )
+            if hasattr(out, "errors"):
+                logger.warning(
+                    "Failed to write synced points metadata for layer=%r: %s",
+                    getattr(ly, "name", ly),
+                    out,
+                )
+
+    def _cache_project_path_from_image_layer(self, layer: Image) -> None:
+        """Best-effort lifecycle-owned cache of project path from an image/video layer."""
+        project_path = resolve_project_path_from_image_layer(layer)
+        if project_path is None:
+            return
+
+        self._project_path = project_path
+        try:
+            layer.metadata = dict(layer.metadata or {})
+            layer.metadata.setdefault("project", self._project_path)
+        except Exception:
+            logger.debug(
+                "Failed to set project path metadata on image layer %r",
+                getattr(layer, "name", layer),
+                exc_info=True,
+            )
+
+        self.owner._refresh_video_panel_context()
+
+    def _setup_image_layer(self, layer: Image, index: int | None = None, *, reorder: bool = True) -> None:
+        """Lifecycle-owned setup for an inserted/adopted Image layer."""
         md = layer.metadata or {}
         paths = md.get("paths")
         if paths is None:
             try:
-                if self.owner.io.is_video(layer.name):  # optional if owner exposes io
+                if self.owner.io.is_video(layer.name):
                     self.owner.video_widget.setVisible(True)
             except Exception:
                 pass
 
-        # Transitional: owner still stores image/project context.
-        self.owner._update_image_meta_from_layer(layer)
+        self._update_image_meta_from_layer(layer)
 
-        if not self.owner._project_path:
-            self.owner._cache_project_path_from_image_layer(layer)
-            if self.owner._project_path is not None:
+        if not self._project_path:
+            self._cache_project_path_from_image_layer(layer)
+            if self._project_path is not None:
                 try:
                     layer.metadata = dict(layer.metadata or {})
-                    layer.metadata.setdefault("project", self.owner._project_path)
+                    layer.metadata.setdefault("project", self._project_path)
                 except Exception:
                     logger.debug(
                         "Failed to set project path metadata on image layer %r",
@@ -182,7 +313,7 @@ class LayerLifecycleManager(QObject):
                         exc_info=True,
                     )
 
-        self.owner._sync_points_layers_from_image_meta()
+        self._sync_points_layers_from_image_meta()
         self.owner._refresh_video_panel_context()
 
         logger.debug(
@@ -260,11 +391,14 @@ class LayerLifecycleManager(QObject):
         layer._dlc_store = store
         layer._dlc_controls = self.owner
 
-        # Transitional: owner still stores image/project context.
-        if not layer.metadata.get("root") and self.owner._image_meta.root:
-            layer.metadata["root"] = self.owner._image_meta.root
-        if not layer.metadata.get("paths") and self.owner._image_meta.paths:
-            layer.metadata["paths"] = self.owner._image_meta.paths
+        proj = layer.metadata.get("project")
+        if proj:
+            self._project_path = proj
+
+        if not layer.metadata.get("root") and self._image_meta.root:
+            layer.metadata["root"] = self._image_meta.root
+        if not layer.metadata.get("paths") and self._image_meta.paths:
+            layer.metadata["paths"] = self._image_meta.paths
 
         if root := layer.metadata.get("root"):
             update_save_history(root)
@@ -331,8 +465,7 @@ class LayerLifecycleManager(QObject):
             self.owner._on_points_layer_removed_ui(layer, remaining_points_layers=n_points_layer)
 
         elif isinstance(layer, Image):
-            # Transitional: owner still stores image context.
-            self.owner._image_meta = ImageMetadata()
+            self._image_meta = ImageMetadata()
             paths = layer.metadata.get("paths")
             if paths is None:
                 self.owner.video_widget.setVisible(False)
@@ -349,7 +482,7 @@ class LayerLifecycleManager(QObject):
     def _remap_frame_indices(self, layer: Any) -> None:
         """Lifecycle-owned remap of non-Image layer time/frame indices."""
         try:
-            new_paths = self.owner._image_meta.paths
+            new_paths = self._image_meta.paths
             if not new_paths:
                 return
 
@@ -360,7 +493,7 @@ class LayerLifecycleManager(QObject):
             old_paths = md.get("paths") or []
 
             try:
-                safe_image_meta = self.owner._image_meta.model_dump(exclude_none=True)
+                safe_image_meta = self._image_meta.model_dump(exclude_none=True)
                 safe_image_meta.pop("paths", None)
                 layer.metadata.update(safe_image_meta)
             except Exception:

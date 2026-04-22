@@ -90,10 +90,8 @@ from .core.layers import (
 from .core.metadata import (
     MergePolicy,
     apply_project_paths_override_to_points_meta,
-    infer_image_root,
     migrate_points_layer_metadata,
     read_points_meta,
-    sync_points_from_image,
     write_points_meta,
 )
 from .core.project_paths import (
@@ -124,7 +122,6 @@ from .ui.color_scheme_display import ColorSchemePanel
 from .ui.cropping import (
     build_video_action_menu,
     handle_apply_crop_toggled,
-    resolve_project_path_from_image_layer,
     run_extract_current_frame,
     run_store_crop_coordinates,
     update_video_panel_context,
@@ -198,7 +195,7 @@ class KeypointControls(QWidget):
         #     self.viewer.window.qt_viewer,
         # )
         # Project data
-        self._project_path: str | None = None
+        # self._project_path: str | None = None # DEPRECATED, owned by LayerLifecycleManager
 
         status_bar = self.viewer.window._qt_window.statusBar()
         self.last_saved_label = QLabel("")
@@ -231,7 +228,7 @@ class KeypointControls(QWidget):
         # Storage for extra image metadata that are relevant to other layers.
         # These are updated anytime images are added to the Viewer
         # and passed on to the other layers upon creation.
-        self._image_meta = ImageMetadata()
+        # self._image_meta = ImageMetadata() # DEPRECATED, owned by LayerLifecycleManager
         # Storage for layers requiring recoloring
         self._recolor_pending = set()
 
@@ -394,6 +391,24 @@ class KeypointControls(QWidget):
     @cached_property
     def settings(self):
         return QSettings()
+
+    @property
+    def _image_meta(self) -> ImageMetadata:
+        """Compatibility shim: lifecycle-owned image context now lives in manager."""
+        return self.layer_manager.image_meta
+
+    @_image_meta.setter
+    def _image_meta(self, value: ImageMetadata) -> None:
+        self.layer_manager._image_meta = value
+
+    @property
+    def _project_path(self) -> str | None:
+        """Compatibility shim: lifecycle-owned project path now lives in manager."""
+        return self.layer_manager.project_path
+
+    @_project_path.setter
+    def _project_path(self, value: str | None) -> None:
+        self.layer_manager.project_path = value
 
     @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):
@@ -635,9 +650,9 @@ class KeypointControls(QWidget):
 
         self._form_dropdown_menus(store)
 
-        proj = layer.metadata.get("project")
-        if proj:
-            self._project_path = proj
+        # proj = layer.metadata.get("project") # MOVED to LayerLifecycleManager
+        # if proj:
+        #     self._project_path = proj
 
         self._set_points_controls_enabled(True)
         self._update_color_scheme()
@@ -870,101 +885,32 @@ class KeypointControls(QWidget):
     # ------------------------------------------------------------------
     # Metadata helpers (authoritative models + napari-friendly dict sync)
     # ------------------------------------------------------------------
+    @deprecated(
+        details="Lifecycle-owned image metadata management has moved to LayerLifecycleManager.",
+        replacement="LayerLifecycleManager._layer_source_path(...)",
+    )
     @staticmethod
     def _layer_source_path(layer) -> str | None:
         """Best-effort access to napari layer source path (may not exist)."""
-        try:
-            src = getattr(layer, "source", None)
-            p = getattr(src, "path", None) if src is not None else None
-            return str(p) if p else None
-        except Exception:
-            return None
+        return LayerLifecycleManager._layer_source_path(layer)
 
+    @deprecated(
+        details="Lifecycle-owned image metadata management has moved to LayerLifecycleManager.",
+        replacement="LayerLifecycleManager._update_image_meta_from_layer(...)",
+    )
     def _update_image_meta_from_layer(self, layer: Image) -> None:
         """
         Update authoritative self._images_meta using an Image layer.
         Also keep a dict-like subset synced for other layers (non-breaking).
         """
-        md = layer.metadata or {}
+        self.layer_manager._update_image_meta_from_layer(layer)
 
-        paths = md.get("paths")
-        shape = None
-        try:
-            shape = layer.level_shapes[0]
-        except Exception:
-            shape = None
-
-        root = infer_image_root(
-            explicit_root=md.get("root"),
-            paths=paths,
-            source_path=self._layer_source_path(layer),
-        )
-
-        incoming = ImageMetadata(
-            paths=list(paths) if paths else None,
-            root=str(root) if root else None,
-            shape=tuple(shape) if shape is not None else None,
-            name=getattr(layer, "name", None),
-        )
-
-        # Merge without clobbering already-known values
-        # (same behavior as old "only set if non-empty")
-        base = self._image_meta
-        merged = base.model_copy(deep=True)
-        for field, value in incoming.model_dump().items():
-            if getattr(merged, field) in (None, "", []) and value not in (None, "", []):
-                setattr(merged, field, value)
-
-        self._image_meta = merged
-
+    @deprecated(
+        details="Lifecycle-owned image→points metadata sync has moved to LayerLifecycleManager.",
+        replacement="self.layer_manager._sync_points_layers_from_image_meta()",
+    )
     def _sync_points_layers_from_image_meta(self) -> None:
-        """
-        Ensure all Points layers have core fields required for saving.
-
-        Adapter-based flow:
-        - read validated points meta (visible failures)
-        - apply sync logic against authoritative self._image_meta
-        - write back validated dict via gateway
-        """
-        if self._image_meta is None:
-            return
-
-        for ly in list(self.viewer.layers):
-            if not isinstance(ly, Points):
-                continue
-
-            if ly.metadata is None:
-                ly.metadata = {}
-
-            # 1) Read + migrate legacy (io from source_h5, header coercion, etc.)
-            res = read_points_meta(ly, migrate_legacy=True, drop_controls=False, drop_header=False)
-            if hasattr(res, "errors"):  # ValidationError duck-typing
-                logger.warning(
-                    "Points metadata validation failed during sync for layer=%r: %s",
-                    getattr(ly, "name", ly),
-                    res,
-                )
-                continue
-
-            pts_model: PointsMetadata = res
-
-            # 2) Sync missing fields from image meta (pure model transform)
-            synced = sync_points_from_image(self._image_meta, pts_model)
-
-            # 3) Write back through gateway (fill missing only; never clobber)
-            out = write_points_meta(
-                ly,
-                synced,
-                merge_policy=MergePolicy.MERGE_MISSING,
-                migrate_legacy=True,
-                validate=True,
-            )
-            if hasattr(out, "errors"):
-                logger.warning(
-                    "Failed to write synced points metadata for layer=%r: %s",
-                    getattr(ly, "name", ly),
-                    out,
-                )
+        self.layer_manager._sync_points_layers_from_image_meta()
 
     def _resolve_config_path_for_layer(self, layer: Points | None) -> Path | None:
         if layer is None:
@@ -974,8 +920,8 @@ class KeypointControls(QWidget):
 
         return resolve_config_path_from_layer(
             layer,
-            fallback_project=self._project_path,
-            fallback_root=self._image_meta.root,
+            fallback_project=self.layer_manager.project_path,
+            fallback_root=self.layer_manager.image_root,
             image_layer=image_layer,
             prefer_project_root=True,
             max_levels=5,
@@ -1111,7 +1057,7 @@ class KeypointControls(QWidget):
 
         folder_name = infer_folder_display_name(
             active_image if active_image is not None else active_layer,
-            fallback_root=self._image_meta.root,
+            fallback_root=self.layer_manager.image_root,
         )
         self._layer_status_panel.set_folder_name(folder_name)
 
@@ -1128,7 +1074,7 @@ class KeypointControls(QWidget):
         self._layer_status_panel.set_point_size_enabled(True)
         self._layer_status_panel.set_point_size(get_uniform_point_size(active_dlc_points))
 
-        progress = compute_label_progress(active_dlc_points, fallback_paths=self._image_meta.paths)
+        progress = compute_label_progress(active_dlc_points, fallback_paths=self.layer_manager.image_paths)
         self._layer_status_panel.set_progress_summary(progress=progress)
 
     def _on_active_points_size_changed(self, size: int) -> None:
@@ -1292,24 +1238,12 @@ class KeypointControls(QWidget):
     def _refresh_video_panel_context(self) -> None:
         update_video_panel_context(self.viewer, self._video_group)
 
+    @deprecated(
+        details="Lifecycle-owned project-path caching has moved to LayerLifecycleManager.",
+        replacement="self.layer_manager._cache_project_path_from_image_layer(...)",
+    )
     def _cache_project_path_from_image_layer(self, layer: Image) -> None:
-        """Best-effort cache of project path from an image/video layer."""
-        project_path = resolve_project_path_from_image_layer(layer)
-        if project_path is None:
-            return
-
-        self._project_path = project_path
-        try:
-            layer.metadata = dict(layer.metadata or {})
-            layer.metadata.setdefault("project", self._project_path)
-        except Exception:
-            logger.debug(
-                "Failed to set project path metadata on image layer %r",
-                getattr(layer, "name", layer),
-                exc_info=True,
-            )
-
-        self._refresh_video_panel_context()
+        self.layer_manager._cache_project_path_from_image_layer(layer)
 
     def _extract_single_frame(self, *args):
         ok, msg = run_extract_current_frame(
