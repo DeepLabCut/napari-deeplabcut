@@ -33,17 +33,16 @@ import logging
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
-from functools import cached_property, partial
+from functools import cached_property
 from pathlib import Path
-from types import MethodType
 
 import matplotlib.pyplot as plt
 import numpy as np
-from napari.layers import Image, Points, Tracks
+from napari.layers import Image, Points
 from napari.utils.events import Event
-from napari.utils.history import get_save_history, update_save_history
+from napari.utils.history import get_save_history
 from pydantic import ValidationError
-from qtpy.QtCore import QSettings, QSignalBlocker, Qt, QTimer
+from qtpy.QtCore import QSettings, Qt, QTimer
 from qtpy.QtGui import QAction
 from qtpy.QtWidgets import (
     QButtonGroup,
@@ -61,24 +60,22 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-import napari_deeplabcut.core.io as io
-from napari_deeplabcut import misc
-from napari_deeplabcut.config import settings
-from napari_deeplabcut.config.keybinds import (
+from . import misc
+from .config import settings
+from .config.keybinds import (
     install_global_points_keybindings,
-    install_points_layer_keybindings,
 )
-from napari_deeplabcut.config.models import DLCHeaderModel, ImageMetadata, PointsMetadata
-from napari_deeplabcut.core import keypoints
-from napari_deeplabcut.core.config_sync import (
+from .config.models import DLCHeaderModel, ImageMetadata, PointsMetadata
+from .core import io, keypoints
+from .core.config_sync import (
     load_point_size_from_config,
     resolve_config_path_from_layer,
     save_point_size_to_config,
 )
-from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
-from napari_deeplabcut.core.layer_lifecycle import LayerLifecycleManager
-from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
-from napari_deeplabcut.core.layers import (
+from .core.conflicts import compute_overwrite_report_for_points_save
+from .core.layer_lifecycle import LayerLifecycleManager
+from .core.layer_versioning import mark_layer_presentation_changed
+from .core.layers import (
     PointsInteractionEvent,
     PointsInteractionObserver,
     compute_label_progress,
@@ -90,7 +87,7 @@ from napari_deeplabcut.core.layers import (
     is_machine_layer,
     set_uniform_point_size,
 )
-from napari_deeplabcut.core.metadata import (
+from .core.metadata import (
     MergePolicy,
     apply_project_paths_override_to_points_meta,
     infer_image_root,
@@ -99,37 +96,32 @@ from napari_deeplabcut.core.metadata import (
     sync_points_from_image,
     write_points_meta,
 )
-from napari_deeplabcut.core.project_paths import (
-    PathMatchPolicy,
+from .core.project_paths import (
     coerce_paths_to_dlc_row_keys,
     dataset_folder_has_files,
     find_nearest_config,
     resolve_project_root_from_config,
     target_dataset_folder_for_config,
 )
-from napari_deeplabcut.core.provenance import (
+from .core.provenance import (
     apply_gt_save_target,
     is_projectless_folder_association_candidate,
     requires_gt_promotion,
     suggest_human_placeholder,
 )
-from napari_deeplabcut.core.remap import remap_layer_data_by_paths
-from napari_deeplabcut.core.sidecar import (
+from .core.sidecar import (
     get_default_scorer,
     set_default_scorer,
 )
-from napari_deeplabcut.core.trails import TrailsController, safe_folder_anchor_from_points_layer
-from napari_deeplabcut.napari_compat import (
+from .core.trails import TrailsController, safe_folder_anchor_from_points_layer
+from .napari_compat import (
     apply_points_layer_ui_tweaks,
-    install_add_wrapper,
-    install_paste_patch,
     patch_color_manager_guess_continuous,
     register_points_action,
 )
-from napari_deeplabcut.napari_compat.points_layer import make_paste_data
-from napari_deeplabcut.ui import dialogs as ui_dialogs
-from napari_deeplabcut.ui.color_scheme_display import ColorSchemePanel
-from napari_deeplabcut.ui.cropping import (
+from .ui import dialogs as ui_dialogs
+from .ui.color_scheme_display import ColorSchemePanel
+from .ui.cropping import (
     build_video_action_menu,
     handle_apply_crop_toggled,
     resolve_project_path_from_image_layer,
@@ -137,16 +129,16 @@ from napari_deeplabcut.ui.cropping import (
     run_store_crop_coordinates,
     update_video_panel_context,
 )
-from napari_deeplabcut.ui.debug_window import DebugTextWindow, make_issue_report_provider
-from napari_deeplabcut.ui.dialogs import Shortcuts, Tutorial
-from napari_deeplabcut.ui.labels_and_dropdown import (
+from .ui.debug_window import DebugTextWindow, make_issue_report_provider
+from .ui.dialogs import Shortcuts, Tutorial
+from .ui.labels_and_dropdown import (
     DropdownMenu,
     KeypointsDropdownMenu,
 )
-from napari_deeplabcut.ui.layer_stats import LayerStatusPanel
-from napari_deeplabcut.ui.plots.trajectory import TrajectoryMatplotlibCanvas
-from napari_deeplabcut.utils.debug import get_debug_recorder, install_debug_recorder
-from napari_deeplabcut.utils.deprecations import deprecated
+from .ui.layer_stats import LayerStatusPanel
+from .ui.plots.trajectory import TrajectoryMatplotlibCanvas
+from .utils.debug import get_debug_recorder, install_debug_recorder
+from .utils.deprecations import deprecated
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
 # logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
@@ -511,42 +503,11 @@ class KeypointControls(QWidget):
     # ######################## #
 
     @deprecated(
-        details="This should be moved to LayerLifecycleManager. It is currently used there but should be moved."
+        details="Lifecycle-owned image setup has moved to LayerLifecycleManager.",
+        replacement="self.layer_manager._setup_image_layer(...)",
     )
     def _setup_image_layer(self, layer: Image, index: int | None = None, *, reorder: bool = True) -> None:
-        md = layer.metadata or {}
-        paths = md.get("paths")
-        if paths is None and io.is_video(layer.name):
-            self.video_widget.setVisible(True)
-
-        self._update_image_meta_from_layer(layer)
-
-        if not self._project_path:
-            self._cache_project_path_from_image_layer(layer)
-            if self._project_path is not None:
-                try:
-                    layer.metadata = dict(layer.metadata or {})
-                    layer.metadata.setdefault("project", self._project_path)
-                except Exception:
-                    logger.debug(
-                        "Failed to set project path metadata on image layer %r",
-                        getattr(layer, "name", layer),
-                        exc_info=True,
-                    )
-
-        self._sync_points_layers_from_image_meta()
-        self._refresh_video_panel_context()
-        logger.debug(
-            "Setup image layer=%r index=%s reorder=%s paths_count=%s root=%r",
-            getattr(layer, "name", layer),
-            index,
-            reorder,
-            len(md.get("paths") or []),
-            md.get("root"),
-        )
-
-        if reorder and index is not None:
-            QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, index))
+        self.layer_manager._setup_image_layer(layer, index=index, reorder=reorder)
 
     def _maybe_merge_config_points_layer(self, layer: Points) -> bool:
         md = layer.metadata or {}
@@ -640,117 +601,27 @@ class KeypointControls(QWidget):
     def get_layer_store(layer: Points) -> keypoints.KeypointStore | None:
         return getattr(layer, "_dlc_store", None)
 
-    @deprecated(details="This should be moved to LayerLifecycleManager.")
-    def _wire_points_layer(self, layer: Points) -> keypoints.KeypointStore | None:
-        if not self._validate_header(layer):
-            return None
-        existing = getattr(layer, "_dlc_store", None)
-        if existing is not None:
-            # self._stores[layer] = existing
-            self.layer_manager.register_managed_points_layer(layer, existing)
-            layer._dlc_controls = self
-            return existing
-
-        # ensure presence of IO metadata for saving & routing
-        mig = migrate_points_layer_metadata(layer)
-        if hasattr(mig, "errors"):
-            logger.warning(
-                "Points metadata validation failed during wiring for layer=%r: %s",
-                getattr(layer, "name", layer),
-                mig,
-            )
-
-        store = keypoints.KeypointStore(self.viewer, layer)
-        # self._stores[layer] = store
-        self.layer_manager.register_managed_points_layer(layer, store)
-        layer._dlc_store = store
-        layer._dlc_controls = self
-
-        # default root/paths from current image meta if missing
-        if not layer.metadata.get("root") and self._image_meta.root:
-            layer.metadata["root"] = self._image_meta.root
-        if not layer.metadata.get("paths") and self._image_meta.paths:
-            layer.metadata["paths"] = self._image_meta.paths
-
-        # save history
-        if root := layer.metadata.get("root"):
-            update_save_history(root)
-
-        store._get_label_mode = lambda: self._label_mode
-        layer.text.visible = False
-
-        paste_func = make_paste_data(self, store=store)
-        install_paste_patch(layer, paste_func=paste_func)
-
-        add_impl = MethodType(keypoints._add, store)  # bind store to add implementation
-        install_add_wrapper(layer, add_impl=add_impl, schedule_recolor=self._schedule_recolor)
-
-        # store events / navigation
-        layer.events.add(query_next_frame=Event)
-        layer.events.query_next_frame.connect(store._advance_step)
-
-        # Install keybinds
-        install_points_layer_keybindings(layer, self, store)
-
-        if self.layer_manager.managed_points_count() == 1 and self._is_multianimal(layer):
-            # set internal mode without triggering recolor storms
-            self._color_mode = keypoints.ColorMode.INDIVIDUAL
-            # update button state so UI matches (optional but good)
-            for btn in self._color_mode_selector.buttons():
-                if btn.text().lower() == str(self._color_mode).lower():
-                    btn.setChecked(True)
-                    break
-
-        # apply cycles (works even if empty; see method)
-        self._apply_points_coloring_from_metadata(layer)
-        self._maybe_initialize_layer_point_size_from_config(layer)
-        self._connect_layer_status_events(layer)
-        # refresh trails if enabled (e.g. when merging a config points layer with trails metadata)
-        self._trails_controller.on_points_layer_added_or_rewired(checkbox_checked=self._trail_cb.isChecked())
-
-        # menus
-        self._form_dropdown_menus(store)
-
-        # project path
-        proj = layer.metadata.get("project")
-        if proj:
-            self._project_path = proj
-
-        # enable GUI groups
-        self._radio_box.setEnabled(True)
-        self._color_grp.setEnabled(True)
-        self._trail_cb.setEnabled(True)
-        self._show_traj_plot_cb.setEnabled(True)
-
-        md = layer.metadata or {}
-        logger.debug(
-            "Wire points layer=%r existing_store=%s project=%s root=%s len_paths=%s",
-            getattr(layer, "name", layer),
-            getattr(layer, "_dlc_store", None) is not None,
-            md.get("project"),
-            md.get("root"),
-            len(md.get("paths", [])),
-        )
-
-        return store
-
     @deprecated(
-        details="This is still used in LayerLifecycleManager.on_insert(), "
-        "but should be instead moved to the LayerLifecycleManager itself instead."
+        details="Lifecycle-owned points wiring has moved to LayerLifecycleManager.",
+        replacement="self.layer_manager._wire_points_layer(...)",
     )
-    def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
-        if not self._validate_header(layer):
-            return
+    def _wire_points_layer(self, layer: Points) -> keypoints.KeypointStore | None:
+        return self.layer_manager._wire_points_layer(layer)
 
-        if allow_merge and self._maybe_merge_config_points_layer(layer):
-            return
+    # ------------------------------------------------------------------ #
+    # UI-only hooks used by LayerLifecycleManager                        #
+    # ------------------------------------------------------------------ #
 
+    def _set_points_controls_enabled(self, enabled: bool) -> None:
+        self._radio_box.setEnabled(enabled)
+        self._color_grp.setEnabled(enabled)
+        self._trail_cb.setEnabled(enabled)
+        self._show_traj_plot_cb.setEnabled(enabled)
+
+    def _complete_points_layer_ui_setup(self, layer: Points, store: keypoints.KeypointStore) -> None:
+        """UI-only completion after lifecycle manager finished points setup."""
         if layer.metadata.get("tables", ""):
             self._keypoint_mapping_button.show()
-
-        store = self._wire_points_layer(layer)
-        if store is None:
-            return
 
         selector = apply_points_layer_ui_tweaks(self.viewer, layer, dropdown_cls=DropdownMenu, plt_module=plt)
         if selector is not None:
@@ -759,66 +630,54 @@ class KeypointControls(QWidget):
             except Exception:
                 pass
 
+        self._apply_points_coloring_from_metadata(layer)
+        self._trails_controller.on_points_layer_added_or_rewired(checkbox_checked=self._trail_cb.isChecked())
+
+        self._form_dropdown_menus(store)
+
+        proj = layer.metadata.get("project")
+        if proj:
+            self._project_path = proj
+
+        self._set_points_controls_enabled(True)
         self._update_color_scheme()
-        logger.debug(
-            "Setup points layer=%r allow_merge=%s metadata_keys=%s",
-            getattr(layer, "name", layer),
-            allow_merge,
-            sorted((layer.metadata or {}).keys()),
-        )
+
+    def _on_points_layer_removed_ui(self, layer: Points, *, remaining_points_layers: int) -> None:
+        """UI-only cleanup after lifecycle manager removed a managed Points layer."""
+        self._update_color_scheme()
+        self._trails_controller.on_points_layer_removed(layer)
+
+        if remaining_points_layers == 0:
+            while self._menus:
+                menu = self._menus.pop()
+                self._layout.removeWidget(menu)
+                menu.deleteLater()
+                menu.destroy()
+
+            self._layer_to_menu = {}
+            self._set_points_controls_enabled(False)
+            self.last_saved_label.hide()
 
     @deprecated(
-        details="This method is no longer used. Layer adoption is now handled by LayerLifecycleManager.",
+        details="Lifecycle-owned points setup has moved to LayerLifecycleManager.",
+        replacement="self.layer_manager._setup_points_layer(...)",
+    )
+    def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
+        self.layer_manager._setup_points_layer(layer, allow_merge=allow_merge)
+
+    @deprecated(
+        details="Layer adoption is now handled by LayerLifecycleManager.",
         replacement="self.layer_manager.schedule_initial_adoption()",
     )
     def _adopt_existing_layers(self) -> None:
-        """
-        When the widget is opened after layers already exist, we need to
-        run the same initialization as if they had been inserted.
-        """
-        # Iterate over a snapshot, because on_insert may modify layer order
-        logger.debug("Adopting existing layers count=%d", len(self.viewer.layers))
-        layers_snapshot = list(self.viewer.layers)
-
-        for idx, layer in enumerate(layers_snapshot):
-            self._adopt_layer(layer, idx)
-
-        # After adoption, refresh UI state
-        try:
-            active = self.viewer.layers.selection.active
-            if active is not None:
-                # Force the GUI to update visibility of menus, etc.
-                self.on_active_layer_change(Event(type_name="active", value=active))
-        except Exception:
-            pass
-
-        # Important: refresh the trajectory plot from the final adopted state.
-        # This fixes the case where layers were loaded before the plugin opened
-        # (e.g. drag-and-drop DLC data triggering the reader automatically).
-        self._refresh_trajectory_plot_from_layers()
+        self.layer_manager.adopt_existing_layers()
 
     @deprecated(
-        details="This method is no longer used. Layer adoption is now handled by LayerLifecycleManager.",
-        replacement="LayerLifecycleManager.on_insert()",
+        details="Layer adoption is now handled by LayerLifecycleManager.",
+        replacement="LayerLifecycleManager._adopt_layer(...)",
     )
     def _adopt_layer(self, layer, index: int) -> None:
-        """
-        Run the relevant portion of on_insert() for an already-existing layer.
-        This avoids duplicating your logic and prevents reliance on napari's Event object.
-        """
-        logger.debug(
-            "Adopt layer=%r type=%s index=%s",
-            getattr(layer, "name", layer),
-            type(layer).__name__,
-            index,
-        )
-        if isinstance(layer, Image):
-            self._setup_image_layer(layer, index, reorder=True)
-        elif isinstance(layer, Points):
-            if not self.layer_manager.is_managed(layer):
-                self._setup_points_layer(layer, allow_merge=False)  # typically don’t merge during adopt
-        if not isinstance(layer, Image):
-            self._remap_frame_indices(layer)
+        self.layer_manager._adopt_layer(layer, index)
 
     def _validate_header(self, layer) -> bool:
         res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
@@ -973,7 +832,7 @@ class KeypointControls(QWidget):
         xy = points_layer.data[:, 1:3]
         superkpts_dict = io.load_superkeypoints(super_animal)
         xy_ref = np.asarray(list(superkpts_dict.values()), dtype=float)
-        neighbors = keypoints._find_nearest_neighbors(xy, xy_ref)
+        neighbors = keypoints.find_nearest_neighbors(xy, xy_ref)
         found = neighbors != -1
         if not np.any(found):
             return
@@ -1528,168 +1387,26 @@ class KeypointControls(QWidget):
             except Exception:
                 pass
 
-    def _remap_frame_indices(self, layer):
-        """
-        Best-effort remap of time/frame indices in non-Image layers to match current Image order.
-
-        Safety principles
-        -----------------
-        - Never delete or silently corrupt user data.
-        - Only write back to layer.data after a remap has been accepted as safe.
-        - Always sync non-path image metadata when possible.
-        - Do NOT replace metadata["paths"] unless remap is accepted as safe.
-        - Specifically reject ambiguous basename-only remaps (depth=1 with duplicate /
-        non-bijective warnings), which commonly happen when data are moved out of the
-        standard DLC labeled-data layout.
-        """
-        try:
-            new_paths = self._image_meta.paths
-            if not new_paths:
-                return
-
-            if layer.metadata is None:
-                layer.metadata = {}
-
-            md = layer.metadata
-            old_paths = md.get("paths") or []
-
-            # Always sync safe non-path metadata from image meta.
-            # Do NOT sync "paths" yet; that is only safe after we decide remap is acceptable.
-            try:
-                safe_image_meta = self._image_meta.model_dump(exclude_none=True)
-                safe_image_meta.pop("paths", None)
-                layer.metadata.update(safe_image_meta)
-            except Exception:
-                logger.debug(
-                    "Failed to sync non-path image metadata for layer=%r",
-                    getattr(layer, "name", str(layer)),
-                    exc_info=True,
-                )
-
-            if not old_paths:
-                logger.debug(
-                    "Skipping remap for layer=%r: no existing layer metadata paths.",
-                    getattr(layer, "name", str(layer)),
-                )
-                return
-
-            # Determine time column (napari-specific choice)
-            time_col = 1 if isinstance(layer, Tracks) else 0
-
-            if logger.isEnabledFor(logging.DEBUG):
-                arr_before = np.asarray(layer.data)
-                logger.debug(
-                    "Remap start layer=%r old_paths_len=%s new_paths_len=%s data_shape=%s frame_min=%s frame_max=%s",
-                    getattr(layer, "name", str(layer)),
-                    len(old_paths),
-                    len(new_paths or []),
-                    getattr(arr_before, "shape", None),
-                    int(np.nanmin(arr_before[:, time_col])) if arr_before.size else None,
-                    int(np.nanmax(arr_before[:, time_col])) if arr_before.size else None,
-                )
-
-            res = remap_layer_data_by_paths(
-                data=layer.data,
-                old_paths=old_paths,
-                new_paths=new_paths,
-                time_col=time_col,
-                policy=PathMatchPolicy.ORDERED_DEPTHS,
-            )
-
-            logger.debug(
-                "Remap result layer=%r changed=%s mapped_count=%s depth=%s message=%s warnings=%s",
-                getattr(layer, "name", str(layer)),
-                res.changed,
-                res.mapped_count,
-                res.depth_used,
-                res.message,
-                res.warnings,
-            )
-
-            if res.applied and res.data is not None:
-                layer.data = res.data
-
-            if res.accept_paths_update:
-                layer.metadata["paths"] = list(new_paths)
-                if isinstance(layer, Points):
-                    mark_layer_presentation_changed(layer)
-
-            # Final debug logging
-            if res.depth_used is None:
-                logger.debug("Remap skipped for %s: %s", getattr(layer, "name", str(layer)), res.message)
-            else:
-                logger.debug(
-                    "Remap %s for %s (depth=%s, mapped=%s): %s",
-                    "applied" if res.changed else "accepted-noop",
-                    getattr(layer, "name", str(layer)),
-                    res.depth_used,
-                    res.mapped_count,
-                    res.message,
-                )
-
-        except Exception:
-            logger.exception("Failed to remap frame indices for layer %s", getattr(layer, "name", str(layer)))
-            return
+    @deprecated(
+        details="Lifecycle-owned remap orchestration has moved to LayerLifecycleManager.",
+        replacement="self.layer_manager._remap_frame_indices(...)",
+    )
+    def _remap_frame_indices(self, layer) -> None:
+        self.layer_manager._remap_frame_indices(layer)
 
     @deprecated(
-        replacement="self.layer_manager", details="Direct layer management is now handled by LayerLifecycleManager"
+        replacement="self.layer_manager.on_insert(...)",
+        details="Direct layer management is now handled by LayerLifecycleManager",
     )
     def on_insert(self, event):
-        logger.debug("on_insert event received: event=%r", event)
-        layer = event.source[-1]
-        logger.debug(
-            "on_insert layer=%r type=%s index=%s",
-            getattr(layer, "name", layer),
-            type(layer).__name__,
-            getattr(event, "index", None),
-        )
-        if isinstance(layer, Image):
-            self._setup_image_layer(layer, event.index, reorder=True)
-        elif isinstance(layer, Points):
-            self._setup_points_layer(layer, allow_merge=True)
+        self.layer_manager.on_insert(event)
 
-        for layer_ in self.viewer.layers:
-            if not isinstance(layer_, Image):
-                self._remap_frame_indices(layer_)
-        self._refresh_video_panel_context()
-        self._refresh_layer_status_panel()
-
+    @deprecated(
+        details="Lifecycle-owned remove handling has moved to LayerLifecycleManager.",
+        replacement="self.layer_manager._handle_removed_layer(...)",
+    )
     def _handle_removed_layer(self, layer) -> None:
-        n_points_layer = sum(isinstance(l, Points) for l in self.viewer.layers)
-
-        if isinstance(layer, Points):
-            # self._stores.pop(layer, None)
-            self.layer_manager.unregister_managed_layer(layer)
-
-            self._update_color_scheme()
-            self._trails_controller.on_points_layer_removed(layer)
-
-            if n_points_layer == 0:
-                while self._menus:
-                    menu = self._menus.pop()
-                    self._layout.removeWidget(menu)
-                    menu.deleteLater()
-                    menu.destroy()
-
-                self._layer_to_menu = {}
-                self._trail_cb.setEnabled(False)
-                self._show_traj_plot_cb.setEnabled(False)
-                self.last_saved_label.hide()
-
-        elif isinstance(layer, Image):
-            self._image_meta = ImageMetadata()
-            paths = layer.metadata.get("paths")
-            if paths is None:
-                self.video_widget.setVisible(False)
-
-        elif isinstance(layer, Tracks):
-            was_trails = self._trails_controller.on_tracks_layer_removed(layer)
-            if was_trails:
-                with QSignalBlocker(self._trail_cb):
-                    self._trail_cb.setChecked(False)
-
-        self._refresh_video_panel_context()
-        self._refresh_layer_status_panel()
+        self.layer_manager._handle_removed_layer(layer)
 
     def _on_show_trails_toggled(self, state):
         self._trails_controller.toggle(Qt.CheckState(state) == Qt.CheckState.Checked)
@@ -1972,10 +1689,10 @@ class KeypointControls(QWidget):
             event.accept()
         cleared = self.layer_manager.clear_dead_entries(log=True)
         if cleared:
-            logger.debug("Cleared %d dead entries from layer manager on close", cleared)
+            logger.debug("Cleared %d dead entries from layer manager on close", len(cleared))
         report = self.layer_manager.audit_registry()
         if report.issues:
-            logger.warning("Layer manager audit on close reported issues:\n%s", report.format_for_logging())
+            logger.warning("Layer manager audit on close reported issues:\n%s", report.issues)
 
     def on_active_layer_change(self, event) -> None:
         """Updates the GUI when the active layer changes

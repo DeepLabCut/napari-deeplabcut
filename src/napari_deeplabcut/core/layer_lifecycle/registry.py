@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/core/layer_lifecycle/registry.py
 from __future__ import annotations
 
 import logging
@@ -33,6 +34,22 @@ class ManagedPointsRuntime(Generic[StoreT]):
     layer_id: int
     store: StoreT
     resources: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class PointsRuntimeResources:
+    """Non-Qt runtime attachments installed on a managed Points layer.
+
+    It gives the lifecycle manager one place to record what it attached and later clean up or audit.
+    Intended to fit in ManagedPointsRuntime.resources.
+    """
+
+    query_next_frame_event_added: bool = False
+    query_next_frame_connected: bool = False
+    add_wrapper_installed: bool = False
+    paste_patch_installed: bool = False
+    keybindings_installed: bool = False
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

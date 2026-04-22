@@ -1,15 +1,30 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from functools import partial
+from types import MethodType
 from typing import TYPE_CHECKING, Any
 
-from napari.layers import Image, Layer, Points
-from qtpy.QtCore import QObject, QTimer, Signal
+import numpy as np
+from napari.layers import Image, Layer, Points, Tracks
+from napari.utils.events import Event
+from napari.utils.history import update_save_history
+from qtpy.QtCore import QObject, QSignalBlocker, QTimer, Signal
 
+from ...config.keybinds import install_points_layer_keybindings
+from ...config.models import ImageMetadata
+from ...core import keypoints
+from ...core.layer_versioning import mark_layer_presentation_changed
+from ...core.metadata import migrate_points_layer_metadata
+from ...core.project_paths import PathMatchPolicy
+from ...core.remap import remap_layer_data_by_paths
+from ...napari_compat import install_add_wrapper, install_paste_patch
+from ...napari_compat.points_layer import make_paste_data
 from .registry import (
     ClearedRegistryEntry,
     ManagedPointsRuntime,
+    PointsRuntimeResources,
     RegistryAuditReport,
     RuntimeRegistry,
 )
@@ -132,6 +147,355 @@ class LayerLifecycleManager(QObject):
         self._initial_adopt_timer.start(0)
 
     # ------------------------------------------------------------------ #
+    # Layer setup managers                                               #
+    # ------------------------------------------------------------------ #
+    def _setup_image_layer(self, layer: Image, index: int | None = None, *, reorder: bool = True) -> None:
+        """Lifecycle-owned setup for an inserted/adopted Image layer.
+
+        Transitional note:
+        ------------------
+        For now this still uses owner-held image/project context fields and UI hooks.
+        Step 2 should move image/project context ownership into the manager itself.
+        """
+        md = layer.metadata or {}
+        paths = md.get("paths")
+        if paths is None:
+            try:
+                if self.owner.io.is_video(layer.name):  # optional if owner exposes io
+                    self.owner.video_widget.setVisible(True)
+            except Exception:
+                pass
+
+        # Transitional: owner still stores image/project context.
+        self.owner._update_image_meta_from_layer(layer)
+
+        if not self.owner._project_path:
+            self.owner._cache_project_path_from_image_layer(layer)
+            if self.owner._project_path is not None:
+                try:
+                    layer.metadata = dict(layer.metadata or {})
+                    layer.metadata.setdefault("project", self.owner._project_path)
+                except Exception:
+                    logger.debug(
+                        "Failed to set project path metadata on image layer %r",
+                        getattr(layer, "name", layer),
+                        exc_info=True,
+                    )
+
+        self.owner._sync_points_layers_from_image_meta()
+        self.owner._refresh_video_panel_context()
+
+        logger.debug(
+            "Setup image layer=%r index=%s reorder=%s paths_count=%s root=%r",
+            getattr(layer, "name", layer),
+            index,
+            reorder,
+            len(md.get("paths") or []),
+            md.get("root"),
+        )
+
+        if reorder and index is not None:
+            QTimer.singleShot(10, partial(self.owner._move_image_layer_to_bottom, index))
+
+    def _wire_points_layer(self, layer: Points) -> KeypointStore | None:
+        """Lifecycle-owned wiring of a managed Points layer.
+
+        Transitional note:
+        ------------------
+        The manager owns runtime attachment; the widget still owns UI completion hooks.
+        """
+        if not self.owner._validate_header(layer):
+            return None
+
+        existing = getattr(layer, "_dlc_store", None)
+        if existing is not None:
+            self.register_managed_points_layer(layer, existing)
+
+            runtime = self.get_live_runtime(layer)
+            existing_resources = None
+            if runtime is not None:
+                existing_resources = runtime.resources.get("points_runtime", None)
+
+            resources = self.attach_points_layer_runtime(
+                layer=layer,
+                store=existing,
+                controls=self.owner,
+                resolve_layer_by_id=self.resolve_live_layer,
+                get_label_mode=lambda: self.owner._label_mode,
+                schedule_recolor=self.owner._schedule_recolor,
+                existing=existing_resources,
+            )
+
+            runtime = self.get_live_runtime(layer)
+            if runtime is not None:
+                runtime.resources["points_runtime"] = resources
+
+            layer._dlc_controls = self.owner
+            return existing
+
+        mig = migrate_points_layer_metadata(layer)
+        if hasattr(mig, "errors"):
+            logger.warning(
+                "Points metadata validation failed during wiring for layer=%r: %s",
+                getattr(layer, "name", layer),
+                mig,
+            )
+
+        store = keypoints.KeypointStore(self.viewer, layer)
+        self.register_managed_points_layer(layer, store)
+
+        resources = self.attach_points_layer_runtime(
+            layer=layer,
+            store=store,
+            controls=self.owner,
+            resolve_layer_by_id=self.resolve_live_layer,
+            get_label_mode=lambda: self.owner._label_mode,
+            schedule_recolor=self.owner._schedule_recolor,
+        )
+
+        runtime = self.get_live_runtime(layer)
+        if runtime is not None:
+            runtime.resources["points_runtime"] = resources
+
+        layer._dlc_store = store
+        layer._dlc_controls = self.owner
+
+        # Transitional: owner still stores image/project context.
+        if not layer.metadata.get("root") and self.owner._image_meta.root:
+            layer.metadata["root"] = self.owner._image_meta.root
+        if not layer.metadata.get("paths") and self.owner._image_meta.paths:
+            layer.metadata["paths"] = self.owner._image_meta.paths
+
+        if root := layer.metadata.get("root"):
+            update_save_history(root)
+
+        layer.text.visible = False
+
+        if self.managed_points_count() == 1 and self.owner._is_multianimal(layer):
+            self.owner._color_mode = keypoints.ColorMode.INDIVIDUAL
+            for btn in self.owner._color_mode_selector.buttons():
+                if btn.text().lower() == str(self.owner._color_mode).lower():
+                    btn.setChecked(True)
+                    break
+
+        # Transitional: widget still owns these UI-adjacent helpers.
+        self.owner._maybe_initialize_layer_point_size_from_config(layer)
+        self.owner._connect_layer_status_events(layer)
+
+        md = layer.metadata or {}
+        logger.debug(
+            "Wire points layer=%r existing_store=%s project=%s root=%s len_paths=%s",
+            getattr(layer, "name", layer),
+            getattr(layer, "_dlc_store", None) is not None,
+            md.get("project"),
+            md.get("root"),
+            len(md.get("paths", [])),
+        )
+
+        return store
+
+    def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
+        """Lifecycle-owned setup for an inserted/adopted Points layer."""
+        if not self.owner._validate_header(layer):
+            return
+
+        # Transitional: merge policy still lives in the widget for now.
+        if allow_merge and self.owner._maybe_merge_config_points_layer(layer):
+            return
+
+        store = self._wire_points_layer(layer)
+        if store is None:
+            return
+
+        # Widget owns UI completion only.
+        self.owner._complete_points_layer_ui_setup(layer, store)
+
+        logger.debug(
+            "Setup points layer=%r allow_merge=%s metadata_keys=%s",
+            getattr(layer, "name", layer),
+            allow_merge,
+            sorted((layer.metadata or {}).keys()),
+        )
+
+    def _handle_removed_layer(self, layer: Any) -> None:
+        """Lifecycle-owned remove handling.
+
+        Transitional note:
+        ------------------
+        UI/menu cleanup still delegates to a widget-owned UI hook.
+        """
+        n_points_layer = sum(isinstance(l, Points) for l in self.viewer.layers)
+
+        if isinstance(layer, Points):
+            self.unregister_managed_layer(layer)
+            self.owner._on_points_layer_removed_ui(layer, remaining_points_layers=n_points_layer)
+
+        elif isinstance(layer, Image):
+            # Transitional: owner still stores image context.
+            self.owner._image_meta = ImageMetadata()
+            paths = layer.metadata.get("paths")
+            if paths is None:
+                self.owner.video_widget.setVisible(False)
+
+        elif isinstance(layer, Tracks):
+            was_trails = self.owner._trails_controller.on_tracks_layer_removed(layer)
+            if was_trails:
+                with QSignalBlocker(self.owner._trail_cb):
+                    self.owner._trail_cb.setChecked(False)
+
+        self.owner._refresh_video_panel_context()
+        self.owner._refresh_layer_status_panel()
+
+    def _remap_frame_indices(self, layer: Any) -> None:
+        """Lifecycle-owned remap of non-Image layer time/frame indices."""
+        try:
+            new_paths = self.owner._image_meta.paths
+            if not new_paths:
+                return
+
+            if layer.metadata is None:
+                layer.metadata = {}
+
+            md = layer.metadata
+            old_paths = md.get("paths") or []
+
+            try:
+                safe_image_meta = self.owner._image_meta.model_dump(exclude_none=True)
+                safe_image_meta.pop("paths", None)
+                layer.metadata.update(safe_image_meta)
+            except Exception:
+                logger.debug(
+                    "Failed to sync non-path image metadata for layer=%r",
+                    getattr(layer, "name", str(layer)),
+                    exc_info=True,
+                )
+
+            if not old_paths:
+                logger.debug(
+                    "Skipping remap for layer=%r: no existing layer metadata paths.",
+                    getattr(layer, "name", str(layer)),
+                )
+                return
+
+            time_col = 1 if isinstance(layer, Tracks) else 0
+
+            if logger.isEnabledFor(logging.DEBUG):
+                arr_before = np.asarray(layer.data)
+                logger.debug(
+                    "Remap start layer=%r old_paths_len=%s new_paths_len=%s data_shape=%s frame_min=%s frame_max=%s",
+                    getattr(layer, "name", str(layer)),
+                    len(old_paths),
+                    len(new_paths or []),
+                    getattr(arr_before, "shape", None),
+                    int(np.nanmin(arr_before[:, time_col])) if arr_before.size else None,
+                    int(np.nanmax(arr_before[:, time_col])) if arr_before.size else None,
+                )
+
+            res = remap_layer_data_by_paths(
+                data=layer.data,
+                old_paths=old_paths,
+                new_paths=new_paths,
+                time_col=time_col,
+                policy=PathMatchPolicy.ORDERED_DEPTHS,
+            )
+
+            logger.debug(
+                "Remap result layer=%r changed=%s mapped_count=%s depth=%s message=%s warnings=%s",
+                getattr(layer, "name", str(layer)),
+                res.changed,
+                res.mapped_count,
+                res.depth_used,
+                res.message,
+                res.warnings,
+            )
+
+            if res.applied and res.data is not None:
+                layer.data = res.data
+
+            if res.accept_paths_update:
+                layer.metadata["paths"] = list(new_paths)
+                if isinstance(layer, Points):
+                    mark_layer_presentation_changed(layer)
+
+            if res.depth_used is None:
+                logger.debug("Remap skipped for %s: %s", getattr(layer, "name", str(layer)), res.message)
+            else:
+                logger.debug(
+                    "Remap %s for %s (depth=%s, mapped=%s): %s",
+                    "applied" if res.changed else "accepted-noop",
+                    getattr(layer, "name", str(layer)),
+                    res.depth_used,
+                    res.mapped_count,
+                    res.message,
+                )
+
+        except Exception:
+            logger.exception("Failed to remap frame indices for layer %s", getattr(layer, "name", str(layer)))
+
+    def attach_points_layer_runtime(
+        self,
+        *,
+        layer: Points,
+        store: keypoints.KeypointStore,
+        controls: Any,
+        resolve_layer_by_id: Callable[[int], Points | None],
+        get_label_mode: Callable[[], Any],
+        schedule_recolor: Callable[[Points], None],
+        existing_resources: PointsRuntimeResources | None = None,
+    ) -> PointsRuntimeResources:
+        """Attach managed runtime behavior to a Points layer.
+
+        Responsibilities
+        ----------------
+        - bind lifecycle-backed layer resolution to the store
+        - bind label-mode getter to the store
+        - install paste patch
+        - install add wrapper
+        - add/connect query_next_frame event
+        - install points-layer keybindings
+
+        This helper does NOT:
+        - register the runtime in the lifecycle registry
+        - own UI/menu setup
+        - decide merge/remap/save policy
+        """
+        resources = existing_resources or PointsRuntimeResources()
+
+        # Narrow lifecycle dependencies injected explicitly.
+        store.attach_layer_resolver(resolve_layer_by_id)
+        store.set_label_mode_getter(get_label_mode)
+
+        # Copy/paste patch
+        if not resources.paste_patch_installed:
+            paste_func = make_paste_data(controls, store=store)
+            install_paste_patch(layer, paste_func=paste_func)
+            resources.paste_patch_installed = True
+
+        # Add layer to store
+        if not resources.add_wrapper_installed:
+            add_impl = MethodType(keypoints.KeypointStore.add, store)
+            install_add_wrapper(layer, add_impl=add_impl, schedule_recolor=schedule_recolor)
+            resources.add_wrapper_installed = True
+
+        # layer-specific navigation event
+        if not hasattr(layer.events, "query_next_frame"):
+            layer.events.add(query_next_frame=Event)
+            resources.query_next_frame_event_added = True
+
+        if not resources.query_next_frame_connected:
+            try:
+                layer.events.query_next_frame.connect(store._advance_step)
+                resources.query_next_frame_connected = True
+            except Exception:
+                pass
+
+        if not resources.keybindings_installed:
+            install_points_layer_keybindings(layer, controls, store)
+            resources.keybindings_installed = True
+
+        return resources
+
+    # ------------------------------------------------------------------ #
     # Registry facade                                                    #
     # ------------------------------------------------------------------ #
 
@@ -191,13 +555,13 @@ class LayerLifecycleManager(QObject):
         )
 
         if isinstance(layer, Image):
-            self.owner._setup_image_layer(layer, getattr(event, "index", None), reorder=True)
+            self._setup_image_layer(layer, getattr(event, "index", None), reorder=True)
         elif isinstance(layer, Points):
-            self.owner._setup_points_layer(layer, allow_merge=True)
+            self._setup_points_layer(layer, allow_merge=True)
 
         for layer_ in self.viewer.layers:
             if not isinstance(layer_, Image):
-                self.owner._remap_frame_indices(layer_)
+                self._remap_frame_indices(layer_)
 
         self.owner._refresh_video_panel_context()
         self.owner._refresh_layer_status_panel()
@@ -215,12 +579,8 @@ class LayerLifecycleManager(QObject):
             type(layer).__name__,
         )
 
-        self.owner._handle_removed_layer(layer)
+        self._handle_removed_layer(layer)
         self.layer_remove_processed.emit(layer)
-
-    # ------------------------------------------------------------------ #
-    # internals                                                          #
-    # ------------------------------------------------------------------ #
 
     def _adopt_layer(self, layer: Any, index: int) -> None:
         logger.debug(
@@ -231,13 +591,13 @@ class LayerLifecycleManager(QObject):
         )
 
         if isinstance(layer, Image):
-            self.owner._setup_image_layer(layer, index, reorder=True)
+            self._setup_image_layer(layer, index, reorder=True)
         elif isinstance(layer, Points):
             if not self.registry.is_managed(layer):
-                self.owner._setup_points_layer(layer, allow_merge=False)
+                self._setup_points_layer(layer, allow_merge=False)
 
         if not isinstance(layer, Image):
-            self.owner._remap_frame_indices(layer)
+            self._remap_frame_indices(layer)
 
     def _resolve_inserted_layer(self, event: Any) -> Any | None:
         # Best case: event carries the inserted value directly
