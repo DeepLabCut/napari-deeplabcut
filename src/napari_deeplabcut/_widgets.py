@@ -17,10 +17,6 @@ NOTE: This file is generally already too long. For future development, please co
 TODO: And general dev notes:
 - The saving workflow is crammed into save_layers_dialog() right now,
   and should move to a dedicated  e.g. PointsLayerSaveFactory class in a dedicated file.
-- Project/root/paths/image-meta/points-meta synchronization should be centralized.
-  It is too distributed right now, and it can be unclear "which truth" is authoritative.
-  Some sort of context-manager class would likely help.
-- Maybe a dedicated layer lifecycle system would help, for layer adoption and setup.
 - Something that owns UI sync state (what to refresh, why, when) could help with the heavy wiring.
 - I'd suggest keeping in this file:
     - color/label mode, menu/help actions, widget visibility and user interaction hooks.
@@ -41,7 +37,6 @@ import numpy as np
 from napari.layers import Image, Points
 from napari.utils.events import Event
 from napari.utils.history import get_save_history
-from pydantic import ValidationError
 from qtpy.QtCore import QSettings, QSignalBlocker, Qt, QTimer
 from qtpy.QtGui import QAction
 from qtpy.QtWidgets import (
@@ -206,14 +201,6 @@ class KeypointControls(ViewerSingletonWidget):
         self._debug_recorder = install_debug_recorder()
         self._debug_window = None
         ###########
-
-        # self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
-        #     _get_and_try_preferred_reader,
-        #     self.viewer.window.qt_viewer,
-        # )
-        # Project data
-        # self._project_path: str | None = None # DEPRECATED, owned by LayerLifecycleManager
-
         status_bar = self.viewer.window._qt_window.statusBar()
         self.last_saved_label = QLabel("")
         self.last_saved_label.hide()
@@ -221,9 +208,6 @@ class KeypointControls(ViewerSingletonWidget):
 
         self._color_mode = keypoints.ColorMode.default()
         self._label_mode = keypoints.LabelMode.default()
-
-        # Hold references to the KeypointStores
-        # self._stores = {} # DEPRECATED, use self.layer_manager instead
 
         # Intercept close event if data were not saved
         qt_win = self.viewer.window._qt_window
@@ -245,7 +229,6 @@ class KeypointControls(ViewerSingletonWidget):
         # Storage for extra image metadata that are relevant to other layers.
         # These are updated anytime images are added to the Viewer
         # and passed on to the other layers upon creation.
-        # self._image_meta = ImageMetadata() # DEPRECATED, owned by LayerLifecycleManager
         # Storage for layers requiring recoloring
         self._recolor_pending = set()
 
@@ -384,17 +367,8 @@ class KeypointControls(ViewerSingletonWidget):
         # self.viewer.window._qt_viewer.layerButtons.newPointsButton.setDisabled(True)
         self.viewer.window._qt_viewer.layerButtons.newLabelsButton.setDisabled(True)
 
-        # Disable tutorial on first launch for now. Can be accessed any time from the button.
-        # if self.settings.value("first_launch", True) and not os.environ.get(
-        #     "NAPARI_DLC_HIDE_TUTORIAL", False
-        # ):
-        #     QTimer.singleShot(10, self.start_tutorial)
-        #     self.settings.setValue("first_launch", False)
-
         # Slightly delay docking so it is shown underneath the KeypointsControls widget
-        # NOTE while a timer may seem hacky, it is a simple, one-line solution that minimizes intrusion
-        # There are to my knowledge no other way that is as concise and clean
-        # (Of course this will be a problem if we start using it everywhere so do not reuse lightly)
+        # NOTE we may want to switch to timers owned by the widget instead of fire-and-forget
         QTimer.singleShot(10, self.silently_dock_canvas)
 
         # If layers already exist (user loaded data before opening this widget),
@@ -404,24 +378,6 @@ class KeypointControls(ViewerSingletonWidget):
 
         # Refresh layers stats widget
         QTimer.singleShot(0, self._refresh_layer_status_panel)
-
-        self.destroyed.connect(self._on_destroyed)
-
-    def _on_destroyed(self, *args) -> None:
-        canonical = getattr(self, "_viewer_identity", None)
-        if canonical is None:
-            return
-
-        ref = self.__class__._instances.get(canonical)
-        if ref is not None and ref() is self:
-            self.__class__._instances.pop(canonical, None)
-
-        # Optional: clear manager merge provider if this widget registered itself
-        try:
-            if getattr(self, "layer_manager", None) is not None:
-                self.layer_manager.set_merge_decision_provider(None)
-        except Exception:
-            pass
 
     @cached_property
     def settings(self):
@@ -548,7 +504,7 @@ class KeypointControls(ViewerSingletonWidget):
         if not request.added_keypoints:
             return MergeDecisionResult(disposition=MergeDisposition.KEEP_BOTH)
 
-        shared = "Do you want to keep the existing keypoints visible and add the new ones as a separate layer?"
+        shared = "Do you want to hide the existing keypoints and add the new ones as a separate layer?"
         text = f"{request.message}\n\n{shared}" if request.message else shared
         answer = QMessageBox.question(
             self,
@@ -825,16 +781,6 @@ class KeypointControls(ViewerSingletonWidget):
         if {"selection", "active_layer", "layers"} & set(event.reasons):
             traj_canvas.sync_visible_lines_to_points_selection()
 
-    def _refresh_trajectory_plot_from_layers(self) -> None:
-        """
-        Refresh trajectory plot from the current viewer state.
-
-        Deferred through QTimer so it runs after layer adoption/remap settles.
-        """
-        traj_canvas = self._safe_get_traj_canvas()
-        if traj_canvas is not None:
-            QTimer.singleShot(0, traj_canvas.refresh_from_viewer_layers)
-
     def load_superkeypoints_diagram(self):
         points_layer = get_first_points_layer(self.viewer)
         if points_layer is None:
@@ -1055,7 +1001,8 @@ class KeypointControls(ViewerSingletonWidget):
         except Exception:
             return None
 
-        if isinstance(res, ValidationError):
+        # if isinstance(res, ValidationError):
+        if hasattr(res, "errors"):
             return None
 
         if getattr(res, "header", None) is None:
@@ -1347,7 +1294,8 @@ class KeypointControls(ViewerSingletonWidget):
             )
 
         res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
-        if isinstance(res, ValidationError):
+        # if isinstance(res, ValidationError):
+        if hasattr(res, "errors"):
             logger.warning(
                 "Points metadata validation failed for layer=%r during save target check: %s",
                 getattr(layer, "name", layer),
