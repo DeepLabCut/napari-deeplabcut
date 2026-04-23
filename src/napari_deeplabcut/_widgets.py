@@ -873,7 +873,8 @@ class KeypointControls(ViewerSingletonWidget):
             active_image if active_image is not None else active_layer,
             fallback_root=self.layer_manager.image_root,
         )
-        self._layer_status_panel.set_folder_name(folder_name)
+        project_path = self.layer_manager.project_path
+        self._layer_status_panel.set_folder_name(folder_name, full_path=project_path)
 
         # No active layer or not a Points layer at all
         if active_layer is None or not isinstance(active_layer, Points):
