@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -7,18 +9,21 @@ from napari_deeplabcut.tracking._widgets import TrackingControls
 from napari_deeplabcut.tracking.core.data import TrackingWorkerData
 from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS
 
+if TYPE_CHECKING:
+    import napari
+
 _DUMMY_VIDEO_N_FRAMES = 10
 
 
-def _get_tracking_controls(viewer):
+def _get_tracking_controls(viewer: "napari.Viewer") -> TrackingControls:
     viewer.window.add_dock_widget(
         TrackingControls(viewer),
         name="Tracking controls",
         area="right",
     )
-    for _title, dock in viewer.window.dock_widgets.items():
-        if dock.property("ndlc_tracking_controls"):
-            return dock
+    for _title, wdg in viewer.window.dock_widgets.items():
+        if isinstance(wdg, TrackingControls) and wdg.property("ndlc_tracking_controls"):
+            return wdg
     raise RuntimeError("Tracking controls dock widget not found")
 
 
