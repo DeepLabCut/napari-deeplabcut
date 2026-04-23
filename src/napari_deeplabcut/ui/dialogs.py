@@ -1,3 +1,8 @@
+"""Common dialogs used in napari-deeplabcut.
+
+NOTE: could be split into dialogs/tutorial.py, dialogs/shortcuts.py, dialogs/config_prompt.py, etc.
+"""
+
 # src/napari_deeplabcut/ui/dialogs.py
 from __future__ import annotations
 
