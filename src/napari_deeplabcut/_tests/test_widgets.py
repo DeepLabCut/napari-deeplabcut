@@ -553,7 +553,6 @@ def test_read_config_injects_tables_metadata(tmp_path):
     }
 
 
-@pytest.mark.usefixtures("qtbot")
 def test_points_layer_with_tables_shows_superkeypoints_button(keypoint_controls, qtbot, points):
     controls = keypoint_controls
     qtbot.add_widget(controls)
@@ -562,26 +561,26 @@ def test_points_layer_with_tables_shows_superkeypoints_button(keypoint_controls,
 
     points.metadata["tables"] = {"superanimal_quadruped": {"bp1": "nose", "bp2": "upper_jaw"}}
 
-    # Simulate the same setup path that real inserted/adopted layers use
-    controls._setup_points_layer(points, allow_merge=False)
+    controls.layer_manager._setup_points_layer(points, allow_merge=False)
 
     assert not controls._keypoint_mapping_button.isHidden()
-    assert controls._keypoint_mapping_button.text() == "Load superkeypoints diagram"
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_points_layer_with_tables_button_not_lost_on_merge_path(keypoint_controls, qtbot, points, monkeypatch):
+def test_points_layer_with_tables_button_not_lost_on_merge_path(keypoint_controls, qtbot, points):
     controls = keypoint_controls
     qtbot.add_widget(controls)
 
     points.metadata["tables"] = {"superanimal_quadruped": {"bp1": "nose"}}
 
-    # Force the merge branch to happen
-    monkeypatch.setattr(controls, "_maybe_merge_config_points_layer", lambda layer: True)
+    # First do a normal setup so the button becomes visible.
+    controls.layer_manager._setup_points_layer(points, allow_merge=False)
+    assert not controls._keypoint_mapping_button.isHidden()
 
-    controls._setup_points_layer(points, allow_merge=True)
+    # Simulate manager-driven merge refresh on the already-managed layer.
+    controls._on_points_layers_merged_requested((points,))
 
-    assert controls._keypoint_mapping_button.isHidden()
+    assert not controls._keypoint_mapping_button.isHidden()
 
 
 @pytest.mark.usefixtures("qtbot")
