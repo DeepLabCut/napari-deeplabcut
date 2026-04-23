@@ -152,7 +152,7 @@ class LayerStatusPanel(QGroupBox):
         text = folder_name or "—"
         self._folder_value.setText(text)
 
-        tooltip = (full_path or "No open project folder").strip()
+        tooltip = (f"Project: {full_path}" if full_path else "No open project folder").strip()
         self._folder_value.setToolTip(tooltip)
 
     def _show_progress_context_menu(self, pos) -> None:
