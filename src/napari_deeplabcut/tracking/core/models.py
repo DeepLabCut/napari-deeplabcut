@@ -14,7 +14,7 @@ from napari_deeplabcut.tracking.core.data import (
 )
 
 if TYPE_CHECKING:
-    from napari_deeplabcut.tracking.core.data import TrackingModel
+    from napari_deeplabcut.tracking.core.models import TrackingModel
 
 # List of available tracking models.
 # Automatically populated via the @register_backbone decorator.

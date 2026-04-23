@@ -39,6 +39,7 @@ from napari_deeplabcut.config.keybinds import (
 # Keybinds
 from napari_deeplabcut.config.settings import TRACKING_SHORTCUTS_ENABLED
 from napari_deeplabcut.core.keypoints import KeypointStore
+from napari_deeplabcut.core.layer_lifecycle import get_or_create_layer_manager
 from napari_deeplabcut.tracking.core.data import (
     TrackingWorkerData,
     TrackingWorkerOutput,
@@ -58,10 +59,10 @@ class TrackingControls(QWidget):
 
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
+        self._viewer: Viewer = viewer
+        self.lifecycle_manager = get_or_create_layer_manager(viewer)
         # self.setObjectName("napari-deeplabcut-tracking-controls")
         self.setProperty("ndlc_tracking_controls", True)
-
-        self._viewer: Viewer = viewer
 
         # Layout
         ## Data and model selection
