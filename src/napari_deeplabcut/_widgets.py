@@ -42,7 +42,7 @@ from napari.layers import Image, Points
 from napari.utils.events import Event
 from napari.utils.history import get_save_history
 from pydantic import ValidationError
-from qtpy.QtCore import QSettings, Qt, QTimer
+from qtpy.QtCore import QSettings, QSignalBlocker, Qt, QTimer
 from qtpy.QtGui import QAction
 from qtpy.QtWidgets import (
     QButtonGroup,
@@ -57,7 +57,6 @@ from qtpy.QtWidgets import (
     QPushButton,
     QRadioButton,
     QVBoxLayout,
-    QWidget,
 )
 
 from . import misc
@@ -65,7 +64,7 @@ from .config import settings
 from .config.keybinds import (
     install_global_points_keybindings,
 )
-from .config.models import DLCHeaderModel, ImageMetadata, PointsMetadata
+from .config.models import ImageMetadata, PointsMetadata
 from .core import io, keypoints
 from .core.config_sync import (
     load_point_size_from_config,
@@ -73,7 +72,13 @@ from .core.config_sync import (
     save_point_size_to_config,
 )
 from .core.conflicts import compute_overwrite_report_for_points_save
-from .core.layer_lifecycle import LayerLifecycleManager
+from .core.layer_lifecycle import (
+    MergeDecisionRequest,
+    MergeDecisionResult,
+    MergeDisposition,
+    PointsLayerSetupRequest,
+    get_or_create_layer_manager,
+)
 from .core.layer_versioning import mark_layer_presentation_changed
 from .core.layers import (
     PointsInteractionEvent,
@@ -117,6 +122,7 @@ from .napari_compat import (
     register_points_action,
 )
 from .ui import dialogs as ui_dialogs
+from .ui.base_widget import ViewerSingletonWidget
 from .ui.color_scheme_display import ColorSchemePanel
 from .ui.cropping import (
     build_video_action_menu,
@@ -134,7 +140,6 @@ from .ui.labels_and_dropdown import (
 from .ui.layer_stats import LayerStatusPanel
 from .ui.plots.trajectory import TrajectoryMatplotlibCanvas
 from .utils.debug import get_debug_recorder, install_debug_recorder, log_timing
-from .utils.deprecations import deprecated
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
 # logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
@@ -169,39 +174,37 @@ def _temporary_layer_metadata(layer: Points, metadata: dict):
         layer.metadata = old_metadata
 
 
-class KeypointControls(QWidget):
+class KeypointControls(ViewerSingletonWidget):
     def __init__(self, napari_viewer):
+        if not self._singleton_prepare_init(napari_viewer=napari_viewer):
+            return
+
         super().__init__()
+        self._singleton_finalize_init()
+        self.viewer = self.canonical_viewer(napari_viewer)
+
         # Monkey-patch napari continuous variable type guess
         patch_color_manager_guess_continuous()
-
         self._is_saved = False
 
-        self.viewer = napari_viewer
-
         # Layer lifecycle manager
-        self.layer_manager = LayerLifecycleManager(owner=self)
-        self.layer_manager.attach()
+        self.layer_manager = get_or_create_layer_manager(self.viewer)
+        self.layer_manager.set_merge_decision_provider(self)
         ## Hook up signals for layer lifecycle events as needed, e.g.:
-        self.layer_manager.session_conflict_rejected.connect(
-            self._on_session_conflict_detected,
-        )
-        # self.viewer.layers.events.inserted.connect(self.on_insert)
-        # self.viewer.layers.events.removed.connect(self.on_remove)
+        self.layer_manager.session_conflict_rejected.connect(self._on_session_conflict_detected)
+        self.layer_manager.refresh_video_panel_requested.connect(self._refresh_video_panel_context)
+        self.layer_manager.refresh_layer_status_requested.connect(self._refresh_layer_status_panel)
+        self.layer_manager.video_widget_visibility_requested.connect(self._on_video_widget_visibility_requested)
+        self.layer_manager.move_image_layer_to_bottom_requested.connect(self._move_image_layer_to_bottom)
+
+        self.layer_manager.points_layer_setup_requested.connect(self._on_points_layer_setup_requested)
+        self.layer_manager.points_layers_merged_requested.connect(self._on_points_layers_merged_requested)
+        self.layer_manager.points_layer_removed_requested.connect(self._on_points_layer_removed_requested)
+        self.layer_manager.tracks_layer_removed_requested.connect(self._on_tracks_layer_removed_requested)
 
         ## Debug ##
         self._debug_recorder = install_debug_recorder()
         self._debug_window = None
-        ###########
-
-        ## Debug ##
-        self._debug_recorder = install_debug_recorder()
-        self._debug_window = None
-
-        show_debug_action = QAction("&Generate napari-dlc log", self)
-        show_debug_action.setToolTip("Show a debug report with recent plugin logs")
-        show_debug_action.triggered.connect(self._show_debug_window)
-        self.viewer.window.help_menu.addAction(show_debug_action)
         ###########
 
         # self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
@@ -329,7 +332,7 @@ class KeypointControls(QWidget):
         self._color_scheme_panel = ColorSchemePanel(
             viewer=self.viewer,
             get_color_mode=lambda: self.color_mode,
-            get_header_model=self._get_header_model_from_metadata,
+            get_header_model=self.layer_manager.get_header_model_from_metadata,
             parent=self,
         )
         self._color_scheme_display = self.viewer.window.add_dock_widget(
@@ -401,6 +404,24 @@ class KeypointControls(QWidget):
 
         # Refresh layers stats widget
         QTimer.singleShot(0, self._refresh_layer_status_panel)
+
+        self.destroyed.connect(self._on_destroyed)
+
+    def _on_destroyed(self, *args) -> None:
+        canonical = getattr(self, "_viewer_identity", None)
+        if canonical is None:
+            return
+
+        ref = self.__class__._instances.get(canonical)
+        if ref is not None and ref() is self:
+            self.__class__._instances.pop(canonical, None)
+
+        # Optional: clear manager merge provider if this widget registered itself
+        try:
+            if getattr(self, "layer_manager", None) is not None:
+                self.layer_manager.set_merge_decision_provider(None)
+        except Exception:
+            pass
 
     @cached_property
     def settings(self):
@@ -480,25 +501,10 @@ class KeypointControls(QWidget):
         self._update_color_scheme()
         self._trails_controller.on_points_visual_inputs_changed(checkbox_checked=self._trail_cb.isChecked())
 
-    def _is_multianimal(self, layer) -> bool:
-        if layer is None or not isinstance(layer, Points):
-            return False
-
-        md = layer.metadata or {}
-        hdr = self._get_header_model_from_metadata(md)
-        if hdr is None:
-            return False
-
-        try:
-            inds = hdr.individuals
-            return bool(inds and len(inds) > 0 and str(inds[0]) != "")
-        except Exception:
-            return False
-
     def _active_layer_is_multianimal(self) -> bool:
         """Returns: whether the active layer is a multi-animal points layer"""
         for layer in self.viewer.layers.selection:
-            if self._is_multianimal(layer):
+            if self.layer_manager.is_multianimal(layer):
                 return True
 
         return False
@@ -538,198 +544,52 @@ class KeypointControls(QWidget):
     # ######################## #
     # Layer setup core methods #
     # ######################## #
+    def resolve_merge(self, request: MergeDecisionRequest) -> MergeDecisionResult:
+        if not request.added_keypoints:
+            return MergeDecisionResult(disposition=MergeDisposition.KEEP_BOTH)
 
-    @deprecated(
-        details="Lifecycle-owned image setup has moved to LayerLifecycleManager.",
-        replacement="self.layer_manager._setup_image_layer(...)",
-    )
-    def _setup_image_layer(self, layer: Image, index: int | None = None, *, reorder: bool = True) -> None:
-        self.layer_manager._setup_image_layer(layer, index=index, reorder=reorder)
-
-    def _is_config_placeholder_points_layer(self, layer: Points) -> bool:
-        """Return True if this looks like the temporary config placeholder layer.
-
-        Conservative rule:
-        - must be a Points layer
-        - must carry a project hint
-        - must not already be tied to image/root/paths context
-        - must not contain actual point data
-        """
-        if layer is None or not isinstance(layer, Points):
-            return False
-
-        md = layer.metadata or {}
-        if not md.get("project"):
-            return False
-
-        # Real labeled/prediction layers usually carry image/root/paths context.
-        if md.get("root") or md.get("paths"):
-            return False
-
-        try:
-            data = np.asarray(layer.data) if layer.data is not None else np.empty((0, 3))
-        except Exception:
-            data = np.empty((0, 3))
-
-        return data.size == 0
-
-    def _maybe_merge_config_points_layer(self, layer: Points) -> bool:
-        """Merge a temporary config placeholder layer into existing managed layers.
-
-        Semantics
-        ---------
-        - Only consumes true config placeholder layers.
-        - The placeholder layer is temporary and is removed after merge.
-        - Existing managed points layers remain authoritative.
-        - If new keypoints are introduced, the user may optionally hide the
-          currently visible managed layer to focus on the new keypoints.
-        """
-        if not self._is_config_placeholder_points_layer(layer):
-            return False
-
-        managed = list(self.layer_manager.iter_managed_points())
-        if not managed:
-            return False
-
-        md = layer.metadata or {}
-        logger.debug(
-            "Maybe merge config placeholder layer=%r project=%r managed_layers=%d",
-            getattr(layer, "name", layer),
-            md.get("project"),
-            len(managed),
+        shared = "Do you want to keep the existing keypoints visible and add the new ones as a separate layer?"
+        text = f"{request.message}\n\n{shared}" if request.message else shared
+        answer = QMessageBox.question(
+            self,
+            "",
+            text,
+            QMessageBox.Yes | QMessageBox.No,
         )
 
-        new_metadata = md.copy()
-        new_header = self._get_header_model_from_metadata(new_metadata)
-        if new_header is None:
-            logger.debug(
-                "Skipping config placeholder merge for layer=%r: missing/invalid header",
-                getattr(layer, "name", layer),
-            )
-            return False
+        if answer == QMessageBox.Yes:
+            return MergeDecisionResult(disposition=MergeDisposition.HIDE_EXISTING)
 
-        # Use an actual managed layer as the reference source of truth,
-        # not the first dropdown menu.
-        reference_layer, _reference_store = managed[0]
-        reference_header = self._get_header_model_from_metadata(reference_layer.metadata or {})
-        if reference_header is None:
-            logger.debug(
-                "Skipping config placeholder merge for layer=%r: reference managed layer has no valid header",
-                getattr(layer, "name", layer),
-            )
-            return False
+        return MergeDecisionResult(disposition=MergeDisposition.KEEP_BOTH)
 
-        current_keypoint_set = set(reference_header.bodyparts)
-        new_keypoint_set = set(new_header.bodyparts)
-        diff = new_keypoint_set.difference(current_keypoint_set)
-
-        placeholder_layer = layer
-
-        # Identify the currently visible existing managed layer that we may hide.
-        visible_existing_layer = None
-        for managed_layer, _store in managed:
-            if managed_layer is placeholder_layer:
-                continue
-            try:
-                if getattr(managed_layer, "visible", True):
-                    visible_existing_layer = managed_layer
-                    break
-            except Exception:
-                visible_existing_layer = managed_layer
-                break
-
-        if diff:
-            answer = QMessageBox.question(
-                self,
-                "",
-                "Do you want to display the new keypoints only?",
-            )
-            if answer == QMessageBox.Yes and visible_existing_layer is not None:
-                self.layer_manager._set_layer_visible(visible_existing_layer, False)
-                logger.debug(
-                    "Config placeholder merge layer=%r new_keypoints=%s hid_existing_layer=%r",
-                    getattr(layer, "name", layer),
-                    sorted(diff),
-                    getattr(visible_existing_layer, "name", visible_existing_layer),
-                )
-
-            self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(sorted(diff))} found."
-
-        # Merge header into all managed layers.
-        for managed_layer, store in managed:
-            pts = read_points_meta(
-                managed_layer,
-                migrate_legacy=True,
-                drop_controls=True,
-                drop_header=False,
-            )
-            if not hasattr(pts, "errors"):
-                updated = pts.model_copy(update={"header": new_header})
-                write_points_meta(
-                    managed_layer,
-                    updated,
-                    merge_policy=MergePolicy.MERGE,
-                    fields={"header"},
-                )
-            store.layer = managed_layer
-
-        # Refresh dropdown menus after header/bodypart changes.
-        for menu in self._menus:
-            try:
-                menu._map_individuals_to_bodyparts()
-                menu._update_items()
-            except Exception:
-                logger.debug("Failed to refresh dropdown menu after config merge", exc_info=True)
-
-        # Apply updated presentation metadata to existing managed layers.
-        for managed_layer, store in managed:
-            managed_layer.metadata["config_colormap"] = new_metadata.get(
-                "config_colormap",
-                managed_layer.metadata.get("config_colormap"),
-            )
-            if "face_color_cycles" in new_metadata:
-                managed_layer.metadata["face_color_cycles"] = new_metadata["face_color_cycles"]
-            managed_layer.metadata["colormap_name"] = new_metadata.get(
-                "colormap_name",
-                managed_layer.metadata.get("colormap_name"),
-            )
-
-            mark_layer_presentation_changed(managed_layer)
-            self._apply_points_coloring_from_metadata(managed_layer)
-            store.layer = managed_layer
-
-        # Remove the temporary placeholder layer explicitly by identity.
-        QTimer.singleShot(
-            0,
-            lambda ly=placeholder_layer: self.layer_manager._remove_layer_if_present(ly),
-        )
-
-        self._update_color_scheme()
-        return True
-
-    def _get_header_model_from_metadata(self, md: dict) -> DLCHeaderModel | None:
-        """Return DLCHeaderModel regardless of whether md['header'] is a model, dict payload, or MultiIndex."""
-        if not isinstance(md, dict):
-            return None
-        hdr = md.get("header", None)
-        if hdr is None:
-            return None
-
-        if isinstance(hdr, DLCHeaderModel):
-            logger.debug("Header is already a DLCHeaderModel instance.")
-            return hdr
-
-        if isinstance(hdr, dict):
-            try:
-                return DLCHeaderModel.model_validate(hdr)
-            except Exception:
-                return None
-
-        # fallback: allow MultiIndex / list-of-tuples / Index inputs
+    def _on_points_layers_merged_requested(self, layers: tuple[Points, ...]) -> None:
+        """Refresh widget-owned UI after manager merged placeholder config into managed layers."""
         try:
-            return DLCHeaderModel(columns=hdr)
+            # Refresh dropdown menus after header/bodypart changes.
+            for menu in self._menus:
+                try:
+                    menu._map_individuals_to_bodyparts()
+                    menu._update_items()
+                except Exception:
+                    logger.debug("Failed to refresh dropdown menu after config merge", exc_info=True)
+
+            # Re-apply presentation metadata to affected layers.
+            for layer in layers:
+                try:
+                    self._apply_points_coloring_from_metadata(layer)
+                except Exception:
+                    logger.debug(
+                        "Failed to re-apply points coloring after merge for layer=%r",
+                        getattr(layer, "name", layer),
+                        exc_info=True,
+                    )
+
+            self._update_color_scheme()
+            self._trails_controller.on_points_visual_inputs_changed(checkbox_checked=self._trail_cb.isChecked())
+            self._refresh_layer_status_panel()
+
         except Exception:
-            return None
+            logger.debug("Failed to refresh widget state after merged points update", exc_info=True)
 
     @staticmethod
     def get_layer_controls(layer: Points) -> KeypointControls | None:
@@ -738,13 +598,6 @@ class KeypointControls(QWidget):
     @staticmethod
     def get_layer_store(layer: Points) -> keypoints.KeypointStore | None:
         return getattr(layer, "_dlc_store", None)
-
-    @deprecated(
-        details="Lifecycle-owned points wiring has moved to LayerLifecycleManager.",
-        replacement="self.layer_manager._wire_points_layer(...)",
-    )
-    def _wire_points_layer(self, layer: Points) -> keypoints.KeypointStore | None:
-        return self.layer_manager._wire_points_layer(layer)
 
     # ------------------------------------------------------------------ #
     # UI-only hooks used by LayerLifecycleManager                        #
@@ -771,7 +624,8 @@ class KeypointControls(QWidget):
         self._apply_points_coloring_from_metadata(layer)
         self._trails_controller.on_points_layer_added_or_rewired(checkbox_checked=self._trail_cb.isChecked())
 
-        self._form_dropdown_menus(store)
+        if layer not in self._layer_to_menu:
+            self._form_dropdown_menus(store)
 
         # proj = layer.metadata.get("project") # MOVED to LayerLifecycleManager
         # if proj:
@@ -784,6 +638,62 @@ class KeypointControls(QWidget):
             getattr(layer, "name", layer),
             sorted((layer.metadata or {}).keys()),
         )
+
+    def _on_points_layer_setup_requested(self, req: PointsLayerSetupRequest) -> None:
+        layer = req.layer
+        store = req.store
+
+        try:
+            resources = self.layer_manager.attach_points_layer_runtime(
+                layer=layer,
+                store=store,
+                controls=self,
+                resolve_layer_by_id=self.layer_manager.resolve_live_layer,
+                get_label_mode=lambda: self._label_mode,
+                schedule_recolor=self._schedule_recolor,
+                existing_resources=req.existing_resources,
+            )
+            req.runtime_resources = resources
+
+            layer._dlc_controls = self
+
+            if self.layer_manager.managed_points_count() == 1 and self.layer_manager.is_multianimal(layer):
+                self._color_mode = keypoints.ColorMode.INDIVIDUAL
+                for btn in self._color_mode_selector.buttons():
+                    if btn.text().lower() == str(self._color_mode).lower():
+                        btn.setChecked(True)
+                        break
+
+            self._maybe_initialize_layer_point_size_from_config(layer)
+            self._connect_layer_status_events(layer)
+            self._complete_points_layer_ui_setup(layer, store)
+
+        except Exception:
+            logger.debug(
+                "Failed to complete points layer setup for layer=%r",
+                getattr(layer, "name", layer),
+                exc_info=True,
+            )
+
+    def _on_video_widget_visibility_requested(self, visible: bool) -> None:
+        try:
+            self.video_widget.setVisible(bool(visible))
+        except Exception:
+            logger.debug("Failed to update video widget visibility", exc_info=True)
+
+    def _on_points_layer_removed_requested(self, layer: Points, remaining_points_layers: int) -> None:
+        self._on_points_layer_removed_ui(layer, remaining_points_layers=remaining_points_layers)
+
+    def _on_tracks_layer_removed_requested(self, layer) -> None:
+        try:
+            was_trails = self._trails_controller.on_tracks_layer_removed(layer)
+        except Exception:
+            logger.debug("Failed to process tracks layer removal", exc_info=True)
+            return
+
+        if was_trails:
+            with QSignalBlocker(self._trail_cb):
+                self._trail_cb.setChecked(False)
 
     def _on_points_layer_removed_ui(self, layer: Points, *, remaining_points_layers: int) -> None:
         """UI-only cleanup after lifecycle manager removed a managed Points layer."""
@@ -823,36 +733,6 @@ class KeypointControls(QWidget):
                 self._layer_to_menu = {}
                 self._set_points_controls_enabled(False)
                 self.last_saved_label.hide()
-
-    @deprecated(
-        details="Lifecycle-owned points setup has moved to LayerLifecycleManager.",
-        replacement="self.layer_manager._setup_points_layer(...)",
-    )
-    def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
-        self.layer_manager._setup_points_layer(layer, allow_merge=allow_merge)
-
-    @deprecated(
-        details="Layer adoption is now handled by LayerLifecycleManager.",
-        replacement="self.layer_manager.schedule_initial_adoption()",
-    )
-    def _adopt_existing_layers(self) -> None:
-        self.layer_manager.adopt_existing_layers()
-
-    @deprecated(
-        details="Layer adoption is now handled by LayerLifecycleManager.",
-        replacement="LayerLifecycleManager._adopt_layer(...)",
-    )
-    def _adopt_layer(self, layer, index: int) -> None:
-        self.layer_manager._adopt_layer(layer, index)
-
-    def _validate_header(self, layer) -> bool:
-        res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
-        if isinstance(res, ValidationError) or res.header is None:
-            self.viewer.status = (
-                "This Points layer does not look like a DLC keypoints layer. Missing a valid DLC header."
-            )
-            return False
-        return True
 
     def _schedule_recolor(self, layer: Points) -> None:
         if not hasattr(self, "_recolor_pending"):
@@ -1007,7 +887,7 @@ class KeypointControls(QWidget):
         config_path = str(Path(project_path) / "config.yaml")
         cfg = io.load_config(config_path)
         conversion_tables = cfg.get("SuperAnimalConversionTables", {})
-        hdr = self._get_header_model_from_metadata(points_layer.metadata or {})
+        hdr = self.layer_manager.get_header_model_from_metadata(points_layer.metadata or {})
         if hdr is None:
             return
         bdprts_map = map(str, hdr.bodyparts)
@@ -1044,33 +924,6 @@ class KeypointControls(QWidget):
     # ------------------------------------------------------------------
     # Metadata helpers (authoritative models + napari-friendly dict sync)
     # ------------------------------------------------------------------
-    @deprecated(
-        details="Lifecycle-owned image metadata management has moved to LayerLifecycleManager.",
-        replacement="LayerLifecycleManager._layer_source_path(...)",
-    )
-    @staticmethod
-    def _layer_source_path(layer) -> str | None:
-        """Best-effort access to napari layer source path (may not exist)."""
-        return LayerLifecycleManager._layer_source_path(layer)
-
-    @deprecated(
-        details="Lifecycle-owned image metadata management has moved to LayerLifecycleManager.",
-        replacement="LayerLifecycleManager._update_image_meta_from_layer(...)",
-    )
-    def _update_image_meta_from_layer(self, layer: Image) -> None:
-        """
-        Update authoritative self._images_meta using an Image layer.
-        Also keep a dict-like subset synced for other layers (non-breaking).
-        """
-        self.layer_manager._update_image_meta_from_layer(layer)
-
-    @deprecated(
-        details="Lifecycle-owned image→points metadata sync has moved to LayerLifecycleManager.",
-        replacement="self.layer_manager._sync_points_layers_from_image_meta()",
-    )
-    def _sync_points_layers_from_image_meta(self) -> None:
-        self.layer_manager._sync_points_layers_from_image_meta()
-
     def _resolve_config_path_for_layer(self, layer: Points | None) -> Path | None:
         if layer is None:
             return None
@@ -1101,7 +954,8 @@ class KeypointControls(QWidget):
             - (None, True): user cancelled or operation was refused; abort save
         """
         res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
-        if isinstance(res, ValidationError):
+        # if isinstance(res, ValidationError):
+        if hasattr(res, "errors"):
             return None, False
 
         pts_meta: PointsMetadata = res
@@ -1397,18 +1251,11 @@ class KeypointControls(QWidget):
     def _refresh_video_panel_context(self) -> None:
         update_video_panel_context(self.viewer, self._video_group)
 
-    @deprecated(
-        details="Lifecycle-owned project-path caching has moved to LayerLifecycleManager.",
-        replacement="self.layer_manager._cache_project_path_from_image_layer(...)",
-    )
-    def _cache_project_path_from_image_layer(self, layer: Image) -> None:
-        self.layer_manager._cache_project_path_from_image_layer(layer)
-
     def _extract_single_frame(self, *args):
         ok, msg = run_extract_current_frame(
             self.viewer,
             self._video_group,
-            validate_points_layer=self._validate_header,
+            validate_points_layer=self.layer_manager.validate_header,
         )
         self.viewer.status = msg
         self._refresh_video_panel_context()
@@ -1479,27 +1326,6 @@ class KeypointControls(QWidget):
                 layer.face_color_mode = "direct"
             except Exception:
                 pass
-
-    @deprecated(
-        details="Lifecycle-owned remap orchestration has moved to LayerLifecycleManager.",
-        replacement="self.layer_manager._remap_frame_indices(...)",
-    )
-    def _remap_frame_indices(self, layer) -> None:
-        self.layer_manager._remap_frame_indices(layer)
-
-    @deprecated(
-        replacement="self.layer_manager.on_insert(...)",
-        details="Direct layer management is now handled by LayerLifecycleManager",
-    )
-    def on_insert(self, event):
-        self.layer_manager.on_insert(event)
-
-    @deprecated(
-        details="Lifecycle-owned remove handling has moved to LayerLifecycleManager.",
-        replacement="self.layer_manager._handle_removed_layer(...)",
-    )
-    def _handle_removed_layer(self, layer) -> None:
-        self.layer_manager._handle_removed_layer(layer)
 
     def _on_show_trails_toggled(self, state):
         self._trails_controller.toggle(Qt.CheckState(state) == Qt.CheckState.Checked)
@@ -1787,6 +1613,9 @@ class KeypointControls(QWidget):
         if report.issues:
             logger.warning("Layer manager audit on close reported issues:\n%s", report.issues)
 
+        if self.layer_manager is not None:
+            self.layer_manager.set_merge_decision_provider(None)
+
     def on_active_layer_change(self, event) -> None:
         """Updates the GUI when the active layer changes
         * Hides all KeypointsDropdownMenu that aren't for the selected layer
@@ -1796,7 +1625,7 @@ class KeypointControls(QWidget):
         with log_timing(
             logger, f"on_active_layer_change value={getattr(event.value, 'name', None)!r}", threshold_ms=0.0
         ):
-            self._color_grp.setVisible(self._is_multianimal(event.value))
+            self._color_grp.setVisible(self.layer_manager.is_multianimal(event.value))
             # self._update_color_scheme() # if needed
             menu_idx = -1
             if event.value is not None and isinstance(event.value, Points):
