@@ -98,9 +98,9 @@ def overwrite_confirm(monkeypatch):
 
         return state["result"]
 
-    import napari_deeplabcut.ui.dialogs as dlg
+    import napari_deeplabcut.ui.ui_dialogs.save as save_dlg
 
-    monkeypatch.setattr(dlg, "maybe_confirm_overwrite", _patched_maybe_confirm_overwrite)
+    monkeypatch.setattr(save_dlg, "maybe_confirm_overwrite", _patched_maybe_confirm_overwrite)
 
     class Controller:
         @property
