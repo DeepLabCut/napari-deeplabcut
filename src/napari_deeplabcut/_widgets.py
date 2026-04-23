@@ -26,7 +26,6 @@ TODO: And general dev notes:
 from __future__ import annotations
 
 import logging
-from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
 from functools import cached_property
@@ -36,17 +35,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 from napari.layers import Image, Points
 from napari.utils.events import Event
-from napari.utils.history import get_save_history
 from qtpy.QtCore import QSettings, QSignalBlocker, Qt, QTimer
 from qtpy.QtGui import QAction
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
-    QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -59,14 +55,13 @@ from .config import settings
 from .config.keybinds import (
     install_global_points_keybindings,
 )
-from .config.models import ImageMetadata, PointsMetadata
+from .config.models import ImageMetadata
 from .core import io, keypoints
 from .core.config_sync import (
     load_point_size_from_config,
     resolve_config_path_from_layer,
     save_point_size_to_config,
 )
-from .core.conflicts import compute_overwrite_report_for_points_save
 from .core.layer_lifecycle import (
     MergeDecisionRequest,
     MergeDecisionResult,
@@ -83,40 +78,17 @@ from .core.layers import (
     get_points_layer_with_tables,
     get_uniform_point_size,
     infer_folder_display_name,
-    is_machine_layer,
     set_uniform_point_size,
 )
 from .core.metadata import (
-    MergePolicy,
-    apply_project_paths_override_to_points_meta,
-    migrate_points_layer_metadata,
     read_points_meta,
-    write_points_meta,
 )
-from .core.project_paths import (
-    coerce_paths_to_dlc_row_keys,
-    dataset_folder_has_files,
-    find_nearest_config,
-    resolve_project_root_from_config,
-    target_dataset_folder_for_config,
-)
-from .core.provenance import (
-    apply_gt_save_target,
-    is_projectless_folder_association_candidate,
-    requires_gt_promotion,
-    suggest_human_placeholder,
-)
-from .core.sidecar import (
-    get_default_scorer,
-    set_default_scorer,
-)
-from .core.trails import TrailsController, safe_folder_anchor_from_points_layer
+from .core.trails import TrailsController
 from .napari_compat import (
     apply_points_layer_ui_tweaks,
     patch_color_manager_guess_continuous,
     register_points_action,
 )
-from .ui import dialogs as ui_dialogs
 from .ui.base_widget import ViewerSingletonWidget
 from .ui.color_scheme_display import ColorSchemePanel
 from .ui.cropping import (
@@ -134,39 +106,11 @@ from .ui.labels_and_dropdown import (
 )
 from .ui.layer_stats import LayerStatusPanel
 from .ui.plots.trajectory import TrajectoryMatplotlibCanvas
+from .ui.ui_dialogs.save import PointsLayerSaveWorkflow
 from .utils.debug import get_debug_recorder, install_debug_recorder, log_timing
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
 # logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
-
-
-def _prompt_for_scorer(parent_widget, *, anchor: str, suggested: str) -> str | None:
-    """Prompt user for a scorer name. Returns non-empty string or None if cancelled."""
-    text, ok = QInputDialog.getText(
-        parent_widget,
-        "Choose scorer",
-        "No DLC config.yaml scorer found.\n"
-        "Please enter a scorer name for the CollectedData file.\n\n"
-        "Tip: Use your name or a stable lab identifier.\n"
-        "(We strongly discourage keeping the generic 'human_xxxxxx'.)",
-        text=suggested,
-    )
-    if not ok:
-        return None
-    scorer = (text or "").strip()
-    if not scorer:
-        return None
-    return scorer
-
-
-@contextmanager
-def _temporary_layer_metadata(layer: Points, metadata: dict):
-    old_metadata = dict(layer.metadata or {})
-    layer.metadata = metadata
-    try:
-        yield
-    finally:
-        layer.metadata = old_metadata
 
 
 class KeypointControls(ViewerSingletonWidget):
@@ -337,6 +281,18 @@ class KeypointControls(ViewerSingletonWidget):
             watch_content=False,
         )
         self._points_interactions.install()
+
+        self._save_workflow = PointsLayerSaveWorkflow(
+            parent=self,
+            viewer=self.viewer,
+            layer_manager=self.layer_manager,
+            trails_controller=self._trails_controller,
+            trail_checkbox_getter=lambda: self._trail_cb.isChecked(),
+            resolve_config_path_for_layer=self._resolve_config_path_for_layer,
+            current_project_path_getter=lambda: self._project_path,
+            current_image_meta_getter=lambda: self._image_meta,
+            logger=logger,
+        )
         ### UI setup ends here
 
         # Modes init
@@ -885,108 +841,6 @@ class KeypointControls(ViewerSingletonWidget):
             max_levels=5,
         )
 
-    def _maybe_prepare_project_path_override_metadata(self, layer: Points) -> tuple[dict | None, bool]:
-        """
-        Optionally prepare save-time metadata by associating a project-less labeled
-        folder with an explicit DLC project chosen via config.yaml.
-
-        Returns
-        -------
-        tuple[dict | None, bool]
-            (overridden_metadata, abort_save)
-
-            - (None, False): feature not applicable; continue normal save
-            - (metadata, False): apply metadata override and continue
-            - (None, True): user cancelled or operation was refused; abort save
-        """
-        res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
-        # if isinstance(res, ValidationError):
-        if hasattr(res, "errors"):
-            return None, False
-
-        pts_meta: PointsMetadata = res
-        paths = pts_meta.paths or []
-        if not paths:
-            return None, False
-
-        if not is_projectless_folder_association_candidate(pts_meta):
-            return None, False
-
-        source_root = pts_meta.root
-        if not source_root:
-            return None, False
-
-        try:
-            source_root_path = Path(source_root).expanduser().resolve(strict=False)
-        except Exception:
-            source_root_path = Path(source_root)
-
-        # NOTE: @C-Achard 2026-03-27 Currently does not let user choose
-        # a different dataset name than the source folder,
-        # to keep a lightweight workflow.
-        # This could be allowed in the future if there is demand.
-        dataset_name = source_root_path.name
-        if not dataset_name:
-            return None, False
-
-        initial_dir = self._project_path or pts_meta.project or str(source_root_path)
-        dialog_result = ui_dialogs.prompt_for_project_config_for_save(self, initial_dir=initial_dir)
-
-        if dialog_result.action is ui_dialogs.ProjectConfigPromptAction.CANCEL:
-            logger.debug("User cancelled project association prompt.")
-            return None, True  # abort save
-
-        if dialog_result.action is ui_dialogs.ProjectConfigPromptAction.SKIP:
-            logger.debug("User chose to continue without project association.")
-            return None, False  # continue normal save path
-
-        if dialog_result.action is not ui_dialogs.ProjectConfigPromptAction.ASSOCIATE:
-            logger.warning("Unexpected project association dialog result: %r", dialog_result)
-            return None, True  # fail safe: abort save
-
-        config_path = dialog_result.config_path
-        if not config_path:
-            logger.warning("Project association result was ASSOCIATE but config_path was empty.")
-            return None, True  # fail safe: abort save
-
-        project_root = resolve_project_root_from_config(config_path)
-        if project_root is None:
-            QMessageBox.warning(
-                self,
-                "Invalid project configuration",
-                "The selected file is not a valid DeepLabCut config.yaml or project root. "
-                "The save operation has been cancelled.",
-            )
-            return None, True
-
-        target_folder = target_dataset_folder_for_config(config_path, dataset_name=dataset_name)
-        if dataset_folder_has_files(target_folder):
-            ui_dialogs.warn_existing_dataset_folder_conflict(self, target_folder=target_folder)
-            return None, True  # refuse the save
-
-        rewritten_paths, unresolved = coerce_paths_to_dlc_row_keys(
-            paths,
-            source_root=source_root_path,
-            dataset_name=dataset_name,
-        )
-
-        if not ui_dialogs.maybe_confirm_dataset_path_rewrite(
-            self,
-            project_root=project_root,
-            dataset_name=dataset_name,
-            n_paths=len(paths),
-            n_unresolved=len(unresolved),
-        ):
-            return None, True  # user declined
-
-        overridden = apply_project_paths_override_to_points_meta(
-            pts_meta,
-            project_root=project_root,
-            rewritten_paths=rewritten_paths,
-        )
-
-        return overridden.model_dump(mode="python", exclude_none=True), False
-
     def _show_color_scheme(self):
         show = self._view_scheme_cb.isChecked()
         self._color_scheme_display.setVisible(show)
@@ -1277,150 +1131,6 @@ class KeypointControls(ViewerSingletonWidget):
     def _on_show_trails_toggled(self, state):
         self._trails_controller.toggle(Qt.CheckState(state) == Qt.CheckState.Checked)
 
-    def _ensure_promotion_save_target(self, layer: Points) -> bool:
-        """Ensure a prediction/machine source layer has a GT save_target set.
-
-        Returns True if save_target is set (or already existed), False if user cancels.
-        """
-        if not is_machine_layer(layer):
-            return True
-
-        mig = migrate_points_layer_metadata(layer)
-        if hasattr(mig, "errors"):
-            logger.warning(
-                "Failed to migrate points layer metadata for layer=%r: %s",
-                getattr(layer, "name", layer),
-                mig,
-            )
-
-        res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
-        # if isinstance(res, ValidationError):
-        if hasattr(res, "errors"):
-            logger.warning(
-                "Points metadata validation failed for layer=%r during save target check: %s",
-                getattr(layer, "name", layer),
-                res,
-            )
-            QMessageBox.warning(self, "Cannot save", "Layer metadata is invalid; see logs for details.")
-            return False
-
-        pts: PointsMetadata = res
-
-        if not requires_gt_promotion(pts):
-            return True
-
-        anchor = safe_folder_anchor_from_points_layer(layer)
-        if not anchor:
-            QMessageBox.warning(self, "Cannot save", "Could not determine a folder anchor for saving.")
-            return False
-
-        scorer = None
-
-        # 1) Auto-discovered config.yaml always wins
-        cfg_path = None
-        try:
-            cfg_path = find_nearest_config(anchor)
-        except Exception:
-            logger.debug("Automatic config discovery failed for anchor=%r", anchor, exc_info=True)
-
-        if cfg_path:
-            try:
-                scorer = ui_dialogs.load_scorer_from_config(cfg_path)
-            except Exception:
-                logger.exception("Failed to load auto-discovered config.yaml: %s", cfg_path)
-                ui_dialogs.warn_invalid_config_for_scorer(
-                    self,
-                    config_path=cfg_path,
-                    reason="unreadable",
-                    auto_found=True,
-                )
-                return False
-
-            if not scorer:
-                ui_dialogs.warn_invalid_config_for_scorer(
-                    self,
-                    config_path=cfg_path,
-                    reason="missing_scorer",
-                    auto_found=True,
-                )
-                return False
-
-        else:
-            # 2) No config found automatically -> let the user choose one
-            dialog_result = ui_dialogs.prompt_for_project_config_for_save(
-                self,
-                initial_dir=self._project_path or anchor,
-                window_title="Locate DLC config for scorer resolution",
-                message=(
-                    "No DeepLabCut config.yaml could be found automatically for this machine-labeled layer.\n\n"
-                    "If this layer belongs to a DLC project, choose its config.yaml so the save uses the "
-                    "project scorer and standard naming.\n\n"
-                    "If no config.yaml exists, you can continue without one."
-                ),
-                choose_button_text="Choose config.yaml",
-                skip_button_text="Continue without config",
-                resolve_scorer=True,
-            )
-
-            if dialog_result.action is ui_dialogs.ProjectConfigPromptAction.CANCEL:
-                return False
-
-            if dialog_result.action is ui_dialogs.ProjectConfigPromptAction.ASSOCIATE:
-                scorer = dialog_result.scorer
-
-            else:
-                # 3) Only if no config is available at all may sidecar be consulted
-                scorer = get_default_scorer(anchor)
-
-                # 4) Final fallback: prompt manually
-                if not scorer:
-                    suggested = suggest_human_placeholder(anchor)
-                    while True:
-                        s = _prompt_for_scorer(self, anchor=anchor, suggested=suggested)
-                        if s is None:
-                            return False
-                        if s.startswith("human_"):
-                            choice = QMessageBox.question(
-                                self,
-                                "Generic scorer name",
-                                "You entered a generic scorer name starting with 'human_'.\n\n"
-                                "We strongly recommend using a real name or stable identifier.\n"
-                                "Do you want to keep this generic scorer anyway?",
-                                QMessageBox.Yes | QMessageBox.No,
-                            )
-                            if choice == QMessageBox.No:
-                                suggested = s
-                                continue
-                        scorer = s
-                        break
-                    try:
-                        set_default_scorer(anchor, scorer)
-                    except Exception:
-                        logger.debug("Failed to persist default scorer to sidecar", exc_info=True)
-
-        updated = apply_gt_save_target(
-            pts,
-            anchor=anchor,
-            scorer=scorer,
-            dataset_key="keypoints",
-        )
-
-        out = write_points_meta(
-            layer,
-            updated,
-            merge_policy=MergePolicy.MERGE,
-            fields={"save_target"},
-            migrate_legacy=True,
-            validate=True,
-        )
-
-        if hasattr(out, "errors"):
-            logger.warning("Failed to write save_target for layer=%r: %s", getattr(layer, "name", layer), out)
-            QMessageBox.warning(self, "Cannot save", "Failed to write save target metadata; see logs for details.")
-            return False
-
-        return True
-
     def _toggle_overwrite_confirmation(self, state) -> None:
         enabled = Qt.CheckState(state) == Qt.CheckState.Checked
         settings.set_overwrite_confirmation_enabled(enabled)
@@ -1428,115 +1138,14 @@ class KeypointControls(ViewerSingletonWidget):
 
     # Hack to save a KeyPoints layer without showing the Save dialog
     def _save_layers_dialog(self, selected=False):
-        """Save layers (all or selected) to disk, using ``LayerList.save()``.
-        Parameters
-        ----------
-        selected : bool
-            If True, only layers that are selected in the viewer will be saved.
-            By default, all layers are saved.
-        """
-
-        selected_layers = list(self.viewer.layers.selection)
-        msg = ""
-        if not len(self.viewer.layers):
-            msg = "There are no layers in the viewer to save."
-        elif selected and not len(selected_layers):
-            msg = "Please select a Points layer to save."
-        if msg:
-            QMessageBox.warning(self, "Nothing to save", msg, QMessageBox.Ok)
+        """Save layers (all or selected) using the dedicated save workflow."""
+        outcome = self._save_workflow.save_layers(selected=selected)
+        if not outcome.saved:
             return
-        if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
-            layer = selected_layers[0]
 
-            # Promotion-to-GT policy: never write back to machine/prediction sources.
-            ok = self._ensure_promotion_save_target(layer)
-            if not ok:
-                return
-
-            logger.debug(
-                "About to save. io.kind=%r save_target=%r",
-                layer.metadata.get("io", {}).get("kind"),
-                layer.metadata.get("save_target"),
-            )
-            try:
-                overridden_metadata, abort_save = self._maybe_prepare_project_path_override_metadata(layer)
-                if abort_save:
-                    logger.debug("Save aborted during project-association path handling.")
-                    return
-
-                attributes = {
-                    "name": layer.name,
-                    "metadata": overridden_metadata if overridden_metadata is not None else dict(layer.metadata or {}),
-                    "properties": dict(layer.properties or {}),
-                }
-                report = compute_overwrite_report_for_points_save(layer.data, attributes)
-            except Exception as e:
-                logger.exception("Failed to compute overwrite preflight for layer %r", getattr(layer, "name", layer))
-                QMessageBox.warning(
-                    self,
-                    "Cannot save",
-                    f"Failed to prepare save preflight:\n{e}",
-                    QMessageBox.Ok,
-                )
-                return
-
-            if report is not None:
-                if not ui_dialogs.maybe_confirm_overwrite(
-                    parent=self,
-                    report=report,
-                ):
-                    logger.debug("Save cancelled.")
-                    return
-
-            if overridden_metadata is not None:
-                with _temporary_layer_metadata(layer, overridden_metadata):
-                    self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
-                # Persist the successful override into live metadata after save
-                layer.metadata = dict(overridden_metadata)
-            else:
-                self.viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
-            # hook to persist UI state on successful save
-            try:
-                self._trails_controller.persist_folder_ui_state_for_points_layer(
-                    layer,
-                    checkbox_checked=self._trail_cb.isChecked(),
-                )
-            except Exception:
-                logger.debug(
-                    "Failed to persist folder UI state after save for layer=%r",
-                    getattr(layer, "name", layer),
-                    exc_info=True,
-                )
-            self.viewer.status = "Data successfully saved"
-        else:
-            dlg = QFileDialog()
-            hist = get_save_history()
-            dlg.setHistory(hist)
-            filename, _ = dlg.getSaveFileName(
-                caption=f"Save {'selected' if selected else 'all'} layers",
-                dir=hist[0],  # home dir by default
-            )
-            if filename:
-                self.viewer.layers.save(filename, selected=selected)
-                #  hook to persist UI state on successful save
-                try:
-                    if selected:
-                        candidate_layers = [ly for ly in selected_layers if isinstance(ly, Points)]
-                    else:
-                        candidate_layers = list(self.layer_manager.managed_points_layers())
-
-                    for ly in candidate_layers:
-                        if ly in self.viewer.layers:
-                            self._trails_controller.persist_folder_ui_state_for_points_layer(
-                                ly,
-                                checkbox_checked=self._trail_cb.isChecked(),
-                            )
-                except Exception:
-                    logger.debug("Failed to persist sidecar UI state after multi-layer save", exc_info=True)
-
-            else:
-                return
         self._is_saved = True
+        if outcome.status_message:
+            self.viewer.status = outcome.status_message
         self.last_saved_label.setText(f"Last saved at {str(datetime.now().time()).split('.')[0]}")
         self.last_saved_label.show()
 
