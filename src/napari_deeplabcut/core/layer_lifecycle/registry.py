@@ -5,7 +5,12 @@ import logging
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
+
+if TYPE_CHECKING:
+    from napari.layers import Points
+
+    from ..keypoints import KeypointStore
 
 logger = logging.getLogger("napari-deeplabcut.lifecycle.registry")
 StoreT = TypeVar("StoreT")
@@ -50,6 +55,14 @@ class PointsRuntimeResources:
     paste_patch_installed: bool = False
     keybindings_installed: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PointsLayerSetupRequest:
+    layer: Points
+    store: KeypointStore
+    existing_resources: PointsRuntimeResources | None = None
+    runtime_resources: PointsRuntimeResources | None = None
 
 
 @dataclass(frozen=True, slots=True)

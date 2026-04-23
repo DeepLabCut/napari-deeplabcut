@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/core/layer_lifecycle/merge.py
 from __future__ import annotations
 
 from dataclasses import dataclass
