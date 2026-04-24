@@ -52,6 +52,9 @@ dev = [
   "pytest-qt",
   "tox",
 ]
+tracking = [
+  "torch",
+]
 [project.urls]
 "Bug Tracker" = "https://github.com/DeepLabCut/napari-deeplabcut/issues"
 Documentation = "https://github.com/DeepLabCut/napari-deeplabcut#README.md"

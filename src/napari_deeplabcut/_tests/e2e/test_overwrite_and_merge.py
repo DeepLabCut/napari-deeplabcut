@@ -46,7 +46,7 @@ def test_config_first_hazard_regression_no_silent_deletion(viewer, keypoint_cont
     # Placeholder should still be present for this regression to apply
     assert placeholder in viewer.layers
 
-    store = keypoint_controls._stores.get(placeholder)
+    store = keypoint_controls.get_layer_store(placeholder)
     assert store is not None
 
     # Add a new bodypart2 point to placeholder using (frame, y, x)
@@ -119,7 +119,7 @@ def test_no_overwrite_warning_when_only_filling_nans(viewer, keypoint_controls, 
     logger.info("any NaNs in points.data = %s", np.isnan(points.data).any())
     logger.info("labels[:10] = %s", points.properties.get("label")[:10])
     logger.info("ids[:10] = %s", points.properties.get("id")[:10] if "id" in points.properties else None)
-    store = keypoint_controls._stores.get(points)
+    store = keypoint_controls.get_layer_store(points)
     assert store is not None
 
     # Fill NaNs for bodypart2
@@ -149,7 +149,7 @@ def test_overwrite_warning_triggers_on_conflict(viewer, keypoint_controls, qtbot
     qtbot.wait(200)
 
     points = _get_points_layer_with_data(viewer)
-    store = keypoint_controls._stores.get(points)
+    store = keypoint_controls.get_layer_store(points)
     assert store is not None
 
     # Create conflict: overwrite bodypart1 from (10,20) -> (99,88)
@@ -187,7 +187,7 @@ def test_overwrite_warning_cancel_aborts_write(viewer, keypoint_controls, qtbot,
     qtbot.wait(200)
 
     points = _get_points_layer_with_data(viewer)
-    store = keypoint_controls._stores.get(points)
+    store = keypoint_controls.get_layer_store(points)
     assert store is not None
 
     _set_or_add_bodypart_xy(points, store, "bodypart1", x=456.0, y=123.0)

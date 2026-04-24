@@ -231,9 +231,6 @@ def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, m
     root = tmp_path / "proj"
     root.mkdir()
 
-    # Always allow overwrite confirmation in unit test
-    # monkeypatch.setattr(dialogs, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
-
     header = DLCHeaderModel(columns=fake_keypoints.columns)
 
     n_rows = len(fake_keypoints)
@@ -349,8 +346,6 @@ def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, m
     """
     root = tmp_path / "proj"
     root.mkdir()
-
-    # monkeypatch.setattr(dialogs, "maybe_confirm_overwrite", lambda *args, **kwargs: True)
 
     header = DLCHeaderModel(columns=fake_keypoints.columns)
     n_rows = len(fake_keypoints)

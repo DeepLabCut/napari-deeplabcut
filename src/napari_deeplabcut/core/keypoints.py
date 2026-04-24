@@ -1,7 +1,8 @@
 # src/napari_deeplabcut/keypoints.py
 import logging
+import weakref
 from collections import namedtuple
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from enum import auto
 
 import numpy as np
@@ -17,8 +18,13 @@ from scipy.spatial import cKDTree
 from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.core.metadata import read_points_meta
 from napari_deeplabcut.misc import CycleEnum, HeaderLike
+from napari_deeplabcut.utils.deprecations import deprecated
 
 logger = logging.getLogger(__name__)
+
+
+class LayerUnavailableError(RuntimeError):
+    """Raised when a KeypointStore can no longer resolve its backing layer."""
 
 
 # Monkeypatch the point size slider
@@ -44,9 +50,9 @@ QtPointsControls.changeCurrentSize = _change_size
 QtPointsControls.changeCurrentSymbol = _change_symbol
 
 
+@deprecated(details="Unused currently, should be removed.")
 def _validate_points_meta_best_effort(layer) -> bool:
     """
-    Phase-2 friendly: validate points metadata without mutating it.
     We drop header + controls during validation to avoid runtime-object issues.
     """
     res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=True)
@@ -106,21 +112,97 @@ Keypoint = namedtuple("Keypoint", ["label", "id"])
 
 
 class KeypointStore:
-    def __init__(self, viewer, layer: Points):
+    def __init__(
+        self,
+        viewer,
+        layer: Points,
+        *,
+        resolve_layer_by_id: Callable[[int], Points] | None = None,
+    ):
         self.viewer = viewer
         self._keypoints = []
         self._header: DLCHeaderModel | None = None
-        self.layer = layer
+
+        self._layer_id: int | None = None
+        self._resolve_layer_by_id = resolve_layer_by_id
+
+        # Fallback if no resolver is provided
+        self._layer_ref: weakref.ReferenceType[Points] | None = None
+        self._strong_layer_ref: Points | None = None  # Used to keep the layer alive if no resolver is provided
+
+        self.layer = layer  # Use the setter to initialize keypoints and header
+
         self.viewer.dims.set_current_step(0, 0)
 
+    def set_label_mode_getter(self, getter: Callable[[], LabelMode]):
+        self._get_label_mode = getter
+
     @property
-    def layer(self):
-        return self._layer
+    def layer_id(self) -> int | None:
+        return self._layer_id
+
+    def attach_layer_resolver(self, resolve_layer_by_id: Callable[[int], Points | None]) -> None:
+        """Attach a narrow lifecycle-owned resolver.
+
+        The resolver should accept a layer_id and return the currently live layer,
+        or None if the layer is no longer available.
+        """
+        self._resolve_layer_by_id = resolve_layer_by_id
+
+    def maybe_layer(self) -> Points | None:
+        """Resolve the current layer if still available, else return None."""
+        if self._layer_id is None:
+            return None
+
+        # Lifecycle resolver is authoritative when present.
+        if self._resolve_layer_by_id is not None:
+            try:
+                return self._resolve_layer_by_id(self._layer_id)
+            except Exception:
+                logger.debug("Layer resolver failed for layer_id=%r", self._layer_id, exc_info=True)
+                return None
+
+        # Fallback for tests / legacy contexts.
+        if self._layer_ref is not None:
+            return self._layer_ref()
+        return self._strong_layer_ref
+
+    def require_layer(self) -> Points:
+        layer = self.maybe_layer()
+        if layer is None:
+            raise LayerUnavailableError(f"Layer is no longer available for KeypointStore layer_id={self._layer_id}")
+        return layer
+
+    @property
+    def layer(self) -> Points:
+        return self.require_layer()
 
     @layer.setter
-    def layer(self, layer):
-        self._layer = layer
+    def layer(self, layer: Points):
+        same_layer = self._layer_id == id(layer)
 
+        self._layer_id = id(layer)
+
+        try:
+            self._layer_ref = weakref.ref(layer)
+            self._strong_layer_ref = None
+        except TypeError:
+            # Fallback if a given object cannot be weak-referenced.
+            self._layer_ref = None
+            self._strong_layer_ref = layer
+
+        # Avoid repeated validated metadata reads when rebinding the same live layer.
+        if same_layer:
+            logger.debug(
+                "Skipping KeypointStore header refresh for same layer_id=%r name=%r",
+                self._layer_id,
+                getattr(layer, "name", layer),
+            )
+            return
+
+        self._refresh_header_from_layer(layer)
+
+    def _refresh_header_from_layer(self, layer: Points) -> None:
         res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
         if isinstance(res, ValidationError) or res.header is None:
             self._header = None
@@ -149,14 +231,16 @@ class KeypointStore:
 
     @property
     def annotated_keypoints(self) -> list[Keypoint]:
+        layer = self.layer
         mask = self.current_mask
-        labels = self.layer.properties["label"][mask]
-        ids = self.layer.properties["id"][mask]
+        labels = layer.properties["label"][mask]
+        ids = layer.properties["id"][mask]
         return [Keypoint(label, id_) for label, id_ in zip(labels, ids, strict=False)]
 
     @property
     def current_mask(self) -> Sequence[bool]:
-        return np.asarray(self.layer.data[:, 0] == self.current_step)
+        layer = self.layer
+        return np.asarray(layer.data[:, 0] == self.current_step)
 
     @property
     def current_keypoint(self) -> Keypoint:
@@ -173,12 +257,13 @@ class KeypointStore:
 
     @current_keypoint.setter
     def current_keypoint(self, keypoint: Keypoint):
+        layer = self.layer
         # Avoid changing the properties of a selected point
-        if not len(self.layer.selected_data):
-            current_properties = self.layer.current_properties
+        if not len(layer.selected_data):
+            current_properties = layer.current_properties
             current_properties["label"] = np.asarray([keypoint.label])
             current_properties["id"] = np.asarray([keypoint.id])
-            self.layer.current_properties = current_properties
+            layer.current_properties = current_properties
 
     def next_keypoint(self, *args):
         ind = self._keypoints.index(self.current_keypoint) + 1
@@ -196,10 +281,11 @@ class KeypointStore:
 
     @current_label.setter
     def current_label(self, label: str):
-        if not len(self.layer.selected_data):
-            current_properties = self.layer.current_properties
+        layer = self.layer
+        if not len(layer.selected_data):
+            current_properties = layer.current_properties
             current_properties["label"] = np.asarray([label])
-            self.layer.current_properties = current_properties
+            layer.current_properties = current_properties
 
     @property
     def current_id(self) -> str:
@@ -207,84 +293,89 @@ class KeypointStore:
 
     @current_id.setter
     def current_id(self, id_: str):
-        if not len(self.layer.selected_data):
-            current_properties = self.layer.current_properties
+        layer = self.layer
+        if not len(layer.selected_data):
+            current_properties = layer.current_properties
             current_properties["id"] = np.asarray([id_])
-            self.layer.current_properties = current_properties
+            layer.current_properties = current_properties
 
     def _advance_step(self, event):
         ind = (self.current_step + 1) % self.n_steps
         self.viewer.dims.set_current_step(0, ind)
 
     def _find_first_unlabeled_frame(self, event):
+        layer = self.layer
         inds = set(range(self.n_steps))
-        unlabeled_inds = inds.difference(self.layer.data[:, 0].astype(int))
+        unlabeled_inds = inds.difference(layer.data[:, 0].astype(int))
         if not unlabeled_inds:
             self.viewer.dims.set_current_step(0, self.n_steps - 1)
         else:
             self.viewer.dims.set_current_step(0, min(unlabeled_inds))
 
+    def add(self, coord):
+        coord = np.atleast_2d(coord)
 
-def _add(store, coord):
-    coord = np.atleast_2d(coord)
+        get_mode = getattr(self, "_get_label_mode", None)
+        label_mode = get_mode() if callable(get_mode) else None
 
-    # Controls are runtime-only; prefer layer attribute, fall back to metadata.
-    get_mode = getattr(store, "_get_label_mode", None)
-    label_mode = get_mode() if callable(get_mode) else None
+        if self.current_keypoint not in self.annotated_keypoints:
+            layer = self.layer
 
-    if store.current_keypoint not in store.annotated_keypoints:
-        # 1) append data
-        store.layer.data = np.append(store.layer.data, coord, axis=0)
+            # 1) append data
+            layer.data = np.append(layer.data, coord, axis=0)
 
-        # 2) append/align properties to match number of points
-        kp = store.current_keypoint
-        n_new = coord.shape[0]
-        n_total = len(store.layer.data)
-        n_old = n_total - n_new
+            # 2) append/align properties to match number of points
+            kp = self.current_keypoint
+            n_new = coord.shape[0]
+            n_total = len(layer.data)
+            n_old = n_total - n_new
 
-        props = store.layer.properties.copy()
+            props = layer.properties.copy()
 
-        def _as_array(key, dtype):
-            arr = props.get(key, None)
-            if arr is None:
-                return np.array([], dtype=dtype)
-            return np.asarray(arr, dtype=dtype)
+            def _as_array(key, dtype):
+                arr = props.get(key, None)
+                if arr is None:
+                    return np.array([], dtype=dtype)
+                return np.asarray(arr, dtype=dtype)
 
-        # Existing values truncated/padded to n_old, then append new rows
-        label_arr = _as_array("label", object)[:n_old]
-        id_arr = _as_array("id", object)[:n_old]
-        lik_arr = _as_array("likelihood", float)[:n_old]
+            label_arr = _as_array("label", object)[:n_old]
+            id_arr = _as_array("id", object)[:n_old]
+            lik_arr = _as_array("likelihood", float)[:n_old]
 
-        # If any are shorter than n_old, pad (rare but safe)
-        if label_arr.size < n_old:
-            label_arr = np.concatenate([label_arr, np.array([kp.label] * (n_old - label_arr.size), dtype=object)])
-        if id_arr.size < n_old:
-            id_arr = np.concatenate([id_arr, np.array([kp.id] * (n_old - id_arr.size), dtype=object)])
-        if lik_arr.size < n_old:
-            lik_arr = np.concatenate([lik_arr, np.ones(n_old - lik_arr.size, dtype=float)])
+            if label_arr.size < n_old:
+                label_arr = np.concatenate([label_arr, np.array([kp.label] * (n_old - label_arr.size), dtype=object)])
+            if id_arr.size < n_old:
+                id_arr = np.concatenate([id_arr, np.array([kp.id] * (n_old - id_arr.size), dtype=object)])
+            if lik_arr.size < n_old:
+                lik_arr = np.concatenate([lik_arr, np.ones(n_old - lik_arr.size, dtype=float)])
 
-        props["label"] = np.concatenate([label_arr, np.array([kp.label] * n_new, dtype=object)])
-        props["id"] = np.concatenate([id_arr, np.array([kp.id] * n_new, dtype=object)])
-        props["likelihood"] = np.concatenate([lik_arr, np.ones(n_new, dtype=float)])
+            props["label"] = np.concatenate([label_arr, np.array([kp.label] * n_new, dtype=object)])
+            props["id"] = np.concatenate([id_arr, np.array([kp.id] * n_new, dtype=object)])
+            props["likelihood"] = np.concatenate([lik_arr, np.ones(n_new, dtype=float)])
 
-        store.layer.properties = props
+            layer.properties = props
 
-    elif label_mode is LabelMode.QUICK:
-        ind = store.annotated_keypoints.index(store.current_keypoint)
-        data = store.layer.data
-        data[np.flatnonzero(store.current_mask)[ind]] = coord.squeeze()
-        store.layer.data = data
+        elif label_mode is LabelMode.QUICK:
+            layer = self.layer
+            ind = self.annotated_keypoints.index(self.current_keypoint)
+            data = layer.data
+            data[np.flatnonzero(self.current_mask)[ind]] = coord.squeeze()
+            layer.data = data
 
-    store.layer.selected_data = set()
+        self.layer.selected_data = set()
 
-    # If controls are missing, behave like the default mode (advance keypoint)
-    if label_mode is LabelMode.LOOP:
-        store.layer.events.query_next_frame()
-    else:
-        store.next_keypoint()
+        if label_mode is LabelMode.LOOP:
+            self.layer.events.query_next_frame()
+        else:
+            self.next_keypoint()
 
 
-def _find_nearest_neighbors(xy_true, xy_pred, k=5):
+@deprecated(details="Temporary compat shim, remove once KeypointStore.add is properly integrated.")
+def add(store: KeypointStore, coord):
+    return store.add(coord)
+
+
+def find_nearest_neighbors(xy_true, xy_pred, k=5):
     n_preds = xy_pred.shape[0]
     tree = cKDTree(xy_pred)
     dist, inds = tree.query(xy_true, k=k)
