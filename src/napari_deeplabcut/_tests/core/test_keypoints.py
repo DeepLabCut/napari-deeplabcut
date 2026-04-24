@@ -50,6 +50,7 @@ def test_store_keypoints(store, fake_keypoints):
     store.next_keypoint()
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_point_resize(qtbot, viewer, points):
     viewer.layers.selection.add(points)
     layer = viewer.layers[0]

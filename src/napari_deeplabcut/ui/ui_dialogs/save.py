@@ -184,7 +184,7 @@ class PointsLayerSaveWorkflow:
 
             if self._is_unsupported_direct_video_label_save(layer, save_metadata):
                 self.logger.debug(
-                    "Save aborted due to unsupported direct video label save case. Layer=%r",
+                    "Save aborted due to unsupported direct video + config.yaml label save case. Layer=%r",
                     getattr(layer, "name", layer),
                 )
                 self._warn_unsupported_direct_video_label_save(layer, save_metadata)
