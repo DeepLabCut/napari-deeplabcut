@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import pytest
+from napari.utils.events import Event
 from qtpy.QtWidgets import QApplication, QDockWidget
 from skimage.io import imsave
 
@@ -199,9 +200,43 @@ def images(tmp_path_factory, viewer, fake_image):
     return viewer.open(output_path, plugin="napari-deeplabcut")[0]
 
 
+class DummyDimsForStore:
+    def __init__(self, nsteps=5, current_step=0):
+        self.nsteps = (nsteps,)
+        self.current_step = (current_step,)
+        self.set_calls = []
+
+    def set_current_step(self, axis, value):
+        self.set_calls.append((axis, value))
+        steps = list(self.current_step)
+        while len(steps) <= axis:
+            steps.append(0)
+        steps[axis] = value
+        self.current_step = tuple(steps)
+
+
+class DummyViewerForStore:
+    def __init__(self, nsteps=5, current_step=0):
+        self.dims = DummyDimsForStore(nsteps=nsteps, current_step=current_step)
+
+
 @pytest.fixture
-def store(viewer, points):
-    return keypoints.KeypointStore(viewer, points)
+def store(points):
+    try:
+        data = np.asarray(points.data)
+        nsteps = int(np.nanmax(data[:, 0])) + 1 if data.size else 1
+    except Exception:
+        nsteps = 1
+
+    viewer = DummyViewerForStore(nsteps=nsteps)
+    store = keypoints.KeypointStore(viewer, points)
+
+    # Mimic the minimal runtime wiring used by LOOP mode
+    if not hasattr(points.events, "query_next_frame"):
+        points.events.add(query_next_frame=Event)
+    points.events.query_next_frame.connect(store._advance_step)
+
+    return store
 
 
 @pytest.fixture
