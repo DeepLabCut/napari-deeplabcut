@@ -108,6 +108,7 @@ from .ui.layer_stats import LayerStatusPanel
 from .ui.plots.trajectory import TrajectoryMatplotlibCanvas
 from .ui.ui_dialogs.save import PointsLayerSaveWorkflow
 from .utils.debug import get_debug_recorder, install_debug_recorder, log_timing
+from .utils.deprecations import deprecated
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
 # logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
@@ -289,8 +290,8 @@ class KeypointControls(ViewerSingletonWidget):
             trails_controller=self._trails_controller,
             trail_checkbox_getter=lambda: self._trail_cb.isChecked(),
             resolve_config_path_for_layer=self._resolve_config_path_for_layer,
-            current_project_path_getter=lambda: self._project_path,
-            current_image_meta_getter=lambda: self._image_meta,
+            current_project_path_getter=lambda: self.layer_manager.project_path,
+            current_image_meta_getter=lambda: self.layer_manager.image_meta,
             logger=logger,
         )
         ### UI setup ends here
@@ -339,23 +340,17 @@ class KeypointControls(ViewerSingletonWidget):
     def settings(self):
         return QSettings()
 
+    @deprecated(details="Use the layer manager's project context.", replacement="layer_manager.image_meta")
     @property
     def _image_meta(self) -> ImageMetadata:
         """Compatibility shim: lifecycle-owned image context now lives in manager."""
         return self.layer_manager.image_meta
 
-    @_image_meta.setter
-    def _image_meta(self, value: ImageMetadata) -> None:
-        self.layer_manager._image_meta = value
-
+    @deprecated(details="Use the layer manager's project context.", replacement="layer_manager.project_path")
     @property
     def _project_path(self) -> str | None:
         """Compatibility shim: lifecycle-owned project path now lives in manager."""
         return self.layer_manager.project_path
-
-    @_project_path.setter
-    def _project_path(self, value: str | None) -> None:
-        self.layer_manager.project_path = value
 
     @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):
@@ -868,6 +863,12 @@ class KeypointControls(ViewerSingletonWidget):
         active_layer = self.viewer.layers.selection.active
         active_dlc_points = self._current_dlc_points_layer()
         active_image = self.layer_manager.active_dlc_image_layer()
+        fallback_n_frames = None
+        try:
+            if active_image is not None and active_image.data.ndim == 4:  # (T, H, W, C)
+                fallback_n_frames = int(active_image.data.shape[0])
+        except Exception:
+            logger.debug("Refresh layer stats - Failed to determine frame count from active image layer", exc_info=True)
 
         folder_name = infer_folder_display_name(
             active_image if active_image is not None else active_layer,
@@ -889,7 +890,11 @@ class KeypointControls(ViewerSingletonWidget):
         self._layer_status_panel.set_point_size_enabled(True)
         self._layer_status_panel.set_point_size(get_uniform_point_size(active_dlc_points))
 
-        progress = compute_label_progress(active_dlc_points, fallback_paths=self.layer_manager.image_paths)
+        progress = compute_label_progress(
+            active_dlc_points,
+            fallback_paths=self.layer_manager.image_paths,
+            fallback_n_frames=fallback_n_frames,
+        )
         self._layer_status_panel.set_progress_summary(progress=progress)
 
     def _on_active_points_size_changed(self, size: int) -> None:
@@ -1070,11 +1075,11 @@ class KeypointControls(ViewerSingletonWidget):
         ok, msg, project_path = run_store_crop_coordinates(
             self.viewer,
             self._video_group,
-            explicit_project_path=self._project_path,
-            fallback_video_name=self._image_meta.name,
+            explicit_project_path=self.layer_manager.project_path,
+            fallback_video_name=self.layer_manager.image_meta.name,
         )
         if project_path is not None:
-            self._project_path = project_path
+            self.layer_manager.project_path = project_path
         self.viewer.status = msg
         self._refresh_video_panel_context()
 

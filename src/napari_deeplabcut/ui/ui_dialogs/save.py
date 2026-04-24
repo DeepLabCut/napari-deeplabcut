@@ -5,15 +5,18 @@ import logging
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from napari.layers import Image, Points
 from napari.utils.history import get_save_history
+from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
 from ...core.conflicts import compute_overwrite_report_for_points_save
 from ...core.errors import MissingProvenanceError
+from ...core.io import is_video
 from ...core.layers import is_machine_layer
 from ...core.metadata import (
     MergePolicy,
@@ -179,6 +182,14 @@ class PointsLayerSaveWorkflow:
             base_metadata = overridden_metadata if overridden_metadata is not None else dict(layer.metadata or {})
             save_metadata = self._enrich_points_metadata_for_save(layer, base_metadata)
 
+            if self._is_unsupported_direct_video_label_save(layer, save_metadata):
+                self.logger.debug(
+                    "Save aborted due to unsupported direct video label save case. Layer=%r",
+                    getattr(layer, "name", layer),
+                )
+                self._warn_unsupported_direct_video_label_save(layer, save_metadata)
+                return SaveOutcome(saved=False)
+
             attributes = {
                 "name": layer.name,
                 "metadata": save_metadata,
@@ -334,6 +345,80 @@ class PointsLayerSaveWorkflow:
                 md.setdefault("root", str(candidate))
 
         return md
+
+    def _is_video_context_layer(self, layer: Image | None) -> bool:
+        if layer is None:
+            return False
+
+        md = getattr(layer, "metadata", {}) or {}
+        dlc_md = md.get("dlc") or {}
+        if dlc_md.get("session_role") == "video":
+            return True
+
+        try:
+            src = getattr(getattr(layer, "source", None), "path", None)
+        except Exception:
+            src = None
+
+        for candidate in (src, getattr(layer, "name", None)):
+            if candidate and is_video(str(candidate)):
+                return True
+
+        return False
+
+    def _is_unsupported_direct_video_label_save(self, layer: Points, metadata: dict) -> bool:
+        """
+        Unsupported case:
+        - points layer has no extracted-frame row keys (`paths`)
+        - current save context is a video session
+
+        This corresponds to labeling directly on a loaded video after adding
+        a config.yaml / placeholder config, which bypasses DLC frame extraction.
+        """
+        paths = metadata.get("paths") or []
+        if paths:
+            return False
+
+        image_layer = self._best_image_context_layer()
+        return self._is_video_context_layer(image_layer)
+
+    def _warn_unsupported_direct_video_label_save(self, layer: Points, metadata: dict) -> None:
+        image_layer = self._best_image_context_layer()
+        image_name = getattr(image_layer, "name", None) if image_layer is not None else "current video"
+        config_path = self.resolve_config_path_for_layer(layer)
+
+        image_html = escape(image_name or "not found")
+        config_html = escape(str(config_path) if config_path is not None else "not found")
+
+        msg = QMessageBox(self.parent)
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle("Cannot save labels from video directly")
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(
+            "<p>"
+            "The currently loaded image layer looks like it is a video, and the keypoints layer "
+            "has no paths to individual image files."
+            "</p>"
+            "<p>"
+            "Saving labels created directly on a loaded video by adding <code>config.yaml</code> "
+            "is <b>not supported</b>."
+            "</p>"
+            "<p>"
+            "This bypasses DeepLabCut's frame extraction workflow, and the plugin cannot write a valid "
+            "<code>CollectedData_&lt;scorer&gt;.h5</code> file from video frame indices alone."
+            "</p>"
+            f"<p><b>Video context:</b> {image_html}<br>"
+            f"<b>Config:</b> {config_html}</p>"
+            "<p><b>What to do instead:</b></p>"
+            "<ul>"
+            "<li>First, use <b>Video panel &gt; 'Extract current frame'</b> (or use DeepLabCut) for this video</li>"
+            "<li>Load the resulting <code>labeled-data</code> folder / extracted images</li>"
+            "<li>If needed, drag and drop the <code>config.yaml</code> to create a placeholder points layer</li>"
+            "<li>Start annotating and save those extracted frames</li>"
+            "</ul>"
+        )
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.exec()
 
     def _format_missing_provenance_save_message(self, layer: Points, metadata: dict) -> str:
         config_path = self.resolve_config_path_for_layer(layer)

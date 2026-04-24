@@ -1,3 +1,4 @@
+import importlib
 import logging
 
 import numpy as np
@@ -5,7 +6,9 @@ import pandas as pd
 import pytest
 from napari.layers import Points
 
-from napari_deeplabcut.core.io import AnnotationKind, MissingProvenanceError
+import napari_deeplabcut._widgets as widgets_mod
+from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.core.errors import MissingProvenanceError
 
 from .utils import (
     _assert_only_these_files_changed,
@@ -21,23 +24,35 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
-def forbid_project_config_dialog(monkeypatch):
+def save_workflow_mod():
+    """
+    Module object where PointsLayerSaveWorkflow is defined and whose imported
+    names must be monkeypatched for save-flow tests.
+    """
+    return importlib.import_module(widgets_mod.PointsLayerSaveWorkflow.__module__)
+
+
+@pytest.fixture
+def forbid_project_config_dialog(monkeypatch, save_workflow_mod):
     monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
+        save_workflow_mod,
+        "prompt_for_project_config_for_save",
         lambda *args, **kwargs: pytest.fail("Unexpected project-config dialog."),
     )
     monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.maybe_confirm_dataset_path_rewrite",
+        save_workflow_mod,
+        "maybe_confirm_dataset_path_rewrite",
         lambda *args, **kwargs: pytest.fail("Unexpected dataset path rewrite confirmation."),
     )
     monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.warn_existing_dataset_folder_conflict",
+        save_workflow_mod,
+        "warn_existing_dataset_folder_conflict",
         lambda *args, **kwargs: pytest.fail("Unexpected dataset-folder conflict warning."),
     )
 
 
 @pytest.fixture
-def skip_project_config_dialog(monkeypatch):
+def skip_project_config_dialog(monkeypatch, save_workflow_mod):
     """
     Simulate the new promotion policy when no config.yaml exists.
 
@@ -56,10 +71,7 @@ def skip_project_config_dialog(monkeypatch):
             action=ui_dialogs.ProjectConfigPromptAction.SKIP,
         )
 
-    monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
-        _skip,
-    )
+    monkeypatch.setattr(save_workflow_mod, "prompt_for_project_config_for_save", _skip)
     return calls
 
 
@@ -464,6 +476,7 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     tmp_path,
     monkeypatch,
     overwrite_confirm,
+    save_workflow_mod,
 ):
     """
     Contract: a project-less labeled folder can be associated with a chosen DLC
@@ -523,21 +536,8 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     store.current_keypoint = keypoints.Keypoint("bodypart1", "")
     points.add(np.array([0.0, 11.0, 22.0], dtype=float))
 
-    from napari_deeplabcut.ui import dialogs as ui_dialogs
-
-    monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
-        lambda *args, **kwargs: ui_dialogs.ProjectConfigPromptResult(
-            action=ui_dialogs.ProjectConfigPromptAction.ASSOCIATE,
-            config_path=str(config_path),
-        ),
-    )
-    monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.maybe_confirm_dataset_path_rewrite",
-        lambda *args, **kwargs: True,
-    )
-
     import napari_deeplabcut.core.conflicts as conflicts
+    from napari_deeplabcut.ui import dialogs as ui_dialogs
 
     real_compute = conflicts.compute_overwrite_report_for_points_save
     captured = {}
@@ -547,7 +547,21 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
         return real_compute(data, attributes)
 
     monkeypatch.setattr(
-        "napari_deeplabcut._widgets.compute_overwrite_report_for_points_save",
+        save_workflow_mod,
+        "prompt_for_project_config_for_save",
+        lambda *args, **kwargs: ui_dialogs.ProjectConfigPromptResult(
+            action=ui_dialogs.ProjectConfigPromptAction.ASSOCIATE,
+            config_path=str(config_path),
+        ),
+    )
+    monkeypatch.setattr(
+        save_workflow_mod,
+        "maybe_confirm_dataset_path_rewrite",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        save_workflow_mod,
+        "compute_overwrite_report_for_points_save",
         _wrapped_compute,
     )
 
@@ -607,6 +621,7 @@ def test_projectless_folder_save_refuses_when_target_dataset_folder_already_cont
     tmp_path,
     monkeypatch,
     overwrite_confirm,
+    save_workflow_mod,
 ):
     """
     Contract: project-association save must refuse if the target dataset folder
@@ -652,18 +667,21 @@ def test_projectless_folder_save_refuses_when_target_dataset_folder_already_cont
     from napari_deeplabcut.ui import dialogs as ui_dialogs
 
     monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
+        save_workflow_mod,
+        "prompt_for_project_config_for_save",
         lambda *args, **kwargs: ui_dialogs.ProjectConfigPromptResult(
             action=ui_dialogs.ProjectConfigPromptAction.ASSOCIATE,
             config_path=str(config_path),
         ),
     )
     monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.warn_existing_dataset_folder_conflict",
+        save_workflow_mod,
+        "warn_existing_dataset_folder_conflict",
         lambda *args, **kwargs: warned.setdefault("called", True),
     )
     monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.maybe_confirm_dataset_path_rewrite",
+        save_workflow_mod,
+        "maybe_confirm_dataset_path_rewrite",
         lambda *args, **kwargs: True,
     )
 
@@ -687,6 +705,7 @@ def test_promotion_nearby_config_wins_no_dialog_no_prompt(
     tmp_path,
     monkeypatch,
     inputdialog,
+    save_workflow_mod,
 ):
     """
     If a valid DLC config.yaml is discoverable near a machine-labeled layer,
@@ -714,7 +733,8 @@ def test_promotion_nearby_config_wins_no_dialog_no_prompt(
         pytest.fail("Config-selection dialog must not appear when nearby config.yaml is auto-discovered.")
 
     monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
+        save_workflow_mod,
+        "prompt_for_project_config_for_save",
         _unexpected_config_dialog,
     )
 
@@ -761,6 +781,7 @@ def test_promotion_selected_external_config_wins_no_scorer_prompt(
     tmp_path,
     monkeypatch,
     inputdialog,
+    save_workflow_mod,
 ):
     """
     If no nearby config.yaml is found, but the user points the save flow to a
@@ -797,7 +818,8 @@ def test_promotion_selected_external_config_wins_no_scorer_prompt(
         )
 
     monkeypatch.setattr(
-        "napari_deeplabcut._widgets.ui_dialogs.prompt_for_project_config_for_save",
+        save_workflow_mod,
+        "prompt_for_project_config_for_save",
         _choose_external_config,
     )
 
@@ -836,3 +858,100 @@ def test_promotion_selected_external_config_wins_no_scorer_prompt(
 
     machine_post = pd.read_hdf(machine_path, key="keypoints")
     pd.testing.assert_frame_equal(machine_pre, machine_post)
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_direct_video_labeling_save_is_blocked_without_paths(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    monkeypatch,
+    overwrite_confirm,
+):
+    """
+    Unsupported workflow guard:
+    - user has a video layer open
+    - user adds config.yaml / placeholder points layer
+    - points layer has no extracted-frame paths
+    - save must abort with a warning before overwrite preflight / writer save
+    """
+    overwrite_confirm.forbid()
+
+    project, config_path, labeled_folder = _make_project_config_and_frames_no_gt(tmp_path)
+
+    # 1) Open config first -> placeholder Points layer with valid DLC header
+    viewer.open(str(config_path), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
+    qtbot.wait(200)
+
+    points = next(ly for ly in viewer.layers if isinstance(ly, Points))
+    store = keypoint_controls.get_layer_store(points)
+    assert store is not None
+
+    # Ensure the placeholder truly has no extracted-frame paths
+    points.metadata = dict(points.metadata or {})
+    points.metadata["paths"] = []
+    # Keep a root/project hint if your normal workflow would have one
+    points.metadata.setdefault("project", str(project))
+    points.metadata.setdefault("root", str(labeled_folder))
+
+    # Add one point so the layer looks "dirty" / save-worthy
+    _set_or_add_bodypart_xy(points, store, "bodypart1", x=11.0, y=22.0)
+
+    # 2) Add a synthetic video image layer to create the unsupported context
+    viewer.add_image(
+        np.zeros((3, 8, 8, 3), dtype=np.uint8),
+        name="clip.mp4",
+        metadata={"dlc": {"session_role": "video"}},
+    )
+    qtbot.wait(100)
+
+    # Select the points layer for save
+    viewer.layers.selection.active = points
+    keypoint_controls.viewer.layers.selection.active = points
+    keypoint_controls.viewer.layers.selection.select_only(points)
+
+    warned = {"called": False}
+
+    # Patch the save workflow module where the imported symbols are actually used
+    save_mod = importlib.import_module(keypoint_controls._save_workflow.__class__.__module__)
+
+    # If you added a dedicated warning helper, patch that directly (cleanest)
+    if hasattr(keypoint_controls._save_workflow, "_warn_unsupported_direct_video_label_save"):
+        monkeypatch.setattr(
+            keypoint_controls._save_workflow,
+            "_warn_unsupported_direct_video_label_save",
+            lambda layer, metadata: warned.__setitem__("called", True),
+        )
+    else:
+        # Fallback if you still use QMessageBox.warning directly in the workflow module
+        monkeypatch.setattr(
+            save_mod.QMessageBox,
+            "warning",
+            lambda *args, **kwargs: warned.__setitem__("called", True),
+        )
+
+    # Guard must abort BEFORE overwrite preflight
+    monkeypatch.setattr(
+        save_mod,
+        "compute_overwrite_report_for_points_save",
+        lambda *args, **kwargs: pytest.fail("Overwrite preflight must not run for unsupported direct-video save."),
+    )
+
+    # Optional extra safety: writer save must not be reached either
+
+    def _unexpected_save(*args, **kwargs):
+        pytest.fail("viewer.layers.save must not be called for unsupported direct-video save.")
+
+    monkeypatch.setattr(viewer.layers, "save", _unexpected_save)
+
+    # Call the workflow directly so we can assert on the outcome
+    outcome = keypoint_controls._save_workflow.save_layers(selected=True)
+    qtbot.wait(100)
+
+    assert outcome.saved is False
+    assert warned["called"] is True
+
+    # No GT file should have been created in the dataset folder
+    assert not (labeled_folder / "CollectedData_John.h5").exists()
