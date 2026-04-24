@@ -30,6 +30,7 @@ from qtpy.QtWidgets import (
 
 from napari_deeplabcut.tracking.core.data import TrackingWorkerData, TrackingWorkerOutput
 from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS
+from napari_deeplabcut.tracking.ui.merger import TrackingMergeWorkflow
 from napari_deeplabcut.tracking.ui.worker import TrackingWorker
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,9 @@ class TrackingControls(QWidget):
         self._tracking_bothway_button = QPushButton()
         self._tracking_bothway_button.clicked.connect(self.track_bothway)
         self._tracking_progress_bar = QProgressBar()
+        ## Merge results controls
+        self._merge_tracked_button = QPushButton("Merge tracked points…")
+        self._merge_tracked_button.clicked.connect(self._open_merge_workflow)
 
         # Controls
         ## Forward controls
@@ -514,6 +518,20 @@ class TrackingControls(QWidget):
         )
         self.trackingRequested.emit(tracking_data)
 
+    def _open_merge_workflow(self):
+        active = self._viewer.layers.selection.active
+        hinted_source = (
+            active if isinstance(active, Points) and self.lifecycle_manager.is_tracking_result_layer(active) else None
+        )
+
+        workflow = TrackingMergeWorkflow(
+            parent=self,
+            viewer=self._viewer,
+            layer_manager=self.lifecycle_manager,
+            logger_=logger,
+        )
+        workflow.run(source_layer=hinted_source)
+
     def _build_layout(self):
         # Layout
         self.setLayout(QVBoxLayout())
@@ -656,3 +674,6 @@ class TrackingControls(QWidget):
         self._tracking_progress_bar.setRange(0, 100)
         self.layout().addLayout(tracking_controls_layout)
         self.layout().addWidget(self._tracking_progress_bar)
+
+        # Merge controls
+        self.layout().addWidget(self._merge_tracked_button)
