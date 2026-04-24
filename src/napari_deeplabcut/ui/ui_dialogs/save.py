@@ -407,14 +407,14 @@ class PointsLayerSaveWorkflow:
             "This bypasses DeepLabCut's frame extraction workflow, and the plugin cannot write a valid "
             "<code>CollectedData_&lt;scorer&gt;.h5</code> file from video frame indices alone."
             "</p>"
-            f"<p><b>Video context:</b> {image_html}<br>"
+            f"<p><b>Video:</b> {image_html}<br>"
             f"<b>Config:</b> {config_html}</p>"
             "<p><b>What to do instead:</b></p>"
             "<ul>"
             "<li>First, use <b>Video panel &gt; 'Extract current frame'</b> (or use DeepLabCut) for this video</li>"
             "<li>Load the resulting <code>labeled-data</code> folder / extracted images</li>"
             "<li>If needed, drag and drop the <code>config.yaml</code> to create a placeholder points layer</li>"
-            "<li>Start annotating and save those extracted frames</li>"
+            "<li>Start annotating in the created Points layer and save it</li>"
             "</ul>"
         )
         msg.setStandardButtons(QMessageBox.Ok)
