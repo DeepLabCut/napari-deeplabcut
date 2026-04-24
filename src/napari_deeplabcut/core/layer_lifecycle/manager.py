@@ -28,6 +28,7 @@ from ...core.project_paths import PathMatchPolicy
 from ...core.remap import remap_layer_data_by_paths
 from ...napari_compat import install_add_wrapper, install_paste_patch
 from ...napari_compat.points_layer import make_paste_data
+from ...tracking.core.data import TRACKING_LAYER_METADATA_KEY, is_tracking_result_points_layer
 from ...ui.cropping import resolve_project_path_from_image_layer
 from ...utils.debug import log_timing
 from .merge import MergeDecisionProvider, MergeDecisionRequest, MergeDecisionResult, MergeDisposition
@@ -1016,6 +1017,157 @@ class LayerLifecycleManager(QObject):
             resources.keybindings_installed = True
 
         return resources
+
+    # ------------------------------------------------------------------ #
+    # Tracking-result layer support                                      #
+    # ------------------------------------------------------------------ #
+
+    def tracking_result_metadata(self, layer: Any) -> dict | None:
+        """Return tracking-result metadata payload for a Points layer, if present."""
+        if layer is None or not isinstance(layer, Points):
+            return None
+
+        md = getattr(layer, "metadata", {}) or {}
+        payload = md.get(TRACKING_LAYER_METADATA_KEY, None)
+        return payload if isinstance(payload, dict) else None
+
+    def is_tracking_result_layer(self, layer: Any) -> bool:
+        """
+        Authoritative viewer/session-facing predicate for tracking-result layers.
+
+        Notes
+        -----
+        This delegates the raw metadata check to the tracking module but keeps
+        the semantic classification entry point centralized in the lifecycle manager.
+        """
+        return bool(isinstance(layer, Points) and is_tracking_result_points_layer(layer))
+
+    def tracking_result_source_layer_name(self, layer: Any) -> str | None:
+        """Return the recorded source DLC layer name for a tracking-result layer, if known."""
+        payload = self.tracking_result_metadata(layer)
+        if not payload:
+            return None
+
+        name = payload.get("source_layer_name", None)
+        if name is None:
+            return None
+
+        text = str(name).strip()
+        return text or None
+
+    def is_mergeable_dlc_points_layer(self, layer: Any, *, require_managed: bool = False) -> bool:
+        """
+        Return True if a Points layer is a valid merge target for tracking results.
+
+        Rules
+        -----
+        - must be a Points layer
+        - must not be a tracking-result layer
+        - must not be a temporary config placeholder
+        - must have a valid DLC header
+        - optionally must already be managed by the lifecycle manager
+        """
+        if layer is None or not isinstance(layer, Points):
+            return False
+
+        if self.is_tracking_result_layer(layer):
+            return False
+
+        if self.is_config_placeholder_points_layer(layer):
+            return False
+
+        if not self.validate_header(layer):
+            return False
+
+        if require_managed and not self.is_managed(layer):
+            return False
+
+        return True
+
+    def iter_tracking_result_layers(self) -> Iterator[Points]:
+        """Iterate live tracking-result Points layers in current viewer order."""
+        for layer in self.viewer.layers:
+            if isinstance(layer, Points) and self.is_tracking_result_layer(layer):
+                yield layer
+
+    def iter_mergeable_dlc_points_layers(
+        self,
+        *,
+        prefer_managed: bool = True,
+        managed_only: bool = False,
+    ) -> Iterator[Points]:
+        """
+        Iterate Points layers that are valid tracking-merge targets.
+
+        Parameters
+        ----------
+        prefer_managed
+            If True, yield managed mergeable layers first, then any additional live
+            mergeable layers in viewer order.
+        managed_only
+            If True, only yield managed mergeable layers.
+        """
+        seen: set[int] = set()
+
+        if prefer_managed or managed_only:
+            for layer, _store in self.iter_managed_points():
+                if self.is_mergeable_dlc_points_layer(layer, require_managed=True):
+                    layer_id = id(layer)
+                    if layer_id not in seen:
+                        seen.add(layer_id)
+                        yield layer
+
+        if managed_only:
+            return
+
+        for layer in self.viewer.layers:
+            if not isinstance(layer, Points):
+                continue
+            if id(layer) in seen:
+                continue
+            if self.is_mergeable_dlc_points_layer(layer, require_managed=False):
+                seen.add(id(layer))
+                yield layer
+
+    def suggest_merge_target(self, source_layer: Points | None) -> Points | None:
+        """
+        Suggest the best default DLC merge target for a tracking-result layer.
+
+        Priority
+        --------
+        1. mergeable managed layer whose name matches tracking source_layer_name
+        2. any mergeable live layer whose name matches tracking source_layer_name
+        3. currently active mergeable DLC points layer
+        4. first mergeable managed DLC points layer
+        5. first mergeable live DLC points layer
+        """
+        if source_layer is None or not isinstance(source_layer, Points):
+            return None
+
+        preferred_name = self.tracking_result_source_layer_name(source_layer)
+
+        if preferred_name:
+            for layer in self.iter_mergeable_dlc_points_layers(prefer_managed=True, managed_only=True):
+                if layer is not source_layer and getattr(layer, "name", None) == preferred_name:
+                    return layer
+
+            for layer in self.iter_mergeable_dlc_points_layers(prefer_managed=False, managed_only=False):
+                if layer is not source_layer and getattr(layer, "name", None) == preferred_name:
+                    return layer
+
+        active = getattr(self.viewer.layers.selection, "active", None)
+        if active is not source_layer and self.is_mergeable_dlc_points_layer(active, require_managed=False):
+            return active
+
+        for layer in self.iter_mergeable_dlc_points_layers(prefer_managed=True, managed_only=True):
+            if layer is not source_layer:
+                return layer
+
+        for layer in self.iter_mergeable_dlc_points_layers(prefer_managed=False, managed_only=False):
+            if layer is not source_layer:
+                return layer
+
+        return None
 
     # ------------------------------------------------------------------ #
     # Registry facade                                                    #
