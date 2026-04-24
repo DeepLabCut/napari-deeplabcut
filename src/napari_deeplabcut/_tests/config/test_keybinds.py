@@ -29,6 +29,8 @@ def test_iter_shortcuts_returns_registry():
 
     assert shortcuts == expected
     assert keybinds.SHORTCUTS, "SHORTCUTS should not be empty"
+
+
 def test_shortcuts_registry_points_layer_entries_have_callbacks():
     for spec in keybinds.SHORTCUTS:
         assert spec.keys
