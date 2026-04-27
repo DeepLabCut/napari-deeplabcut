@@ -9,6 +9,7 @@ from napari_deeplabcut.config.models import AnnotationKind, OverwriteConflictRep
 from napari_deeplabcut.core import schemas as dlc_schemas
 from napari_deeplabcut.core.dataframes import set_df_scorer
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
+from napari_deeplabcut.core.io import DLC_CANONICAL_H5_KEY
 from napari_deeplabcut.core.metadata import parse_points_metadata
 from napari_deeplabcut.core.project_paths import infer_dlc_project_from_points_meta
 from napari_deeplabcut.core.provenance import (
@@ -143,7 +144,7 @@ def compute_overwrite_report_for_points_save(
         return None
 
     try:
-        df_old = pd.read_hdf(out, key="keypoints")
+        df_old = pd.read_hdf(out, key=DLC_CANONICAL_H5_KEY)
     except (KeyError, ValueError):
         df_old = pd.read_hdf(out)
 

@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 _GLOB_MAGIC = set("*?[")
 _SUPPORTED_SUFFIXES = {ext.lower() for ext in SUPPORTED_IMAGES}
-DLC_CANONICAL_H5_KEY = "df_with_missing"
+DLC_CANONICAL_H5_KEY = "df_with_missing"  # TODO use this key instead of str literal in all places
 
 
 def _has_glob_magic(name: str) -> bool:
