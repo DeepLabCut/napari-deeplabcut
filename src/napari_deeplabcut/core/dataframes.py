@@ -8,9 +8,84 @@ import numpy as np
 import pandas as pd
 
 from napari_deeplabcut.config.models import ConflictEntry, OverwriteConflictReport
-from napari_deeplabcut.core.schemas import PointsWriteInputModel
+from napari_deeplabcut.core.schemas import DLCHeaderModel, PointsWriteInputModel
 
 logger = logging.getLogger(__name__)
+
+
+def _is_logical_single_animal_header(header: DLCHeaderModel | None) -> bool:
+    """
+    Determine whether the authoritative header represents a single-animal project.
+
+    Important:
+    - Use the original header shape (nlevels / names), NOT the normalized in-memory
+      canonical_4 representation.
+    - A legacy/canonical SA header is 3-level: (scorer, bodyparts, coords).
+    """
+    if header is None:
+        return False
+
+    # Canonical SA in this codebase is represented originally as 3-level
+    if header.nlevels == 3:
+        return True
+
+    # Defensive fallback: if a 4-level header somehow exists but all individuals are blank,
+    # treat it as effectively SA for writing.
+    if header.nlevels == 4:
+        inds = [str(i) for i in header.individuals if str(i) != ""]
+        return len(inds) == 0
+
+    return False
+
+
+def restore_dlc_on_disk_header_shape(df: pd.DataFrame, header: DLCHeaderModel) -> pd.DataFrame:
+    """
+    Restore the DataFrame column structure to match the authoritative DLC header
+    that should be used on disk.
+
+    - If the logical target is single-animal, collapse an empty 'individuals' level.
+    - Reindex to the authoritative header order.
+    """
+    if not isinstance(df.columns, pd.MultiIndex):
+        return df
+
+    df_out = df.copy()
+
+    if _is_logical_single_animal_header(header):
+        # If the normalized dataframe has an empty individuals level, collapse it.
+        if df_out.columns.nlevels == 4 and "individuals" in (df_out.columns.names or []):
+            inds = pd.Index(df_out.columns.get_level_values("individuals")).astype(str)
+            non_empty_inds = {x for x in inds if x != ""}
+            if non_empty_inds:
+                raise ValueError(
+                    "Refusing to write single-animal format because dataframe contains "
+                    f"non-empty individuals: {sorted(non_empty_inds)}"
+                )
+
+            df_out = df_out.droplevel("individuals", axis=1)
+            df_out.columns = df_out.columns.set_names(["scorer", "bodyparts", "coords"])
+
+        # Reindex to the original authoritative 3-level header order
+        try:
+            # For an SA header, header.columns is the original 3-level tuples
+            target_cols = pd.MultiIndex.from_tuples(
+                header.columns,
+                names=header.names or ["scorer", "bodyparts", "coords"],
+            )
+            df_out = df_out.reindex(target_cols, axis=1)
+        except Exception:
+            logger.debug("Could not reindex collapsed SA dataframe to authoritative header", exc_info=True)
+
+        return df_out
+
+    # Multi-animal: use canonical 4-level ordering
+    try:
+        target_cols = header.as_multiindex()
+        df_out = df_out.reindex(target_cols, axis=1)
+    except Exception:
+        logger.debug("Could not reindex MA dataframe to authoritative header", exc_info=True)
+
+    return df_out
 
 
 def set_df_scorer(df: pd.DataFrame, scorer: str) -> pd.DataFrame:
