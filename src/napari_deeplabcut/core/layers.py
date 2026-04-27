@@ -13,6 +13,7 @@ from qtpy.QtCore import QTimer
 
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 from napari_deeplabcut.core.keypoints import build_color_cycles
+from napari_deeplabcut.utils.deprecations import deprecated
 
 T = TypeVar("T")
 
@@ -268,12 +269,16 @@ def set_uniform_point_size(layer: Points, size: int) -> None:
     layer.size = float(size)
 
 
-def infer_frame_count(layer: Points, *, preferred_paths: list[str] | None = None) -> int:
+def infer_frame_count(
+    layer: Points, *, preferred_paths: list[str] | None = None, fallback_n_frames: int | None = None
+) -> int:
     md = getattr(layer, "metadata", {}) or {}
 
     paths = preferred_paths or md.get("paths") or []
     if paths:
         return len(paths)
+    if fallback_n_frames is not None:
+        return fallback_n_frames
 
     data = np.asarray(getattr(layer, "data", []))
     if data.size == 0:
@@ -417,7 +422,9 @@ def _iter_labeled_slots(layer: Points):
         yield (frame, id_text, label)
 
 
-def compute_label_progress(layer: Points, *, fallback_paths: list[str] | None = None) -> LabelProgress:
+def compute_label_progress(
+    layer: Points, *, fallback_paths: list[str] | None = None, fallback_n_frames: int | None = None
+) -> LabelProgress:
     """
     Compute progress for the active napari layer.
 
@@ -428,7 +435,7 @@ def compute_label_progress(layer: Points, *, fallback_paths: list[str] | None = 
       currently represented in napari:
         observed_ids × observed_labels
     """
-    frame_count = infer_frame_count(layer, preferred_paths=fallback_paths)
+    frame_count = infer_frame_count(layer, preferred_paths=fallback_paths, fallback_n_frames=fallback_n_frames)
     bodypart_count = infer_bodypart_count(layer)
     individual_count = infer_individual_count(layer)
 
@@ -554,6 +561,7 @@ def infer_folder_display_name(
     return "—"
 
 
+@deprecated(details="Use LayerLifecycleManager.active_dlc_image_layer instead")
 def find_relevant_image_layer(viewer) -> Image | None:
     active = viewer.layers.selection.active
     if isinstance(active, Image):

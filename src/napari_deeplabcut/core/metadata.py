@@ -421,7 +421,7 @@ def attach_source_and_io_to_layer_kwargs(
     file_path: Path,
     *,
     kind: AnnotationKind | None = None,
-    dataset_key: str = "keypoints",
+    dataset_key: str = "df_with_missing",
 ) -> None:
     """
     Attach authoritative source info + IO provenance to napari layer metadata dict.
@@ -542,7 +542,7 @@ def _infer_kind_from_source_name(p: Path) -> AnnotationKind | None:
 def _build_io_from_source_h5(
     src: str,
     *,
-    dataset_key: str = "keypoints",
+    dataset_key: str = "df_with_missing",
 ) -> dict[str, Any] | None:
     """Legacy migration: build io provenance dict from source_h5 string."""
     if not isinstance(src, str) or not src:
@@ -596,7 +596,7 @@ def _prepare_points_payload(
     # legacy migration: io from source_h5
     if migrate_legacy and not raw.get("io"):
         src = raw.get("source_h5")
-        io_dict = _build_io_from_source_h5(src, dataset_key="keypoints")
+        io_dict = _build_io_from_source_h5(src, dataset_key="df_with_missing")
         if io_dict:
             raw["io"] = io_dict
 
@@ -717,7 +717,7 @@ def write_points_meta(
 
     # legacy migration (optional): if caller writes anything, keep io stable
     if migrate_legacy and not merged.get("io") and merged.get("source_h5"):
-        io_dict = _build_io_from_source_h5(str(merged.get("source_h5")), dataset_key="keypoints")
+        io_dict = _build_io_from_source_h5(str(merged.get("source_h5")), dataset_key="df_with_missing")
         if io_dict:
             merged["io"] = io_dict
 

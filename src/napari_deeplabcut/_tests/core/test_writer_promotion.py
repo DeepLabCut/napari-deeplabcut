@@ -32,7 +32,7 @@ def _make_minimal_points_metadata(
                 "project_root": str(root),
                 "source_relpath_posix": f"{name}.h5",
                 "kind": kind,
-                "dataset_key": "keypoints",
+                "dataset_key": "df_with_missing",
             },
         },
     }
@@ -42,7 +42,7 @@ def _make_minimal_points_metadata(
 
 
 def _read_keypoints_h5(p: Path) -> pd.DataFrame:
-    return pd.read_hdf(p, key="keypoints")
+    return pd.read_hdf(p, key="df_with_missing")
 
 
 def test_writer_aborts_if_machine_source_without_save_target(tmp_path: Path):
@@ -86,7 +86,7 @@ def test_writer_promotion_writes_collecteddata_and_rewrites_scorer(tmp_path: Pat
         "project_root": str(tmp_path),
         "source_relpath_posix": "CollectedData_Alice.h5",
         "kind": AnnotationKind.GT,
-        "dataset_key": "keypoints",
+        "dataset_key": "df_with_missing",
         "scorer": "Alice",
     }
 
@@ -101,7 +101,7 @@ def test_writer_promotion_writes_collecteddata_and_rewrites_scorer(tmp_path: Pat
     # Create a dummy machine file and snapshot it (writer must not touch it)
     machine_path = tmp_path / "machinelabels-iter0.h5"
     df_machine = pd.DataFrame(np.nan, columns=cols, index=["img000.png"])
-    df_machine.to_hdf(machine_path, key="keypoints", mode="w")
+    df_machine.to_hdf(machine_path, key="df_with_missing", mode="w")
     machine_before = _read_keypoints_h5(machine_path)
 
     points = np.array(

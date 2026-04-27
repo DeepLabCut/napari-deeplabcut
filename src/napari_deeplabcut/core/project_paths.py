@@ -665,3 +665,94 @@ def infer_dlc_project_from_image_layer(
         prefer_project_root=prefer_project_root,
         max_levels=max_levels,
     )
+
+
+# FIXME @C-Achard 2026-04-22 Add unit tests for below funcs
+def infer_dlc_project_from_labeled_folder(
+    folder: str | Path,
+    *,
+    prefer_project_root: bool = True,
+    max_levels: int = 5,
+) -> DLCProjectContext:
+    """
+    Infer DLC project context from a labeled-data/<dataset> folder.
+
+    This is the common case for folder-parser workflows:
+    - the dataset folder itself is a valid root anchor
+    - config.yaml may or may not exist above it
+    - if config exists, we may elevate project_root/config_path
+    """
+    dataset_folder = normalize_anchor_candidate(folder)
+    if dataset_folder is None:
+        raise ValueError(f"Could not normalize labeled folder: {folder!r}")
+
+    return infer_dlc_project(
+        anchor_candidates=[dataset_folder],
+        dataset_candidates=[dataset_folder],
+        explicit_root=dataset_folder,
+        prefer_project_root=prefer_project_root,
+        max_levels=max_levels,
+    )
+
+
+def infer_dlc_project_from_video_path(
+    video_path: str | Path,
+    *,
+    max_levels: int = 5,
+) -> DLCProjectContext | None:
+    """
+    Infer DLC project context for a directly opened video.
+
+    Important:
+    ----------
+    A directly opened video should count as a DLC session video only if it can
+    be confidently associated with a DLC project context (typically via a nearby
+    config.yaml).
+    TODO @C-Achard 2026-04-22: Ensure that adding a config.yaml later properly
+    updates the inferred context and associated session image layers.
+
+    Returns
+    -------
+    DLCProjectContext | None
+        Returns None if no recognizable DLC project context can be inferred.
+    """
+    ctx = infer_dlc_project_from_opened(
+        video_path,
+        explicit_root=None,
+        prefer_project_root=True,
+        max_levels=max_levels,
+    )
+
+    # For directly opened videos, require a recognizable project context.
+    if ctx.project_root is None and ctx.config_path is None:
+        return None
+
+    return ctx
+
+
+# -----------------------------------------------------------------------------
+# Lifecycle/session helpers
+# -----------------------------------------------------------------------------
+def session_key_from_project_context(ctx: DLCProjectContext | None) -> str | None:
+    """
+    Build a stable session key from the strongest available project context hint.
+
+    Priority:
+    - project_root
+    - config_path parent (project_root)
+    - dataset_folder
+    - root_anchor
+
+    This is intended for lifecycle/session identity, not for IO routing.
+    """
+    if ctx is None:
+        return None
+
+    key = ctx.project_root or ctx.dataset_folder or ctx.root_anchor
+    if key is None:
+        return None
+
+    try:
+        return str(key.expanduser().resolve())
+    except Exception:
+        return str(key)

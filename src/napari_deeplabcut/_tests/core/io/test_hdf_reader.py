@@ -29,7 +29,7 @@ def _write_h5_single_animal(
     )
     df = pd.DataFrame([values], index=list(index), columns=cols)
     path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_hdf(path, key="keypoints", mode="w")
+    df.to_hdf(path, key="df_with_missing", mode="w")
     return df
 
 

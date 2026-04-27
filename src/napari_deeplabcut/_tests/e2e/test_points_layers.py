@@ -158,8 +158,8 @@ def test_copy_paste_points_to_new_frame_does_not_crash_and_offsets_frame(
     layer = viewer.add_points(data, **md)
 
     assert isinstance(layer, Points)
-    qtbot.waitUntil(lambda: layer in controls._stores, timeout=5_000)
-    assert layer in controls._stores
+    qtbot.waitUntil(lambda: controls.get_layer_store(layer) is not None, timeout=5_000)
+    assert controls.get_layer_store(layer) is not None
 
     # frame 0: select and copy
     viewer.dims.set_point(0, 0)
