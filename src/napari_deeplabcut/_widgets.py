@@ -350,6 +350,7 @@ class KeypointControls(ViewerSingletonWidget):
         return QSettings()
 
     def _cleanup_timers(self, *_args) -> None:
+        # FIXME @C-Achard move to singleton base class for other widgets to reuse, and maybe add logs
         """Stop/delete all timers owned by this widget.
 
         This is intentionally defensive: by teardown time, some underlying
