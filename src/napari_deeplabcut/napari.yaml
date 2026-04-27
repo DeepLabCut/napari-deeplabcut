@@ -1,5 +1,5 @@
 name: napari-deeplabcut
-display_name: napari DeepLabCut
+display_name: napari-deeplabcut
 contributions:
   commands:
     - id: napari-deeplabcut.get_hdf_reader

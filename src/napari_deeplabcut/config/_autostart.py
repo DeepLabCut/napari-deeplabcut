@@ -50,6 +50,9 @@ def _ensure_keypoint_controls_open(viewer) -> None:
         )
     except Exception:
         logger.debug("Failed to open Keypoint controls dock widget.", exc_info=True)
+        napari.utils.notifications.show_info(
+            "Failed to open Keypoint controls. Please open manually from the Plugins menu.",
+        )
 
 
 def _maybe_open_for_inserted_layer(viewer, layer) -> None:

@@ -3,10 +3,27 @@
 NOTE: This file is generally already too long. For future development, please consider:
 - Moving existing responsibilities out into separate modules (existing or new)
 - Avoiding adding anything that is not strictly related to :
-  - Building the final UI (blocks can be moved to ui/ for better organization)
-  - Wiring to the core plugin functionality (e.g. via signals/slots, method calls, etc.)
-  - Anything that requires the full widget+viewer+signal/event context to function properly
-  - Similarly, test_widgets.py is a bit of a default drawer right now, please create new tests in _tests/ui
+    - Building the final UI (blocks can be moved to ui/ for better organization)
+    - Wiring to the core plugin functionality (e.g. via signals/slots, method calls, etc.)
+    - Anything that requires the full widget+viewer+signal/event context to function properly
+    - Similarly, test_widgets.py is a bit of a default drawer right now, please create new tests in _tests/ui
+- Lifecycle of UI elements and Qt wiring should ideally:
+    - Use parent child widgets/controllers to KeypointControls
+    - Use child QTimers instead of fire-and-forget QTimer.singleShot for deferred UI work
+    - Use normal Qt signal connections for Qt-owned objects
+    - Keep explicit cleanup only for non-Qt subscriptions/resources
+    (e.g. napari event connections, observer install/uninstall, monkey-patch restoration)
+
+TODO: And general dev notes:
+- The saving workflow is crammed into save_layers_dialog() right now,
+  and should move to a dedicated  e.g. PointsLayerSaveFactory class in a dedicated file.
+- Project/root/paths/image-meta/points-meta synchronization should be centralized.
+  It is too distributed right now, and it can be unclear "which truth" is authoritative.
+  Some sort of context-manager class would likely help.
+- Maybe a dedicated layer lifecycle system would help, for layer adoption and setup.
+- Something that owns UI sync state (what to refresh, why, when) could help with the heavy wiring.
+- I'd suggest keeping in this file:
+    - color/label mode, menu/help actions, widget visibility and user interaction hooks.
 """
 
 # src/napari_deeplabcut/_widgets.py
@@ -61,6 +78,8 @@ from napari_deeplabcut.core.config_sync import (
 from napari_deeplabcut.core.conflicts import compute_overwrite_report_for_points_save
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
 from napari_deeplabcut.core.layers import (
+    PointsInteractionEvent,
+    PointsInteractionObserver,
     compute_label_progress,
     find_relevant_image_layer,
     get_first_points_layer,
@@ -117,13 +136,15 @@ from napari_deeplabcut.ui.cropping import (
     run_store_crop_coordinates,
     update_video_panel_context,
 )
+from napari_deeplabcut.ui.debug_window import DebugTextWindow, make_issue_report_provider
 from napari_deeplabcut.ui.dialogs import Shortcuts, Tutorial
 from napari_deeplabcut.ui.labels_and_dropdown import (
     DropdownMenu,
     KeypointsDropdownMenu,
 )
 from napari_deeplabcut.ui.layer_stats import LayerStatusPanel
-from napari_deeplabcut.ui.plots.trajectory import KeypointMatplotlibCanvas
+from napari_deeplabcut.ui.plots.trajectory import TrajectoryMatplotlibCanvas
+from napari_deeplabcut.utils.debug import get_debug_recorder, install_debug_recorder
 
 logger = logging.getLogger("napari-deeplabcut._widgets")
 # logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
@@ -171,6 +192,16 @@ class KeypointControls(QWidget):
         self.viewer.layers.events.inserted.connect(self.on_insert)
         self.viewer.layers.events.removed.connect(self.on_remove)
 
+        ## Debug ##
+        self._debug_recorder = install_debug_recorder()
+        self._debug_window = None
+
+        show_debug_action = QAction("&Generate napari-dlc log", self)
+        show_debug_action.setToolTip("Show a debug report with recent plugin logs")
+        show_debug_action.triggered.connect(self._show_debug_window)
+        self.viewer.window.help_menu.addAction(show_debug_action)
+        ###########
+
         # self.viewer.window.qt_viewer._get_and_try_preferred_reader = MethodType(
         #     _get_and_try_preferred_reader,
         #     self.viewer.window.qt_viewer,
@@ -196,6 +227,9 @@ class KeypointControls(QWidget):
         # for future-proofing
         def _close_event(event):
             self.on_close(event)
+            points_inter = getattr(self, "_points_interactions", None)
+            if points_inter is not None:
+                points_inter.close()
             # if accepted, call original
             if event.isAccepted():
                 orig_close_event(event)
@@ -255,10 +289,14 @@ class KeypointControls(QWidget):
         )
 
         self._mpl_docked = False
-        self._matplotlib_canvas = KeypointMatplotlibCanvas(self.viewer)
+
+        self._traj_mpl_canvas = TrajectoryMatplotlibCanvas(
+            self.viewer,
+            get_color_mode=lambda: self.color_mode,
+        )
         self._show_traj_plot_cb = QCheckBox("Show trajectories", parent=self)
         self._show_traj_plot_cb.setToolTip("Toggle to see trajectories in a t-y plot outside of the main video viewer")
-        self._show_traj_plot_cb.stateChanged.connect(self._show_matplotlib_canvas)
+        self._show_traj_plot_cb.stateChanged.connect(self._show_traj_canvas)
         self._show_traj_plot_cb.setChecked(False)
         self._show_traj_plot_cb.setEnabled(False)
         self._view_scheme_cb = QCheckBox("Show color scheme", parent=self)
@@ -299,9 +337,17 @@ class KeypointControls(QWidget):
         self._view_scheme_cb.setChecked(True)
         self._view_scheme_cb.toggled.connect(self._show_color_scheme)
         self._show_color_scheme()
-        self._color_scheme_panel.display.added.connect(
-            lambda w: w.part_label.clicked.connect(self._matplotlib_canvas._toggle_line_visibility),
+        # self._color_scheme_panel.display.added.connect(
+        #     lambda w: w.part_label.clicked.connect(self._on_color_scheme_label_clicked),
+        # )
+
+        self._points_interactions = PointsInteractionObserver(
+            self.viewer,
+            self._on_points_interaction,
+            debounce_ms=0,
+            watch_content=False,
         )
+        self._points_interactions.install()
         ### UI setup ends here
 
         # Modes init
@@ -322,12 +368,12 @@ class KeypointControls(QWidget):
                 self.viewer.window.file_menu.removeAction(action)
 
         # Add action to show the walkthrough again
-        launch_tutorial = QAction("&Launch Tutorial", self)
+        launch_tutorial = QAction("&Launch napari-dlc tutorial", self)
         launch_tutorial.triggered.connect(self.start_tutorial)
         self.viewer.window.view_menu.addAction(launch_tutorial)
 
         # Add action to view keyboard shortcuts
-        display_shortcuts_action = QAction("&Shortcuts", self)
+        display_shortcuts_action = QAction("&Show napari-dlc shortcuts", self)
         display_shortcuts_action.triggered.connect(self.display_shortcuts)
         self.viewer.window.help_menu.addAction(display_shortcuts_action)
         # Install global keybinds
@@ -353,7 +399,7 @@ class KeypointControls(QWidget):
         # NOTE while a timer may seem hacky, it is a simple, one-line solution that minimizes intrusion
         # There are to my knowledge no other way that is as concise and clean
         # (Of course this will be a problem if we start using it everywhere so do not reuse lightly)
-        QTimer.singleShot(10, self.silently_dock_matplotlib_canvas)
+        QTimer.singleShot(10, self.silently_dock_canvas)
 
         # If layers already exist (user loaded data before opening this widget),
         # adopt them so keypoint controls take ownership immediately.
@@ -361,6 +407,113 @@ class KeypointControls(QWidget):
 
         # Refresh layers stats widget
         QTimer.singleShot(0, self._refresh_layer_status_panel)
+
+    @cached_property
+    def settings(self):
+        return QSettings()
+
+    @register_points_action("Change labeling mode")
+    def cycle_through_label_modes(self, *args):
+        self.label_mode = next(keypoints.LabelMode)
+
+    @register_points_action("Change color mode")
+    def cycle_through_color_modes(self, *args):
+        if self._active_layer_is_multianimal() or self.color_mode != str(keypoints.ColorMode.BODYPART):
+            self.color_mode = next(keypoints.ColorMode)
+
+    @property
+    def label_mode(self):
+        return str(self._label_mode)
+
+    @label_mode.setter
+    def label_mode(self, mode: str | keypoints.LabelMode):
+        self._label_mode = keypoints.LabelMode(mode)
+        self.viewer.status = self.label_mode
+        mode_ = str(mode).lower()
+        if mode_ == keypoints.LabelMode.LOOP.value.lower():
+            for menu in self._menus:
+                menu._locked = True
+        else:
+            for menu in self._menus:
+                menu._locked = False
+        for btn in self._radio_group.buttons():
+            if btn.text().lower() == mode_:
+                btn.setChecked(True)
+                break
+
+    @property
+    def color_mode(self):
+        return str(self._color_mode)
+
+    @color_mode.setter
+    def color_mode(self, mode: str | keypoints.ColorMode):
+        self._color_mode = keypoints.ColorMode(mode)
+
+        for layer in list(self._stores.keys()):
+            if isinstance(layer, Points) and layer.metadata:
+                self._apply_points_coloring_from_metadata(layer)
+
+        for btn in self._color_mode_selector.buttons():
+            if btn.text().lower() == str(mode).lower():
+                btn.setChecked(True)
+                break
+
+        traj_canvas = self._safe_get_traj_canvas()
+        if traj_canvas is not None:
+            try:
+                traj_canvas.refresh_from_viewer_layers()
+            except Exception:
+                logger.debug("Failed to refresh trajectory plot after color mode change", exc_info=True)
+
+        self._update_color_scheme()
+        self._trails_controller.on_points_visual_inputs_changed(checkbox_checked=self._trail_cb.isChecked())
+
+    def _is_multianimal(self, layer) -> bool:
+        if layer is None or not isinstance(layer, Points):
+            return False
+
+        md = layer.metadata or {}
+        hdr = self._get_header_model_from_metadata(md)
+        if hdr is None:
+            return False
+
+        try:
+            inds = hdr.individuals
+            return bool(inds and len(inds) > 0 and str(inds[0]) != "")
+        except Exception:
+            return False
+
+    def _active_layer_is_multianimal(self) -> bool:
+        """Returns: whether the active layer is a multi-animal points layer"""
+        for layer in self.viewer.layers.selection:
+            if self._is_multianimal(layer):
+                return True
+
+        return False
+
+    def _show_debug_window(self) -> None:
+        try:
+            if self._debug_window is None:
+                provider = make_issue_report_provider(
+                    viewer=self.viewer,
+                    recorder=get_debug_recorder(),
+                    log_limit=300,
+                )
+                self._debug_window = DebugTextWindow(
+                    title="napari-deeplabcut debug info",
+                    text_provider=provider,
+                    parent=self,
+                    initial_hint="Read-only diagnostics. Paste this into a bug report if needed.",
+                )
+                self._debug_window.finished.connect(lambda _result: setattr(self, "_debug_window", None))
+
+            self._debug_window.show()
+            self._debug_window.raise_()
+            self._debug_window.activateWindow()
+
+        except Exception:
+            logger.debug("Failed to open debug window", exc_info=True)
+            self.viewer.status = "Could not open debug window"
 
     # ######################## #
     # Layer setup core methods #
@@ -389,15 +542,30 @@ class KeypointControls(QWidget):
 
         self._sync_points_layers_from_image_meta()
         self._refresh_video_panel_context()
+        logger.debug(
+            "Setup image layer=%r index=%s reorder=%s paths_count=%s root=%r",
+            getattr(layer, "name", layer),
+            index,
+            reorder,
+            len(md.get("paths") or []),
+            md.get("root"),
+        )
 
         if reorder and index is not None:
             QTimer.singleShot(10, partial(self._move_image_layer_to_bottom, index))
 
     def _maybe_merge_config_points_layer(self, layer: Points) -> bool:
-        if not layer.metadata.get("project", "") or not self._stores:
+        md = layer.metadata or {}
+        logger.debug(
+            "Maybe merge config points layer=%r project=%r stores=%d",
+            getattr(layer, "name", layer),
+            md.get("project"),
+            len(self._stores),
+        )
+        if not md.get("project", "") or not self._stores:
             return False
 
-        new_metadata = layer.metadata.copy()
+        new_metadata = md.copy()
 
         keypoints_menu = self._menus[0].menus["label"]
         current_keypoint_set = {keypoints_menu.itemText(i) for i in range(keypoints_menu.count())}
@@ -411,6 +579,11 @@ class KeypointControls(QWidget):
             answer = QMessageBox.question(self, "", "Do you want to display the new keypoints only?")
             if answer == QMessageBox.Yes:
                 self.viewer.layers[-2].shown = False
+                logger.debug(
+                    "Merging config points layer=%r new_keypoints=%s",
+                    getattr(layer, "name", layer),
+                    sorted(diff),
+                )
 
             self.viewer.status = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found."
             for _layer, store in self._stores.items():
@@ -551,6 +724,16 @@ class KeypointControls(QWidget):
         self._trail_cb.setEnabled(True)
         self._show_traj_plot_cb.setEnabled(True)
 
+        md = layer.metadata or {}
+        logger.debug(
+            "Wire points layer=%r existing_store=%s project=%s root=%s len_paths=%s",
+            getattr(layer, "name", layer),
+            getattr(layer, "_dlc_store", None) is not None,
+            md.get("project"),
+            md.get("root"),
+            len(md.get("paths", [])),
+        )
+
         return store
 
     def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
@@ -575,6 +758,12 @@ class KeypointControls(QWidget):
                 pass
 
         self._update_color_scheme()
+        logger.debug(
+            "Setup points layer=%r allow_merge=%s metadata_keys=%s",
+            getattr(layer, "name", layer),
+            allow_merge,
+            sorted((layer.metadata or {}).keys()),
+        )
 
     def _adopt_existing_layers(self) -> None:
         """
@@ -582,6 +771,7 @@ class KeypointControls(QWidget):
         run the same initialization as if they had been inserted.
         """
         # Iterate over a snapshot, because on_insert may modify layer order
+        logger.debug("Adopting existing layers count=%d", len(self.viewer.layers))
         layers_snapshot = list(self.viewer.layers)
 
         for idx, layer in enumerate(layers_snapshot):
@@ -596,11 +786,22 @@ class KeypointControls(QWidget):
         except Exception:
             pass
 
+        # Important: refresh the trajectory plot from the final adopted state.
+        # This fixes the case where layers were loaded before the plugin opened
+        # (e.g. drag-and-drop DLC data triggering the reader automatically).
+        self._refresh_trajectory_plot_from_layers()
+
     def _adopt_layer(self, layer, index: int) -> None:
         """
         Run the relevant portion of on_insert() for an already-existing layer.
         This avoids duplicating your logic and prevents reliance on napari's Event object.
         """
+        logger.debug(
+            "Adopt layer=%r type=%s index=%s",
+            getattr(layer, "name", layer),
+            type(layer).__name__,
+            index,
+        )
         if isinstance(layer, Image):
             self._setup_image_layer(layer, index, reorder=True)
         elif isinstance(layer, Points):
@@ -635,7 +836,7 @@ class KeypointControls(QWidget):
 
         QTimer.singleShot(0, _do)
 
-    def _ensure_mpl_canvas_docked(self) -> None:
+    def _ensure_traj_canvas_docked(self) -> None:
         """
         Dock the Matplotlib canvas as a napari dock widget, exactly once,
         and only if the Qt window exists. Safe no-op in headless/proxy teardown.
@@ -647,39 +848,77 @@ class KeypointControls(QWidget):
         if window is None:
             return
 
-        # If napari hasn't materialized its Qt window yet, skip (safe no-op).
         if getattr(window, "_qt_window", None) is None:
-            # In normal UI runs this won't happen when the user hits the checkbox.
-            # In tests/headless it may—so just do nothing.
             return
 
         try:
-            window.add_dock_widget(self._matplotlib_canvas, name="Trajectory plot", area="right", tabify=False)
-            self._matplotlib_canvas.canvas.draw_idle()
-            self._matplotlib_canvas.hide()
+            window.add_dock_widget(self._traj_mpl_canvas, name="Trajectory plot", area="right", tabify=False)
+            self._traj_mpl_canvas.canvas.draw_idle()
+            self._traj_mpl_canvas.hide()
             self._mpl_docked = True
         except Exception as e:
-            logging.debug("Skipping docking KeypointMatplotlibCanvas (not ready / teardown): %r", e)
+            logging.debug("Skipping docking canvas (not ready / teardown): %r", e)
             return
 
-    def silently_dock_matplotlib_canvas(self) -> None:
-        """Dock the Matplotlib canvas without showing it."""
-        self._ensure_mpl_canvas_docked()
-        if self._mpl_docked:
-            self._matplotlib_canvas.hide()
+    def _safe_get_traj_canvas(self):
+        canvas = getattr(self, "_traj_mpl_canvas", None)
+        if canvas is None:
+            return None
 
-    def _show_matplotlib_canvas(self, state):
+        try:
+            # Any Qt call is enough to verify the underlying C++ object still exists
+            canvas.isVisible()
+        except RuntimeError:
+            # Underlying Qt object was already deleted
+            self._traj_mpl_canvas = None
+            return None
+
+        return canvas
+
+    def silently_dock_canvas(self) -> None:
+        """Dock the Matplotlib canvas without showing it."""
+        self._ensure_traj_canvas_docked()
+        if self._mpl_docked:
+            self._traj_mpl_canvas.hide()
+
+    def _show_traj_canvas(self, state):
         if Qt.CheckState(state) == Qt.CheckState.Checked:
-            self._ensure_mpl_canvas_docked()
+            self._ensure_traj_canvas_docked()
             if self._mpl_docked:
-                self._matplotlib_canvas.show()
+                self._traj_mpl_canvas._apply_napari_theme()
+                self._traj_mpl_canvas.update_plot_range(
+                    Event(type_name="", value=[self.viewer.dims.current_step[0]]),
+                    force=True,
+                )
+                self._traj_mpl_canvas.sync_visible_lines_to_points_selection()
+                self._traj_mpl_canvas.show()
         else:
             if self._mpl_docked:
-                self._matplotlib_canvas.hide()
+                self._traj_mpl_canvas.hide()
 
-    @cached_property
-    def settings(self):
-        return QSettings()
+    def _on_points_interaction(self, event: PointsInteractionEvent) -> None:
+        """
+        Keep the trajectory plot in sync with the active points-layer selection.
+
+        This is intentionally selection-driven:
+        - no selected points -> all trajectories
+        - selected points    -> only selected labels' trajectories
+        """
+        traj_canvas = self._safe_get_traj_canvas()
+        if traj_canvas is None or not traj_canvas.isVisible():
+            return
+        if {"selection", "active_layer", "layers"} & set(event.reasons):
+            traj_canvas.sync_visible_lines_to_points_selection()
+
+    def _refresh_trajectory_plot_from_layers(self) -> None:
+        """
+        Refresh trajectory plot from the current viewer state.
+
+        Deferred through QTimer so it runs after layer adoption/remap settles.
+        """
+        traj_canvas = self._safe_get_traj_canvas()
+        if traj_canvas is not None:
+            QTimer.singleShot(0, traj_canvas.refresh_from_viewer_layers)
 
     def load_superkeypoints_diagram(self):
         points_layer = get_first_points_layer(self.viewer)
@@ -1021,15 +1260,7 @@ class KeypointControls(QWidget):
         self._layer_status_panel.set_point_size(get_uniform_point_size(active_dlc_points))
 
         progress = compute_label_progress(active_dlc_points, fallback_paths=self._image_meta.paths)
-        self._layer_status_panel.set_progress_summary(
-            labeled_percent=progress.labeled_percent,
-            remaining_percent=progress.remaining_percent,
-            labeled_points=progress.labeled_points,
-            total_points=progress.total_points,
-            frame_count=progress.frame_count,
-            bodypart_count=progress.bodypart_count,
-            individual_count=progress.individual_count,
-        )
+        self._layer_status_panel.set_progress_summary(progress=progress)
 
     def _on_active_points_size_changed(self, size: int) -> None:
         layer = self._current_dlc_points_layer()
@@ -1199,7 +1430,7 @@ class KeypointControls(QWidget):
         layout = QHBoxLayout()
         group = QButtonGroup(self)
         for i, mode in enumerate(keypoints.ColorMode.__members__, start=1):
-            btn = QRadioButton(mode.lower())
+            btn = QRadioButton(mode.capitalize())
             group.addButton(btn, i)
             layout.addWidget(btn)
         group.button(1).setChecked(True)
@@ -1207,7 +1438,7 @@ class KeypointControls(QWidget):
         self._layout.addWidget(group_box)
 
         def _func():
-            self.color_mode = group.checkedButton().text()
+            self.color_mode = group.checkedButton().text().lower()
 
         group.buttonClicked.connect(_func)
         return group_box, group
@@ -1368,6 +1599,12 @@ class KeypointControls(QWidget):
 
     def on_insert(self, event):
         layer = event.source[-1]
+        logger.debug(
+            "on_insert layer=%r type=%s index=%s",
+            getattr(layer, "name", layer),
+            type(layer).__name__,
+            getattr(event, "index", None),
+        )
         if isinstance(layer, Image):
             self._setup_image_layer(layer, event.index, reorder=True)
         elif isinstance(layer, Points):
@@ -1729,78 +1966,6 @@ class KeypointControls(QWidget):
 
             self._update_color_scheme()
             self._trails_controller.on_points_visual_inputs_changed(checkbox_checked=self._trail_cb.isChecked())
-
-    @register_points_action("Change labeling mode")
-    def cycle_through_label_modes(self, *args):
-        self.label_mode = next(keypoints.LabelMode)
-
-    @register_points_action("Change color mode")
-    def cycle_through_color_modes(self, *args):
-        if self._active_layer_is_multianimal() or self.color_mode != str(keypoints.ColorMode.BODYPART):
-            self.color_mode = next(keypoints.ColorMode)
-
-    @property
-    def label_mode(self):
-        return str(self._label_mode)
-
-    @label_mode.setter
-    def label_mode(self, mode: str | keypoints.LabelMode):
-        self._label_mode = keypoints.LabelMode(mode)
-        self.viewer.status = self.label_mode
-        mode_ = str(mode).lower()
-        if mode_ == keypoints.LabelMode.LOOP.value.lower():
-            for menu in self._menus:
-                menu._locked = True
-        else:
-            for menu in self._menus:
-                menu._locked = False
-        for btn in self._radio_group.buttons():
-            if btn.text().lower() == mode_:
-                btn.setChecked(True)
-                break
-
-    @property
-    def color_mode(self):
-        return str(self._color_mode)
-
-    @color_mode.setter
-    def color_mode(self, mode: str | keypoints.ColorMode):
-        self._color_mode = keypoints.ColorMode(mode)
-
-        for layer in list(self._stores.keys()):
-            if isinstance(layer, Points) and layer.metadata:
-                self._apply_points_coloring_from_metadata(layer)
-
-        for btn in self._color_mode_selector.buttons():
-            if btn.text().lower() == str(mode).lower():
-                btn.setChecked(True)
-                break
-
-        self._update_color_scheme()
-        self._trails_controller.on_points_visual_inputs_changed(checkbox_checked=self._trail_cb.isChecked())
-
-    def _is_multianimal(self, layer) -> bool:
-        if layer is None or not isinstance(layer, Points):
-            return False
-
-        md = layer.metadata or {}
-        hdr = self._get_header_model_from_metadata(md)
-        if hdr is None:
-            return False
-
-        try:
-            inds = hdr.individuals
-            return bool(inds and len(inds) > 0 and str(inds[0]) != "")
-        except Exception:
-            return False
-
-    def _active_layer_is_multianimal(self) -> bool:
-        """Returns: whether the active layer is a multi-animal points layer"""
-        for layer in self.viewer.layers.selection:
-            if self._is_multianimal(layer):
-                return True
-
-        return False
 
     def _resolved_cycle_for_layer(self, layer: Points) -> dict:
         """

@@ -228,8 +228,6 @@ def _offset_pasted_data(
 
 def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> object | None:
     """
-    Best-effort private napari UI wiring.
-
     Returns
     -------
     object | None
@@ -239,6 +237,7 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
         controls = viewer.window.qt_viewer.dockLayerControls
         point_controls = controls.widget().widgets[layer]
     except Exception:
+        logger.debug("Failed to resolve point controls for layer UI tweaks", exc_info=True)
         return None
 
     widgets_to_hide = [
@@ -256,15 +255,24 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
             widget = getattr(parent, widget_attr)
             widget.hide()
         except Exception:
-            pass
+            logger.debug(
+                "Failed to hide widget %s.%s in point controls",
+                parent_attr,
+                widget_attr,
+                exc_info=True,
+            )
 
     try:
         cmap_source = plt_module.colormaps
         if callable(cmap_source):
             cmap_source = cmap_source()
 
-        colormap_selector = dropdown_cls(cmap_source, point_controls)
-        colormap_selector.update_to(layer.metadata.get("colormap_name", "viridis"))
+        # Normalize explicitly to strings for safety/readability.
+        cmap_names = [str(name) for name in cmap_source]
+
+        colormap_selector = dropdown_cls(cmap_names, point_controls)
+        if hasattr(colormap_selector, "update_to"):
+            colormap_selector.update_to(layer.metadata.get("colormap_name", "viridis"))
         point_controls.layout().addRow("colormap", colormap_selector)
         return colormap_selector
     except Exception as e:

@@ -514,3 +514,333 @@ def test_execute_frame_extraction_keeps_new_labels_row_on_duplicate_index(monkey
 
     df_written = pd.read_hdf(labels_path, key="df_with_missing")
     assert float(df_written.iloc[0]["bp1"]) == 222.0
+
+
+def test_ensure_dlc_crop_layer_reuses_existing(monkeypatch):
+    monkeypatch.setattr(cropping_mod, "Shapes", FakeShapes)
+
+    existing = FakeShapes(
+        data=[],
+        shape_type=[],
+        metadata={cropping_mod.DLC_CROP_LAYER_META_KEY: True},
+        name=cropping_mod.DLC_CROP_LAYER_NAME,
+    )
+    existing.visible = False
+    existing.mode = None
+
+    viewer = SimpleNamespace(
+        layers=FakeLayerList([existing], active=None),
+    )
+
+    out = cropping_mod.ensure_dlc_crop_layer(viewer)
+
+    assert out is existing
+    assert existing.visible is True
+    assert existing.mode == "add_rectangle"
+    assert viewer.layers.selection.active is existing
+
+
+def test_ensure_dlc_crop_layer_creates_new(monkeypatch):
+    monkeypatch.setattr(cropping_mod, "Shapes", FakeShapes)
+
+    created = FakeShapes(data=[], shape_type=[], metadata={}, name="created")
+    created.mode = None
+
+    class Viewer:
+        def __init__(self):
+            self.layers = FakeLayerList([], active=None)
+
+        def add_shapes(self, name, metadata):
+            created.name = name
+            created.metadata = metadata
+            self.layers.append(created)
+            return created
+
+    viewer = Viewer()
+
+    out = cropping_mod.ensure_dlc_crop_layer(viewer)
+
+    assert out is created
+    assert out.name == cropping_mod.DLC_CROP_LAYER_NAME
+    assert out.metadata[cropping_mod.DLC_CROP_LAYER_META_KEY] is True
+    assert out.mode == "add_rectangle"
+    assert viewer.layers.selection.active is out
+
+
+def test_dlc_config_y_extent_falls_back_to_active_image(monkeypatch):
+    monkeypatch.setattr(cropping_mod, "Image", FakeImage)
+
+    image = FakeImage(data=np.zeros((5, 40, 70), dtype=np.uint8))
+    viewer = SimpleNamespace(
+        dims=SimpleNamespace(range=None),
+        layers=FakeLayerList([image], active=image),
+    )
+
+    assert cropping_mod._dlc_config_y_extent(viewer) == 40
+
+
+def test_dlc_config_y_extent_falls_back_to_last_image(monkeypatch):
+    monkeypatch.setattr(cropping_mod, "Image", FakeImage)
+
+    image = FakeImage(data=np.zeros((5, 55, 90), dtype=np.uint8))
+    viewer = SimpleNamespace(
+        dims=SimpleNamespace(range=None),
+        layers=FakeLayerList([image], active=None),
+    )
+
+    assert cropping_mod._dlc_config_y_extent(viewer) == 55
+
+
+def test_dlc_config_y_extent_returns_none_when_unavailable():
+    viewer = SimpleNamespace(
+        dims=SimpleNamespace(range=None),
+        layers=FakeLayerList([], active=None),
+    )
+
+    assert cropping_mod._dlc_config_y_extent(viewer) is None
+
+
+def test_find_rectangle_in_layer_falls_back_from_selected_to_last(monkeypatch):
+    monkeypatch.setattr(cropping_mod, "Shapes", FakeShapes)
+
+    bad_rect = np.array(
+        [
+            [0.0, 10.0, 20.0],
+            [0.0, 10.0, 20.0],
+            [0.0, 10.0, 20.0],
+            [0.0, 10.0, 20.0],
+        ],
+        dtype=float,
+    )
+    good_rect = np.array(
+        [
+            [0.0, 5.0, 10.0],
+            [0.0, 5.0, 20.0],
+            [0.0, 15.0, 20.0],
+            [0.0, 15.0, 10.0],
+        ],
+        dtype=float,
+    )
+
+    layer = FakeShapes(
+        data=[bad_rect, good_rect],
+        shape_type=["rectangle", "rectangle"],
+        selected_data={0},
+    )
+    viewer = SimpleNamespace(dims=SimpleNamespace(range=[(0, 10, 1), (0, 100, 1), (0, 200, 1)]))
+
+    spec = cropping_mod._find_rectangle_in_layer(viewer, layer, prefer_selected=True)
+    assert spec is not None
+    assert spec.viewer_crop.values == (10, 20, 5, 15)
+
+
+def test_get_crop_source_summary_uses_active_shapes_when_no_dedicated(monkeypatch):
+    monkeypatch.setattr(cropping_mod, "Shapes", FakeShapes)
+
+    rect = np.array(
+        [
+            [0.0, 5.0, 10.0],
+            [0.0, 5.0, 20.0],
+            [0.0, 15.0, 20.0],
+            [0.0, 15.0, 10.0],
+        ],
+        dtype=float,
+    )
+
+    active = FakeShapes(
+        data=[rect],
+        shape_type=["rectangle"],
+        metadata={},
+        name="manual",
+        selected_data={0},
+    )
+
+    viewer = SimpleNamespace(
+        layers=FakeLayerList([active], active=active),
+        dims=SimpleNamespace(range=[(0, 10, 1), (0, 100, 1), (0, 200, 1)]),
+    )
+
+    source, spec = cropping_mod.get_crop_source_summary(viewer)
+    assert source == "active Shapes layer (manual)"
+    assert spec is not None
+
+
+def test_get_crop_source_summary_returns_none_when_no_valid_rectangles(monkeypatch):
+    monkeypatch.setattr(cropping_mod, "Shapes", FakeShapes)
+
+    poly = FakeShapes(
+        data=[np.array([[0, 1, 2], [0, 2, 3], [0, 3, 4]], dtype=float)],
+        shape_type=["polygon"],
+        metadata={},
+        name="poly",
+        selected_data={0},
+    )
+
+    viewer = SimpleNamespace(
+        layers=FakeLayerList([poly], active=poly),
+        dims=SimpleNamespace(range=[(0, 10, 1), (0, 100, 1), (0, 200, 1)]),
+    )
+
+    source, spec = cropping_mod.get_crop_source_summary(viewer)
+    assert source == "none"
+    assert spec is None
+
+
+def test_plan_frame_extraction_rejects_missing_image_layer():
+    viewer = SimpleNamespace(dims=SimpleNamespace(current_step=(0,)))
+    plan, error = cropping_mod.plan_frame_extraction(viewer, image_layer=None)
+    assert plan is None
+    assert "No image/video layer is active" in error
+
+
+def test_plan_frame_extraction_rejects_missing_output_root():
+    image = FakeImage(data=np.zeros((3, 10, 10), dtype=np.uint8), metadata={})
+    viewer = SimpleNamespace(dims=SimpleNamespace(current_step=(0,)))
+
+    plan, error = cropping_mod.plan_frame_extraction(viewer, image_layer=image)
+    assert plan is None
+    assert "Could not determine the output folder" in error
+
+
+def test_plan_frame_extraction_requires_points_layer_for_label_export(tmp_path: Path):
+    image = FakeImage(
+        data=np.zeros((3, 10, 10), dtype=np.uint8),
+        metadata={"root": str(tmp_path)},
+    )
+    viewer = SimpleNamespace(dims=SimpleNamespace(current_step=(0,)))
+
+    plan, error = cropping_mod.plan_frame_extraction(
+        viewer,
+        image_layer=image,
+        export_labels=True,
+        points_layer=None,
+    )
+    assert plan is None
+    assert "no Points layer is available" in error
+
+
+def test_plan_frame_extraction_requires_rectangle_when_crop_enabled(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(cropping_mod, "find_crop_rectangle", lambda viewer, prefer_selected=True: None)
+
+    image = FakeImage(
+        data=np.zeros((3, 10, 10), dtype=np.uint8),
+        metadata={"root": str(tmp_path)},
+    )
+    viewer = SimpleNamespace(dims=SimpleNamespace(current_step=(0,)))
+
+    plan, error = cropping_mod.plan_frame_extraction(
+        viewer,
+        image_layer=image,
+        apply_crop=True,
+    )
+    assert plan is None
+    assert "no valid rectangle was found" in error
+
+
+def test_plan_crop_save_rejects_missing_project_context(monkeypatch):
+    monkeypatch.setattr(
+        cropping_mod,
+        "infer_dlc_project_from_image_layer",
+        lambda image_layer, prefer_project_root=True: SimpleNamespace(
+            config_path=None,
+            project_root=None,
+            root_anchor=None,
+        ),
+    )
+
+    image = FakeImage(data=np.zeros((3, 10, 10), dtype=np.uint8))
+    viewer = SimpleNamespace(layers=FakeLayerList([], active=None), dims=SimpleNamespace(range=[]))
+
+    plan, error = cropping_mod.plan_crop_save(viewer, image_layer=image)
+    assert plan is None
+    assert "Could not determine a DLC config.yaml" in error
+
+
+def test_plan_crop_save_rejects_missing_rectangle(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(
+        cropping_mod,
+        "infer_dlc_project_from_image_layer",
+        lambda image_layer, prefer_project_root=True: SimpleNamespace(
+            config_path=tmp_path / "config.yaml",
+            project_root=tmp_path,
+            root_anchor=tmp_path,
+        ),
+    )
+    monkeypatch.setattr(cropping_mod, "find_crop_rectangle", lambda viewer, prefer_selected=True: None)
+
+    image = FakeImage(data=np.zeros((3, 10, 10), dtype=np.uint8), name="demo.mp4")
+    viewer = SimpleNamespace(layers=FakeLayerList([], active=None), dims=SimpleNamespace(range=[]))
+
+    plan, error = cropping_mod.plan_crop_save(viewer, image_layer=image)
+    assert plan is None
+    assert "No valid rectangle was found" in error
+
+
+def test_execute_crop_save_replaces_non_dict_video_set_entry(monkeypatch, tmp_path: Path):
+    cfg = {"video_sets": {"video.mp4": "old-value"}}
+
+    monkeypatch.setattr(cropping_mod.io, "load_config", lambda path: cfg)
+    written = {}
+
+    def fake_write_config(path, out_cfg):
+        written["path"] = path
+        written["cfg"] = out_cfg
+
+    monkeypatch.setattr(cropping_mod.io, "write_config", fake_write_config)
+
+    plan = cropping_mod.CropSavePlan(
+        config_path=tmp_path / "config.yaml",
+        project_root=tmp_path,
+        video_key="video.mp4",
+        config_crop=cropping_mod.DLCConfigCropCoords(values=(1, 10, 20, 30)),
+    )
+
+    msg = cropping_mod.execute_crop_save(plan)
+
+    assert "Saved crop" in msg
+    assert written["cfg"]["video_sets"]["video.mp4"]["crop"] == "1, 10, 20, 30"
+
+
+class HiddenPanel(DummyPanel):
+    def isVisible(self):
+        return False
+
+    def parentWidget(self):
+        return None
+
+
+class VisiblePanel(DummyPanel):
+    def isVisible(self):
+        return True
+
+    def parentWidget(self):
+        return None
+
+
+def test_update_video_panel_context_hidden_panel_detaches_and_returns(monkeypatch):
+    panel = HiddenPanel()
+    called = {"detach": 0}
+
+    monkeypatch.setattr(
+        cropping_mod, "_detach_crop_autorefresh", lambda p: called.__setitem__("detach", called["detach"] + 1)
+    )
+
+    viewer = SimpleNamespace(layers=FakeLayerList([], active=None), dims=SimpleNamespace(current_step=(0,)))
+
+    cropping_mod.update_video_panel_context(viewer, panel)
+
+    assert called["detach"] == 1
+    assert panel.text is None
+
+
+def test_update_video_panel_context_no_image_layer(monkeypatch):
+    panel = VisiblePanel()
+    monkeypatch.setattr(cropping_mod, "sync_crop_layer_autorefresh", lambda viewer, panel, refresh_callback: None)
+
+    viewer = SimpleNamespace(
+        layers=FakeLayerList([], active=None),
+        dims=SimpleNamespace(current_step=(0,)),
+    )
+
+    cropping_mod.update_video_panel_context(viewer, panel)
+    assert panel.text == "No active video/image layer."

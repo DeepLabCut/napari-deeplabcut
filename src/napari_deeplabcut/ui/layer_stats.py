@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from qtpy.QtCore import QSignalBlocker, Qt, Signal
+from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import (
+    QApplication,
     QFormLayout,
     QGraphicsOpacityEffect,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QSlider,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
+
+if TYPE_CHECKING:
+    from napari_deeplabcut.core.layers import LabelProgress
 
 
 class LayerStatusPanel(QGroupBox):
@@ -32,7 +41,30 @@ class LayerStatusPanel(QGroupBox):
 
         self._progress_value = QLabel("No active keypoints layer")
         self._progress_value.setWordWrap(True)
+        self._progress_value.setCursor(Qt.WhatsThisCursor)
         self._progress_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        # self._progress_info = QLabel("ℹ")
+        self._progress_info = QToolButton(self)
+        self._progress_info.setText("ℹ")
+        self._progress_info.setAutoRaise(True)
+        self._progress_info.setIcon(QIcon.fromTheme("help-about"))
+        self._progress_info.setCursor(Qt.WhatsThisCursor)
+        self._progress_info.setToolTip("Hover for more details")
+
+        self._progress_details_text = ""
+
+        self._progress_value.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._progress_value.customContextMenuRequested.connect(self._show_progress_context_menu)
+        self._progress_info.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._progress_info.customContextMenuRequested.connect(self._show_progress_context_menu)
+
+        self._progress_container = QWidget(self)
+        progress_row = QHBoxLayout(self._progress_container)
+        progress_row.setContentsMargins(0, 0, 0, 0)
+        progress_row.setSpacing(4)
+        progress_row.addWidget(self._progress_value, stretch=1)
+        progress_row.addWidget(self._progress_info, stretch=0, alignment=Qt.AlignTop)
 
         self._size_slider = QSlider(Qt.Horizontal, self)
         self._size_slider.setRange(1, 100)
@@ -60,7 +92,7 @@ class LayerStatusPanel(QGroupBox):
 
         form = QFormLayout()
         form.addRow("Folder", self._folder_value)
-        form.addRow("Progress", self._progress_value)
+        form.addRow("Progress", self._progress_container)
         form.addRow("Point size", self._size_controls)
 
         wrapper = QVBoxLayout(self)
@@ -119,39 +151,100 @@ class LayerStatusPanel(QGroupBox):
     def set_folder_name(self, folder_name: str) -> None:
         self._folder_value.setText(folder_name or "—")
 
+    def _show_progress_context_menu(self, pos) -> None:
+        if not self._progress_details_text:
+            return
+
+        menu = QMenu(self)
+        copy_action = menu.addAction("Copy progress details")
+        chosen = menu.exec_(self._progress_value.mapToGlobal(pos))
+        if chosen is copy_action:
+            self._copy_progress_details_to_clipboard()
+
+    def _copy_progress_details_to_clipboard(self) -> None:
+        text = self._progress_details_text or self._progress_value.toolTip() or ""
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
+
     def set_progress_summary(
         self,
         *,
-        labeled_percent: float,
-        remaining_percent: float,
-        labeled_points: int,
-        total_points: int,
-        frame_count: int,
-        bodypart_count: int,
-        individual_count: int,
+        progress: LabelProgress,
     ) -> None:
-        if total_points <= 0:
+
+        p = progress
+
+        if p.total_points <= 0:
             self._progress_value.setText("Not enough metadata to estimate progress yet")
             self._progress_value.setToolTip("")
+            self._progress_details_text = ""
             return
 
-        if individual_count <= 1:
-            breakdown = f"{frame_count} frames × {bodypart_count} bodyparts"
+        if p.individual_count <= 1:
+            breakdown = f"{p.frame_count} frames × {p.bodypart_count} bodyparts"
         else:
-            breakdown = f"{frame_count} frames × {bodypart_count} bodyparts × {individual_count} individuals"
+            breakdown = f"{p.frame_count} frames × {p.bodypart_count} bodyparts × {p.individual_count} individuals"
 
-        self._progress_value.setText(f"{labeled_percent:.1f}% labeled")
-        self._progress_value.setToolTip(
-            f"{labeled_percent:.1f}% labeled, {remaining_percent:.1f}% remaining\n"
-            f"{labeled_points}/{total_points} of all possible points labeled • {breakdown}"
+        self._progress_value.setText(f"{p.labeled_percent:.1f}% labeled")
+
+        incomplete_count = max(0, p.frame_count - p.completed_frames)
+        first_incomplete = list(p.incomplete_frames[:10])
+
+        details_lines = [
+            f"{p.labeled_percent:.1f}% fully labeled, {p.remaining_percent:.1f}% remaining",
+            f"{p.labeled_points}/{p.total_points} possible keypoint slots currently labeled • {breakdown}",
+            f"{p.completed_frames}/{p.frame_count} frames fully labeled ({p.completed_percent:.1f}%)",
+            f"{incomplete_count} non fully labeled frames",
+        ]
+
+        if first_incomplete:
+            details_lines.append("First non fully labeled frames: " + ", ".join(str(int(f)) for f in first_incomplete))
+
+        if p.individual_count > 1:
+            # Keep individual rows stable and compact
+            per_individual_lines = []
+            for individual, n_frames in sorted(p.incomplete_frames_by_individual.items()):
+                if individual == "":
+                    continue
+                int(p.missing_points_by_individual.get(individual, 0))
+                per_individual_lines.append(
+                    f"- {individual}: non fully labeled on {int(n_frames)} frame(s), "
+                    f"{int(p.missing_points_by_individual.get(individual, 0))} missing keypoint(s)"
+                )
+
+            if per_individual_lines:
+                details_lines.append("")
+                details_lines.append("By individual:")
+                details_lines.extend(per_individual_lines)
+
+        details_lines.append("")
+        details_lines.append(
+            "Tip: right-click this progress label to copy the full summary.\n"
+            "Please note that actual visibility of keypoints in the video cannot"
+            " be determined automatically.\nTherefore, not having all frames be fully labeled"
+            " does not necessarily imply the labeling is incomplete.\n"
+            "Please treat it as a relative progress estimate based on the maximum possible keypoints"
         )
+
+        details_text = "\n".join(details_lines)
+        self._progress_details_text = details_text
+        self._progress_value.setToolTip(details_text)
+        self._progress_info.setToolTip(details_text)
+        self._progress_container.setToolTip(details_text)
 
     def set_no_active_points_layer(self) -> None:
         self._progress_value.setText("No active keypoints layer")
         self._progress_value.setToolTip("")
+        self._progress_info.setToolTip("")
+        self._progress_container.setToolTip("")
+        self._progress_details_text = ""
         self.set_point_size_enabled(False, reason="Select a DLC keypoints layer to edit point size.")
 
     def set_invalid_points_layer(self) -> None:
         self._progress_value.setText("Active layer is not a DLC keypoints layer")
         self._progress_value.setToolTip("")
+        self._progress_info.setToolTip("")
+        self._progress_container.setToolTip("")
+        self._progress_details_text = ""
         self.set_point_size_enabled(False, reason="This control only works for DLC keypoints layers.")

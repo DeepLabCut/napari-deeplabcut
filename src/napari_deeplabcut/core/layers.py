@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/core/layers.py
 from __future__ import annotations
 
 import logging
@@ -8,6 +9,7 @@ from typing import Any, TypeVar
 
 import numpy as np
 from napari.layers import Image, Points, Shapes, Tracks
+from qtpy.QtCore import QTimer
 
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 from napari_deeplabcut.core.keypoints import build_color_cycles
@@ -217,6 +219,11 @@ class LabelProgress:
     frame_count: int
     bodypart_count: int
     individual_count: int
+    completed_frames: int
+    completed_percent: float
+    incomplete_frames: tuple[int, ...]
+    incomplete_frames_by_individual: dict[str, int]
+    missing_points_by_individual: dict[str, int]
 
 
 def _get_header_model_from_metadata(md: dict) -> DLCHeaderModel | None:
@@ -261,10 +268,10 @@ def set_uniform_point_size(layer: Points, size: int) -> None:
     layer.size = float(size)
 
 
-def infer_frame_count(layer: Points, *, fallback_paths: list[str] | None = None) -> int:
+def infer_frame_count(layer: Points, *, preferred_paths: list[str] | None = None) -> int:
     md = getattr(layer, "metadata", {}) or {}
 
-    paths = md.get("paths") or fallback_paths or []
+    paths = preferred_paths or md.get("paths") or []
     if paths:
         return len(paths)
 
@@ -310,13 +317,124 @@ def infer_individual_count(layer: Points) -> int:
         return 1
 
 
+def _normalized_slot_id(value) -> str:
+    if value in ("", None):
+        return ""
+    try:
+        if np.isnan(value):
+            return ""
+    except Exception:
+        pass
+    text = str(value)
+    return "" if text.lower() == "nan" else text
+
+
+def infer_observed_bodypart_names(layer: Points) -> list[str]:
+    """
+    Ordered unique bodypart labels actually present in the active napari layer.
+    """
+    props = getattr(layer, "properties", {}) or {}
+    labels = np.asarray(props.get("label", []), dtype=object).ravel()
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in labels:
+        if v in ("", None):
+            continue
+        text = str(v)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
+def infer_observed_individual_names(layer: Points) -> list[str]:
+    """
+    Ordered unique individual ids actually present in the active napari layer.
+
+    Single-animal convention:
+    - no ids / blank ids -> ['']
+    """
+    props = getattr(layer, "properties", {}) or {}
+    ids_raw = props.get("id", None)
+    if ids_raw is None:
+        return [""]
+
+    ids = np.asarray(ids_raw, dtype=object).ravel()
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in ids:
+        text = _normalized_slot_id(v)
+        if text == "":
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+
+    return out if out else [""]
+
+
+def _iter_labeled_slots(layer: Points):
+    """
+    Yield unique annotatable slots currently represented in the active napari layer.
+
+    Each slot is keyed by:
+    - frame index
+    - individual id ('' for single-animal / blank ids)
+    - bodypart label
+    """
+    data = np.asarray(getattr(layer, "data", []))
+    if data.ndim < 2 or data.shape[1] == 0:
+        return
+
+    props = getattr(layer, "properties", {}) or {}
+    labels = np.asarray(props.get("label", []), dtype=object).ravel()
+    ids_raw = props.get("id", None)
+
+    if ids_raw is None:
+        ids = np.array([""] * len(labels), dtype=object)
+    else:
+        ids = np.asarray(ids_raw, dtype=object).ravel()
+
+    n = min(len(data), len(labels), len(ids))
+    for i in range(n):
+        try:
+            frame = int(data[i, 0])
+        except Exception:
+            continue
+
+        label_val = labels[i]
+        if label_val in ("", None):
+            continue
+        label = str(label_val)
+        if not label:
+            continue
+
+        id_text = _normalized_slot_id(ids[i])
+        yield (frame, id_text, label)
+
+
 def compute_label_progress(layer: Points, *, fallback_paths: list[str] | None = None) -> LabelProgress:
-    frame_count = infer_frame_count(layer, fallback_paths=fallback_paths)
+    """
+    Compute progress for the active napari layer.
+
+    Semantics:
+    - Main percentage remains theoretical:
+        labeled_points / (frame_count * bodypart_count * individual_count)
+    - Richer frame-completion details are computed from the observed slot universe
+      currently represented in napari:
+        observed_ids × observed_labels
+    """
+    frame_count = infer_frame_count(layer, preferred_paths=fallback_paths)
     bodypart_count = infer_bodypart_count(layer)
     individual_count = infer_individual_count(layer)
 
     total_points = frame_count * bodypart_count * individual_count
 
+    # Keep the top-line point percentage as before.
     data = np.asarray(getattr(layer, "data", []))
     labeled_points = int(data.shape[0]) if data.ndim >= 2 else 0
 
@@ -328,6 +446,57 @@ def compute_label_progress(layer: Points, *, fallback_paths: list[str] | None = 
 
     remaining_percent = max(0.0, 100.0 - labeled_percent)
 
+    # Richer completion details based on what is actually represented in napari.
+    slots = set(_iter_labeled_slots(layer) or [])
+
+    observed_labels = infer_observed_bodypart_names(layer)
+    observed_ids = infer_observed_individual_names(layer)
+    expected_ids = observed_ids if observed_ids else [""]
+
+    expected_pairs = {(id_text, label) for id_text in expected_ids for label in observed_labels}
+    expected_per_frame = len(expected_pairs)
+
+    frame_to_pairs: dict[int, set[tuple[str, str]]] = {}
+    for frame, id_text, label in slots:
+        frame_to_pairs.setdefault(frame, set()).add((id_text, label))
+
+    # Count-based frame completion: match the diagnostic / user-facing intuition.
+    frame_slot_counts: dict[int, int] = {frame: len(pairs) for frame, pairs in frame_to_pairs.items()}
+
+    completed_frames = 0
+    incomplete_frames: list[int] = []
+    incomplete_frames_by_individual: dict[str, int] = {id_text: 0 for id_text in expected_ids}
+    missing_points_by_individual: dict[str, int] = {id_text: 0 for id_text in expected_ids}
+
+    if frame_count > 0 and expected_per_frame > 0:
+        for frame in range(frame_count):
+            present = frame_to_pairs.get(frame, set())
+            present_count = frame_slot_counts.get(frame, 0)
+
+            # A frame is considered complete if it has the expected number of unique slots.
+            if present_count >= expected_per_frame:
+                completed_frames += 1
+                continue
+
+            incomplete_frames.append(frame)
+
+            # Still compute missing details by comparing against expected pairs.
+            # This is now only used for richer tooltip details on frames that are
+            # count-incomplete, which keeps the user-facing summary intuitive.
+            missing = expected_pairs - present
+
+            missing_by_individual: dict[str, int] = {}
+            for id_text, _label in missing:
+                missing_by_individual[id_text] = missing_by_individual.get(id_text, 0) + 1
+
+            for id_text, missing_count in missing_by_individual.items():
+                incomplete_frames_by_individual[id_text] = incomplete_frames_by_individual.get(id_text, 0) + 1
+                missing_points_by_individual[id_text] = missing_points_by_individual.get(id_text, 0) + missing_count
+
+        completed_percent = 100.0 * completed_frames / frame_count
+    else:
+        completed_percent = 0.0
+
     return LabelProgress(
         labeled_points=labeled_points,
         total_points=total_points,
@@ -336,6 +505,11 @@ def compute_label_progress(layer: Points, *, fallback_paths: list[str] | None = 
         frame_count=frame_count,
         bodypart_count=bodypart_count,
         individual_count=individual_count,
+        completed_frames=completed_frames,
+        completed_percent=completed_percent,
+        incomplete_frames=tuple(incomplete_frames),
+        incomplete_frames_by_individual=incomplete_frames_by_individual,
+        missing_points_by_individual=missing_points_by_individual,
     )
 
 
@@ -390,3 +564,235 @@ def find_relevant_image_layer(viewer) -> Image | None:
             return layer
 
     return None
+
+
+# -----------------------------------------------
+#  Points interaction observer
+# -----------------------------------------------
+
+
+@dataclass(frozen=True)
+class PointsInteractionEvent:
+    """
+    Structured points-layer interaction event.
+
+    Parameters
+    ----------
+    viewer:
+        The napari viewer.
+    layer:
+        The active Points layer at the time the event flushes, or None.
+    reasons:
+        A normalized set of reasons that triggered the event. Typical values
+        include {"install"}, {"selection"}, {"active_layer"}, {"layers"},
+        and {"content"}, depending on which observer hooks fired.
+    """
+
+    viewer: Any
+    layer: Points | None
+    reasons: frozenset[str]
+
+
+def _iter_event_emitters(event_group: Any, names: tuple[str, ...]):
+    """
+    Yield (name, emitter) pairs for names that exist on an event group.
+    """
+    if event_group is None:
+        return
+    for name in names:
+        emitter = getattr(event_group, name, None)
+        if emitter is not None:
+            yield name, emitter
+
+
+def capture_points_state(
+    layer: Points,
+    *,
+    include_data: bool = False,
+    include_properties: bool = False,
+) -> dict[str, Any]:
+    """
+    Best-effort snapshot helper for future history/undo systems.
+
+    This is intentionally separate from the observer so callers can choose
+    whether they want lightweight interaction events or heavier snapshots.
+    """
+    data = getattr(layer, "data", None)
+    try:
+        n_points = 0 if data is None else len(data)
+    except Exception:
+        n_points = 0
+
+    state: dict[str, Any] = {
+        "name": getattr(layer, "name", None),
+        "selected_data": tuple(sorted(int(i) for i in getattr(layer, "selected_data", set()) or set())),
+        "n_points": n_points,
+    }
+
+    if include_data:
+        try:
+            state["data"] = getattr(layer, "data", None).copy()
+        except Exception:
+            state["data"] = None
+
+    if include_properties:
+        try:
+            props = getattr(layer, "properties", {}) or {}
+            state["properties"] = {k: v.copy() if hasattr(v, "copy") else v for k, v in dict(props).items()}
+        except Exception:
+            state["properties"] = None
+
+    return state
+
+
+class PointsInteractionObserver:
+    """
+    Observe the active napari Points layer and emit coalesced interaction events.
+
+    Public / stable anchors used
+    ----------------------------
+    - viewer.layers.selection.events.active
+    - layer.selected_data.events.changed / active
+    - layer.selected_data.events.items_changed (if present; useful in practice)
+    - viewer.layers.events.inserted / removed / reordered (if present)
+
+    Notes
+    -----
+    This is intentionally conservative:
+    - it avoids private napari APIs
+    - it tolerates event-name differences by connecting only to emitters that exist
+    - it coalesces bursts of events into one callback using a QTimer
+    """
+
+    def __init__(
+        self,
+        viewer: Any,
+        callback: Callable[[PointsInteractionEvent], None],
+        *,
+        debounce_ms: int = 0,
+        watch_content: bool = False,
+    ) -> None:
+        self.viewer = viewer
+        self.callback = callback
+        self.debounce_ms = max(0, int(debounce_ms))
+        self.watch_content = watch_content
+
+        self._active_layer: Points | None = None
+        self._viewer_connections: list[tuple[Any, Callable]] = []
+        self._layer_connections: list[tuple[Any, Callable]] = []
+        self._pending_reasons: set[str] = set()
+
+        self._timer = QTimer()
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._flush)
+
+    # ------------------------------------------------------------------
+    # Public lifecycle
+    # ------------------------------------------------------------------
+
+    def install(self) -> None:
+        """
+        Install the observer onto the viewer.
+        """
+        self._connect_viewer_events()
+        self._rebind_active_points_layer()
+        self._schedule("install")
+
+    def close(self) -> None:
+        """
+        Disconnect all emitters and stop the timer.
+        """
+        self._timer.stop()
+        self._disconnect_all(self._layer_connections)
+        self._disconnect_all(self._viewer_connections)
+        self._active_layer = None
+        self._pending_reasons.clear()
+
+    # ------------------------------------------------------------------
+    # Internal connection helpers
+    # ------------------------------------------------------------------
+
+    def _connect(self, emitter: Any, callback: Callable, bucket: list[tuple[Any, Callable]]) -> None:
+        emitter.connect(callback)
+        bucket.append((emitter, callback))
+
+    def _disconnect_all(self, bucket: list[tuple[Any, Callable]]) -> None:
+        while bucket:
+            emitter, callback = bucket.pop()
+            try:
+                emitter.disconnect(callback)
+            except Exception:
+                pass
+
+    def _connect_viewer_events(self) -> None:
+        # Active layer changes are the most important public hook.
+        active_emitter = getattr(self.viewer.layers.selection.events, "active", None)
+        if active_emitter is not None:
+            self._connect(active_emitter, self._on_active_layer_changed, self._viewer_connections)
+
+        layer_events = getattr(self.viewer.layers, "events", None)
+        for _name, emitter in _iter_event_emitters(layer_events, ("inserted", "removed", "reordered")):
+            self._connect(emitter, self._on_layers_changed, self._viewer_connections)
+
+    def _rebind_active_points_layer(self) -> None:
+        self._disconnect_all(self._layer_connections)
+
+        active = getattr(self.viewer.layers.selection, "active", None)
+        if not isinstance(active, Points):
+            self._active_layer = None
+            return
+
+        self._active_layer = active
+
+        # Primary selection hooks: Selection model events
+        selection = getattr(active, "selected_data", None)
+        selection_events = getattr(selection, "events", None)
+
+        for _name, emitter in _iter_event_emitters(selection_events, ("changed", "active", "items_changed")):
+            self._connect(emitter, self._on_selection_changed, self._layer_connections)
+
+        # Optional content hooks, useful for future history/versioning use cases.
+        if self.watch_content:
+            layer_events = getattr(active, "events", None)
+            for event_name in ("data", "properties", "current_properties", "mode"):
+                for _name, emitter in _iter_event_emitters(layer_events, (event_name,)):
+                    self._connect(emitter, self._on_content_changed, self._layer_connections)
+
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+
+    def _on_active_layer_changed(self, event=None) -> None:
+        self._rebind_active_points_layer()
+        self._schedule("active_layer")
+
+    def _on_layers_changed(self, event=None) -> None:
+        # The active layer may or may not have changed, but rebinding is cheap and safe.
+        self._rebind_active_points_layer()
+        self._schedule("layers")
+
+    def _on_selection_changed(self, event=None) -> None:
+        self._schedule("selection")
+
+    def _on_content_changed(self, event=None) -> None:
+        self._schedule("content")
+
+    # ------------------------------------------------------------------
+    # Coalescing
+    # ------------------------------------------------------------------
+
+    def _schedule(self, reason: str) -> None:
+        self._pending_reasons.add(reason)
+        if not self._timer.isActive():
+            self._timer.start(self.debounce_ms)
+
+    def _flush(self) -> None:
+        reasons = frozenset(self._pending_reasons)
+        self._pending_reasons.clear()
+
+        event = PointsInteractionEvent(
+            viewer=self.viewer,
+            layer=self._active_layer,
+            reasons=reasons,
+        )
+        self.callback(event)
