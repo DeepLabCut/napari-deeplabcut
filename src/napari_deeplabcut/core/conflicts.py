@@ -194,7 +194,7 @@ def compute_overwrite_report_for_extracted_labels_row(
         return None
 
     try:
-        df_old = pd.read_hdf(out, key="df_with_missing")
+        df_old = pd.read_hdf(out, key=DLC_CANONICAL_H5_KEY)
     except (KeyError, ValueError):
         df_old = pd.read_hdf(out)
 
