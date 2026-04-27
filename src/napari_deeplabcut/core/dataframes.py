@@ -13,24 +13,31 @@ from napari_deeplabcut.core.schemas import DLCHeaderModel, PointsWriteInputModel
 logger = logging.getLogger(__name__)
 
 
-def _is_logical_single_animal_header(header: DLCHeaderModel | None) -> bool:
+def _is_logical_single_animal_header(
+    header: DLCHeaderModel | None,
+    *,
+    is_ma_project: bool | None = None,
+) -> bool:
     """
-    Determine whether the authoritative header represents a single-animal project.
+    Determine whether the target should be written in canonical single-animal format.
 
-    Important:
-    - Use the original header shape (nlevels / names), NOT the normalized in-memory
-      canonical_4 representation.
-    - A legacy/canonical SA header is 3-level: (scorer, bodyparts, coords).
+    Priority
+    --------
+    1) Explicit project-mode signal from DLC config (is_ma_project)
+    2) Original header shape
+    3) Blank-individuals fallback
     """
+    if is_ma_project is not None:
+        return not bool(is_ma_project)
+
     if header is None:
         return False
 
-    # Canonical SA in this codebase is represented originally as 3-level
+    # Canonical/original SA header
     if header.nlevels == 3:
         return True
 
-    # Defensive fallback: if a 4-level header somehow exists but all individuals are blank,
-    # treat it as effectively SA for writing.
+    # Fallback for normalized 4-level headers that still represent SA
     if header.nlevels == 4:
         inds = [str(i) for i in header.individuals if str(i) != ""]
         return len(inds) == 0
@@ -38,8 +45,15 @@ def _is_logical_single_animal_header(header: DLCHeaderModel | None) -> bool:
     return False
 
 
-def restore_dlc_on_disk_header_shape(df: pd.DataFrame, header: DLCHeaderModel) -> pd.DataFrame:
+def restore_dlc_on_disk_header_shape(
+    df: pd.DataFrame, header: DLCHeaderModel, *, is_ma_project: bool | None = None
+) -> pd.DataFrame:
     """
+    Args:
+        df: DataFrame with arbitrary column structure produced from napari Points + metadata.
+        header: Authoritative DLCHeaderModel that defines the expected column structure on disk.
+        is_ma_from_config: Optional boolean indicating if the project is multi-animal based on DLC config.
+
     Restore the DataFrame column structure to match the authoritative DLC header
     that should be used on disk.
 
@@ -51,7 +65,7 @@ def restore_dlc_on_disk_header_shape(df: pd.DataFrame, header: DLCHeaderModel) -
 
     df_out = df.copy()
 
-    if _is_logical_single_animal_header(header):
+    if _is_logical_single_animal_header(header, is_ma_project=is_ma_project):
         # If the normalized dataframe has an empty individuals level, collapse it.
         if df_out.columns.nlevels == 4 and "individuals" in (df_out.columns.names or []):
             inds = pd.Index(df_out.columns.get_level_values("individuals")).astype(str)

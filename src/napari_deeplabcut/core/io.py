@@ -313,6 +313,47 @@ def form_df(
     return df
 
 
+def _resolve_multianimalproject_for_write(
+    *,
+    out_path: Path,
+    pts_meta: PointsMetadata,
+) -> bool | None:
+    """
+    Best-effort resolve of DLC config multianimalproject flag for save.
+
+    Resolution order
+    ----------------
+    1) pts_meta.project / explicit project context if available
+    2) config near output path
+    3) config near pts_meta.root
+    4) None if not resolvable
+    """
+    candidates: list[Path] = []
+
+    project = getattr(pts_meta, "project", None)
+    if project:
+        candidates.append(Path(project) / "config.yaml")
+
+    candidates.append(out_path.parent)
+
+    root = getattr(pts_meta, "root", None)
+    if root:
+        candidates.append(Path(root))
+
+    for candidate in candidates:
+        try:
+            cfg_path = find_nearest_config(candidate, max_levels=3)
+            cfg = load_config(str(cfg_path))
+            if isinstance(cfg, dict) and "multianimalproject" in cfg:
+                logger.debug("Resolved multianimalproject=True from config at %s", cfg_path)
+                return bool(cfg.get("multianimalproject", False))
+        except Exception:
+            continue
+
+    logger.debug("Could not resolve multianimalproject flag from any candidate configs.")
+    return None
+
+
 def _atomic_to_hdf(df: pd.DataFrame, out_path: Path, key: str = DLC_CANONICAL_H5_KEY) -> None:
     """Best-effort atomic write: write to temp and replace."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -453,9 +494,12 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
         pass
     df_out.sort_index(inplace=True)
 
-    # IMPORTANT:
-    # Restore canonical on-disk DLC header shape from the authoritative header.
-    df_out = restore_dlc_on_disk_header_shape(df_out, header_for_write)
+    # Restore canonical on-disk DLC header shape from the header.
+    is_ma_project = _resolve_multianimalproject_for_write(
+        out_path=out,
+        pts_meta=pts_meta,
+    )
+    df_out = restore_dlc_on_disk_header_shape(df_out, header_for_write, is_ma_project=is_ma_project)
 
     logger.debug("FINAL WRITE columns nlevels: %s", getattr(df_out.columns, "nlevels", None))
     logger.debug("FINAL WRITE columns names: %s", getattr(df_out.columns, "names", None))
