@@ -179,6 +179,8 @@ class KeypointControls(ViewerSingletonWidget):
 
         # Add some more controls
         self._layout = QVBoxLayout(self)
+        # TODO just use a single synced DropdownMenu instance instead of one per layer
+        # it would reduce tracking and centralize the menu logic. Updating should be cheap anyways.
         self._menus = []
         self._layer_to_menu = {}
         self.viewer.layers.selection.events.active.connect(self.on_active_layer_change)
@@ -987,6 +989,15 @@ class KeypointControls(ViewerSingletonWidget):
         show_debug_action.triggered.connect(self._show_debug_window)
         self.viewer.window.help_menu.addAction(show_debug_action)
 
+    def _sync_dropdown_visibility(self) -> None:
+        active = self.viewer.layers.selection.active
+        menu_idx = -1
+        if active is not None and isinstance(active, Points):
+            menu_idx = self._layer_to_menu.get(active, -1)
+
+        for idx, menu in enumerate(self._menus):
+            menu.setHidden(idx != menu_idx)
+
     def _form_dropdown_menus(self, store):
         menu = KeypointsDropdownMenu(store)
         self.viewer.dims.events.current_step.connect(
@@ -999,6 +1010,8 @@ class KeypointControls(ViewerSingletonWidget):
         layout = QVBoxLayout()
         layout.addWidget(menu)
         self._layout.addLayout(layout)
+
+        self._sync_dropdown_visibility()
 
     def _form_mode_radio_buttons(self):
         group_box = QGroupBox("Labeling mode")
@@ -1190,15 +1203,7 @@ class KeypointControls(ViewerSingletonWidget):
         ):
             self._color_grp.setVisible(self.layer_manager.is_multianimal(event.value))
             # self._update_color_scheme() # if needed
-            menu_idx = -1
-            if event.value is not None and isinstance(event.value, Points):
-                menu_idx = self._layer_to_menu.get(event.value, -1)
-
-            for idx, menu in enumerate(self._menus):
-                if idx == menu_idx:
-                    menu.setHidden(False)
-                else:
-                    menu.setHidden(True)
+            self._sync_dropdown_visibility()
 
             self._refresh_video_panel_context()
             self._refresh_layer_status_panel()
