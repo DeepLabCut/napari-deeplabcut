@@ -581,7 +581,7 @@ class PointsLayerSaveWorkflow:
             pts,
             anchor=anchor,
             scorer=scorer,
-            dataset_key="keypoints",
+            dataset_key="df_with_missing",
         )
 
         out = write_points_meta(

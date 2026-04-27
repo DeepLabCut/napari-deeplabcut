@@ -430,7 +430,7 @@ class IOProvenance(BaseModel):
         description="Project-relative POSIX path to the source .h5 (forward slashes).",
     )
     kind: AnnotationKind | None = Field(default=None, description="Annotation kind for routing", strict=True)
-    dataset_key: str = Field(default="keypoints", description="HDF5 key for keypoints table")
+    dataset_key: str = Field(default="df_with_missing", description="HDF5 key for keypoints table")
 
     @field_validator("source_relpath_posix")
     @classmethod

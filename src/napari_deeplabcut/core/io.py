@@ -43,6 +43,7 @@ from napari_deeplabcut.core.dataframes import (
     harmonize_keypoint_column_index,
     harmonize_keypoint_row_index,
     merge_multiple_scorers,
+    restore_dlc_on_disk_header_shape,
     set_df_scorer,
 )
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
@@ -62,6 +63,7 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 _GLOB_MAGIC = set("*?[")
 _SUPPORTED_SUFFIXES = {ext.lower() for ext in SUPPORTED_IMAGES}
+DLC_CANONICAL_H5_KEY = "df_with_missing"
 
 
 def _has_glob_magic(name: str) -> bool:
@@ -116,6 +118,26 @@ def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
 # and attaches provenance via attach_source_and_io_to_layer_kwargs.
 
 
+def _read_hdf_any_key(file: Path) -> pd.DataFrame:
+    """Read an HDF file without knowing the key in advance. Try common DLC keys."""
+    file = str(file)
+    try:
+        return pd.read_hdf(file, key=DLC_CANONICAL_H5_KEY)
+    except (KeyError, ValueError):
+        logger.error(f"Key '{DLC_CANONICAL_H5_KEY}' not found in {file}. Trying to read without specifying a key.")
+    fallback_keys = ["keypoints"]
+    for k in fallback_keys:
+        try:
+            return pd.read_hdf(file, key=k)
+        except (KeyError, ValueError):
+            logger.error(f"Key '{k}' not found in {file}.")
+    logger.error(
+        f"None of the expected keys {fallback_keys + [DLC_CANONICAL_H5_KEY]} were found in {file}. "
+        "Falling back to default read_hdf which may raise its own error if no valid key is found."
+    )
+    return pd.read_hdf(file)  # Let pandas guess instead
+
+
 def read_hdf(filename: str) -> list[LayerData]:
     layers = []
     for file in Path(filename).parent.glob(Path(filename).name):
@@ -125,13 +147,16 @@ def read_hdf(filename: str) -> list[LayerData]:
 
 def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[LayerData]:
     """Read a single H5 file and attach provenance with optional explicit kind.
+    Dataset may be under keypoints/ or df_with_missing/ for compatibility with various DLC versions.
+    We use read_hdf without specifying a key to allow pandas to auto-detect the correct one.
 
     - Produces one Points layer per H5 file
     - Points.data contains only finite coordinates
     - Unlabeled keypoints are omitted from Points.data
     - Empty Points layers are valid
     """
-    temp = pd.read_hdf(str(file))
+    # temp = pd.read_hdf(str(file))
+    temp = _read_hdf_any_key(file)
     temp = merge_multiple_scorers(temp)
     header = DLCHeaderModel(columns=temp.columns)
     temp = temp.droplevel("scorer", axis=1)
@@ -288,7 +313,7 @@ def form_df(
     return df
 
 
-def _atomic_to_hdf(df: pd.DataFrame, out_path: Path, key: str = "keypoints") -> None:
+def _atomic_to_hdf(df: pd.DataFrame, out_path: Path, key: str = DLC_CANONICAL_H5_KEY) -> None:
     """Best-effort atomic write: write to temp and replace."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_suffix(out_path.suffix + ".tmp")
@@ -351,6 +376,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     # If promoting to GT and scorer is known, rewrite scorer level
     if target_scorer:
         df_new = set_df_scorer(df_new, target_scorer)
+    header_for_write = pts_meta.header.with_scorer(target_scorer) if target_scorer else pts_meta.header
 
     # Never write back to machine sources without an explicit promotion target
     if not out_path and source_kind == AnnotationKind.MACHINE:
@@ -404,10 +430,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
 
     # Merge-on-save for GT
     if destination_kind == AnnotationKind.GT and out.exists():
-        try:
-            df_old = pd.read_hdf(out, key="keypoints")
-        except (KeyError, ValueError):
-            df_old = pd.read_hdf(out)
+        df_old = _read_hdf_any_key(out)
 
         # Harmonize indices and merge
         try:
@@ -420,25 +443,30 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
         df_new = harmonize_keypoint_column_index(df_new)
         df_old = harmonize_keypoint_column_index(df_old)
         df_out = df_new.combine_first(df_old)
-
-        # Normalize columns to DLC header if possible
-        try:
-            header = DLCHeaderModel(columns=df_out.columns)
-            df_out = df_out.reindex(header.columns, axis=1)
-        except Exception:
-            pass
     else:
         df_out = df_new
 
-    # Final cleanup
+    # Final cleanup of rows
     try:
         guarantee_multiindex_rows(df_out)
     except Exception:
         pass
     df_out.sort_index(inplace=True)
 
+    # IMPORTANT:
+    # Restore canonical on-disk DLC header shape from the authoritative header.
+    df_out = restore_dlc_on_disk_header_shape(df_out, header_for_write)
+
+    logger.debug("FINAL WRITE columns nlevels: %s", getattr(df_out.columns, "nlevels", None))
+    logger.debug("FINAL WRITE columns names: %s", getattr(df_out.columns, "names", None))
+    if isinstance(df_out.columns, pd.MultiIndex) and "individuals" in (df_out.columns.names or []):
+        logger.debug(
+            "FINAL WRITE individuals values: %s",
+            list(dict.fromkeys(df_out.columns.get_level_values("individuals").astype(str))),
+        )
+
     # Write .h5 and .csv
-    _atomic_to_hdf(df_out, out, key="keypoints")
+    _atomic_to_hdf(df_out, out, key=DLC_CANONICAL_H5_KEY)
     csv_path = out.with_suffix(".csv")
     df_out.to_csv(csv_path)
 
