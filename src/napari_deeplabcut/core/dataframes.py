@@ -213,6 +213,9 @@ def guarantee_multiindex_rows(df: pd.DataFrame) -> None:
     Legacy DLC data may use an index with pathto/video/file.png strings as Index.
     The new format uses a MultiIndex with each path component as a level.
     """
+    if len(df.index) == 0:
+        return
+
     # Make paths platform-agnostic if they are not already
     if not isinstance(df.index, pd.MultiIndex):  # Backwards compatibility
         path = df.index[0]
