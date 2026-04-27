@@ -313,9 +313,14 @@ class DLCHeaderModel(BaseModel):
 
         Replaces legacy `header.scorer = ...`.
         """
-        canon = self._canonical_4()
-        new_cols = [(str(scorer), ind, bp, coord) for _, ind, bp, coord in canon]
-        return self.model_copy(update={"columns": new_cols, "names": ["scorer", "individuals", "bodyparts", "coords"]})
+        new_cols = []
+        for col in self.columns:
+            t = tuple(map(str, col))
+            if len(t) >= 1:
+                new_cols.append((str(scorer), *t[1:]))
+            else:
+                new_cols.append((str(scorer),))
+        return self.model_copy(update={"columns": new_cols, "names": self.names})
 
     def form_individual_bodypart_pairs(self) -> list[tuple[str, str]]:
         """
