@@ -141,6 +141,10 @@ class KeypointControls(ViewerSingletonWidget):
         self.layer_manager.points_layers_merged_requested.connect(self._on_points_layers_merged_requested)
         self.layer_manager.points_layer_removed_requested.connect(self._on_points_layer_removed_requested)
         self.layer_manager.tracks_layer_removed_requested.connect(self._on_tracks_layer_removed_requested)
+        ## Timers
+        self._timers = {}
+        self._temp_timers = set()
+        self.destroyed.connect(self._cleanup_timers)
 
         ## Debug ##
         self._debug_recorder = install_debug_recorder()
@@ -195,7 +199,8 @@ class KeypointControls(ViewerSingletonWidget):
         self._video_group.apply_crop_cb.toggled.connect(self._on_apply_crop_toggled)
         self.viewer.dims.events.current_step.connect(lambda event: self._refresh_video_panel_context())
         self.viewer.layers.selection.events.active.connect(lambda event: self._refresh_video_panel_context())
-        QTimer.singleShot(0, self._refresh_video_panel_context)
+        # QTimer.singleShot(0, self._refresh_video_panel_context)
+        self._schedule_once("startup_video_panel_refresh", 0, self._refresh_video_panel_context)
 
         # form helper display
         self._keypoint_mapping_button = None
@@ -328,7 +333,8 @@ class KeypointControls(ViewerSingletonWidget):
 
         # Slightly delay docking so it is shown underneath the KeypointsControls widget
         # NOTE we may want to switch to timers owned by the widget instead of fire-and-forget
-        QTimer.singleShot(10, self.silently_dock_canvas)
+        # QTimer.singleShot(10, self.silently_dock_canvas)
+        self._schedule_once("startup_dock_canvas", 10, self.silently_dock_canvas)
 
         # If layers already exist (user loaded data before opening this widget),
         # adopt them so keypoint controls take ownership immediately.
@@ -336,11 +342,83 @@ class KeypointControls(ViewerSingletonWidget):
         self.layer_manager.schedule_initial_adoption()
 
         # Refresh layers stats widget
-        QTimer.singleShot(0, self._refresh_layer_status_panel)
+        # QTimer.singleShot(0, self._refresh_layer_status_panel)
+        self._schedule_once("initial_layer_status_refresh", 0, self._refresh_layer_status_panel)
 
     @cached_property
     def settings(self):
         return QSettings()
+
+    def _cleanup_timers(self, *_args) -> None:
+        """Stop/delete all timers owned by this widget.
+
+        This is intentionally defensive: by teardown time, some underlying
+        C++ objects may already be in the process of destruction.
+        """
+        for timer in list(getattr(self, "_timers", {}).values()):
+            try:
+                timer.stop()
+                timer.deleteLater()
+            except RuntimeError:
+                pass
+        self._timers = {}
+
+        for timer in list(getattr(self, "_temp_timers", set())):
+            try:
+                timer.stop()
+                timer.deleteLater()
+            except RuntimeError:
+                pass
+        self._temp_timers.clear()
+
+    def _schedule_once(self, name: str, msec: int, callback) -> None:
+        """Schedule/coalesce a named single-shot callback owned by this widget."""
+        timer = self._timers.get(name)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(callback)
+            self._timers[name] = timer
+        try:
+            timer.start(msec)
+        except RuntimeError:
+            # Widget/timer already in teardown
+            pass
+
+    def _single_shot_owned(self, msec: int, callback) -> None:
+        """Schedule a one-off callback using a child QTimer tracked by this widget."""
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        self._temp_timers.add(timer)
+
+        def _fire():
+            try:
+                callback()
+            finally:
+                self._temp_timers.discard(timer)
+                try:
+                    timer.deleteLater()
+                except RuntimeError:
+                    pass
+
+        timer.timeout.connect(_fire)
+        try:
+            timer.start(msec)
+        except RuntimeError:
+            self._temp_timers.discard(timer)
+
+    def _flush_recolor_pending(self) -> None:
+        pending = tuple(self._recolor_pending)
+        self._recolor_pending.clear()
+        for layer in pending:
+            try:
+                if layer not in self.viewer.layers:
+                    continue
+                self._apply_points_coloring_from_metadata(layer)
+            except RuntimeError:
+                logger.debug("Skipping recolor for deleted/tearing-down layer", exc_info=True)
+            except Exception:
+                logger.debug("Failed deferred recolor", exc_info=True)
 
     @deprecated(details="Use the layer manager's project context.", replacement="layer_manager.image_meta")
     @property
@@ -652,13 +730,7 @@ class KeypointControls(ViewerSingletonWidget):
 
         self._recolor_pending.add(layer)
 
-        def _do():
-            try:
-                self._apply_points_coloring_from_metadata(layer)
-            finally:
-                self._recolor_pending.discard(layer)
-
-        QTimer.singleShot(0, _do)
+        self._schedule_once(f"recolor_{layer.name}", 0, self._flush_recolor_pending)
 
     def _ensure_traj_canvas_docked(self) -> None:
         """
