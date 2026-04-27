@@ -330,7 +330,8 @@ class LayerLifecycleManager(QObject):
 
         try:
             inds = hdr.individuals
-            return bool(inds and len(inds) > 0 and str(inds[0]) != "")
+            # return bool(inds and len(inds) > 0 and str(inds[0]) != "")
+            return any(str(ind) != "" for ind in inds)
         except Exception:
             return False
 

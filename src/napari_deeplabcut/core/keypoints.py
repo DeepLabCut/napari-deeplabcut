@@ -312,11 +312,41 @@ class KeypointStore:
         else:
             self.viewer.dims.set_current_step(0, min(unlabeled_inds))
 
+    def _clear_stale_selection_if_off_frame(self) -> None:
+        layer = self.layer
+        if not len(layer.selected_data):
+            return
+
+        try:
+            sel = np.fromiter(layer.selected_data, dtype=int)
+        except Exception:
+            layer.selected_data = set()
+            return
+
+        if sel.size == 0:
+            layer.selected_data = set()
+            return
+
+        try:
+            selected_steps = np.asarray(layer.data[sel, 0])
+        except Exception:
+            layer.selected_data = set()
+            return
+
+        # If none of the selected points belong to the current frame, clear selection.
+        if not np.any(selected_steps == self.current_step):
+            layer.selected_data = set()
+
     def add(self, coord):
         coord = np.atleast_2d(coord)
 
+        # Clear stale cross-frame selection before any logic
+        self._clear_stale_selection_if_off_frame()
+
         get_mode = getattr(self, "_get_label_mode", None)
         label_mode = get_mode() if callable(get_mode) else None
+
+        changed = False
 
         if self.current_keypoint not in self.annotated_keypoints:
             layer = self.layer
@@ -354,6 +384,7 @@ class KeypointStore:
             props["likelihood"] = np.concatenate([lik_arr, np.ones(n_new, dtype=float)])
 
             layer.properties = props
+            changed = True
 
         elif label_mode is LabelMode.QUICK:
             layer = self.layer
@@ -361,13 +392,16 @@ class KeypointStore:
             data = layer.data
             data[np.flatnonzero(self.current_mask)[ind]] = coord.squeeze()
             layer.data = data
+            changed = True
 
         self.layer.selected_data = set()
 
         if label_mode is LabelMode.LOOP:
-            self.layer.events.query_next_frame()
+            if changed:
+                self.layer.events.query_next_frame()
         else:
-            self.next_keypoint()
+            if changed:
+                self.next_keypoint()
 
 
 @deprecated(details="Temporary compat shim, remove once KeypointStore.add is properly integrated.")
