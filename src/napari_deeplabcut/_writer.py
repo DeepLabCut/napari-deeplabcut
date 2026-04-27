@@ -1,86 +1,32 @@
-import os
-from itertools import groupby
+"""Writers for DeepLabCut data formats."""
+
+# src/napari_deeplabcut/_writer.py
+import logging
 from pathlib import Path
 
-import pandas as pd
-import yaml
-from napari.layers import Shapes
-from napari_builtins.io import napari_write_shapes
 from skimage.io import imsave
 from skimage.util import img_as_ubyte
 
-from napari_deeplabcut import misc
-from napari_deeplabcut._reader import _load_config
+from napari_deeplabcut.core.io import write_hdf
+
+logger = logging.getLogger(__name__)
 
 
-def _write_config(config_path: str, params: dict):
-    with open(config_path, "w") as file:
-        yaml.safe_dump(params, file)
+def write_hdf_napari_dlc(path: str, data, attributes: dict) -> list[str]:
+    if not path:
+        path = "__dlc__.h5"  # dummy path to trigger napari-deeplabcut-specific handling in write_hdf
+    if path != "__dlc__.h5":
+        logger.info(
+            "This function should not be used with a user-specified path."
+            "Layer metadata from the reader (in attributes) is used to decide where to save rather than user input."
+            "One path that requires user input is when machine labels"
+            "are refined by a human (as we do not want to overwrite machine labels),"
+            "but that case is handled separately."
+        )
+    return write_hdf(path, data, attributes)
 
 
-def _form_df(points_data, metadata):
-    temp = pd.DataFrame(points_data[:, -1:0:-1], columns=["x", "y"])
-    properties = metadata["properties"]
-    meta = metadata["metadata"]
-    temp["bodyparts"] = properties["label"]
-    temp["individuals"] = properties["id"]
-    temp["inds"] = points_data[:, 0].astype(int)
-    temp["likelihood"] = properties["likelihood"]
-    temp["scorer"] = meta["header"].scorer
-    df = temp.set_index(["scorer", "individuals", "bodyparts", "inds"]).stack()
-    df.index.set_names("coords", level=-1, inplace=True)
-    df = df.unstack(["scorer", "individuals", "bodyparts", "coords"])
-    df.index.name = None
-    if not properties["id"][0]:
-        df = df.droplevel("individuals", axis=1)
-    df = df.reindex(meta["header"].columns, axis=1)
-    # Fill unannotated rows with NaNs
-    # df = df.reindex(range(len(meta['paths'])))
-    # df.index = meta['paths']
-    if meta["paths"]:
-        df.index = [meta["paths"][i] for i in df.index]
-    misc.guarantee_multiindex_rows(df)
-    return df
-
-
-def write_hdf(filename, data, metadata):
-    file, _ = os.path.splitext(filename)  # FIXME Unused currently
-    df = _form_df(data, metadata)
-    meta = metadata["metadata"]
-    name = metadata["name"]
-    root = meta["root"]
-    if "machine" in name:  # We are attempting to save refined model predictions
-        df.drop("likelihood", axis=1, level="coords", inplace=True, errors="ignore")
-        header = misc.DLCHeader(df.columns)
-        gt_file = ""
-        for file in os.listdir(root):
-            if file.startswith("CollectedData") and file.endswith("h5"):
-                gt_file = file
-                break
-        if gt_file:  # Refined predictions must be merged into the existing data
-            df_gt = pd.read_hdf(os.path.join(root, gt_file))
-            new_scorer = df_gt.columns.get_level_values("scorer")[0]
-            header.scorer = new_scorer
-            df.columns = header.columns
-            df = pd.concat((df, df_gt))
-            df = df[~df.index.duplicated(keep="first")]
-            name = os.path.splitext(gt_file)[0]
-        else:
-            # Let us fetch the config.yaml file to get the scorer name...
-            project_folder = Path(root).parents[1]
-            config = _load_config(str(project_folder / "config.yaml"))
-            new_scorer = config["scorer"]
-            header.scorer = new_scorer
-            df.columns = header.columns
-            name = f"CollectedData_{new_scorer}"
-    df.sort_index(inplace=True)
-    filename = name + ".h5"
-    path = os.path.join(root, filename)
-    df.to_hdf(path, key="keypoints", mode="w")
-    df.to_csv(path.replace(".h5", ".csv"))
-    return filename
-
-
+# TODO rewrite explicitly as napari-facing func
 def _write_image(data, output_path, plugin=None):
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     imsave(
@@ -89,22 +35,3 @@ def _write_image(data, output_path, plugin=None):
         plugin=plugin,
         check_contrast=False,
     )
-
-
-def write_masks(foldername, data, metadata):
-    folder, _ = os.path.splitext(foldername)
-    os.makedirs(folder, exist_ok=True)
-    filename = os.path.join(folder, "{}_obj_{}.png")
-    shapes = Shapes(data, shape_type="polygon")
-    meta = metadata["metadata"]
-    frame_inds = [int(array[0, 0]) for array in data]
-    shape_inds = []
-    for _, group in groupby(frame_inds):
-        shape_inds += range(sum(1 for _ in group))
-    masks = shapes.to_masks(mask_shape=meta["shape"][1:])
-    for n, mask in enumerate(masks):
-        image_name = os.path.basename(meta["paths"][frame_inds[n]])
-        output_path = filename.format(os.path.splitext(image_name)[0], shape_inds[n])
-        _write_image(mask, output_path)
-    napari_write_shapes(os.path.join(folder, "vertices.csv"), data, metadata)
-    return folder

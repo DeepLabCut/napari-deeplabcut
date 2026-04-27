@@ -1,5 +1,6 @@
 # src/napari_deeplabcut/_tests/conftest.py
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -7,11 +8,13 @@ import cv2
 import numpy as np
 import pandas as pd
 import pytest
-from PIL import Image
-from qtpy.QtWidgets import QDockWidget
+from qtpy.QtWidgets import QApplication, QDockWidget
 from skimage.io import imsave
 
-from napari_deeplabcut import _writer, keypoints
+from napari_deeplabcut.config.models import DLCHeaderModel
+from napari_deeplabcut.config.settings import set_auto_open_keypoint_controls
+from napari_deeplabcut.core import io as io
+from napari_deeplabcut.core import keypoints
 
 # os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
 
@@ -20,6 +23,89 @@ os.environ["NAPARI_ASYNC"] = "0"  # avoid async teardown surprises in tests
 # os.environ["QT_QPA_PLATFORM"] = "offscreen"  # headless QT for CI
 # os.environ["QT_OPENGL"] = "software"  # avoid some CI issues with OpenGL
 # os.environ["PYTEST_QT_API"] = "pyqt6" # only for local testing with pyqt6, we use pyside6 otherwise
+logging.getLogger("napari_deeplabcut").propagate = True
+logging.getLogger("napari-deeplabcut").propagate = True
+
+
+def force_show(widget, qtbot, *, process_ms: int = 50):
+    """
+    Best-effort show of a widget and all its Qt parents, even under
+    QT_QPA_PLATFORM=offscreen.
+
+    This does NOT require real screen exposure; it only ensures the widget
+    is no longer hidden and that Qt processes the resulting show events.
+    """
+    chain = []
+    w = widget
+    while w is not None:
+        chain.append(w)
+        w = w.parentWidget()
+
+    # Show from top-most parent down so child visibility can resolve.
+    for w in reversed(chain):
+        try:
+            w.show()
+        except RuntimeError:
+            pass
+
+    QApplication.processEvents()
+    qtbot.wait(process_ms)
+    QApplication.processEvents()
+
+    return widget
+
+
+@pytest.fixture(autouse=True)
+def disable_auto_open_keypoint_controls():
+    """Disable auto-opening of keypoint controls in tests by default."""
+    original_value = set_auto_open_keypoint_controls(False)
+    yield
+    set_auto_open_keypoint_controls(original_value)
+
+
+@pytest.fixture(autouse=True)
+def only_deeplabcut_debug_logs():
+    """
+    Show DEBUG logs only for napari-deeplabcut.
+    Suppress DEBUG from all other libraries.
+    """
+    logging.getLogger()
+
+    # Store original levels
+    original_levels = {}
+
+    try:
+        for name, logger in logging.root.manager.loggerDict.items():
+            if not isinstance(logger, logging.Logger):
+                continue
+
+            original_levels[name] = logger.level
+
+            if not (name.startswith("napari_deeplabcut") or name.startswith("napari-deeplabcut")):
+                logger.setLevel(logging.INFO)
+
+        # Ensure our plugin is verbose
+        logging.getLogger("napari_deeplabcut").setLevel(logging.DEBUG)
+
+        yield
+    finally:
+        # Restore original logger levels
+        for name, level in original_levels.items():
+            logger = logging.getLogger(name)
+            logger.setLevel(level)
+
+
+def make_real_header(bodyparts=("bodypart1", "bodypart2"), individuals=("",), scorer="S"):
+    cols = pd.MultiIndex.from_product(
+        [[scorer], list(individuals), list(bodyparts), ["x", "y"]],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
+    return DLCHeaderModel(columns=cols)
+
+
+@pytest.fixture
+def make_real_header_factory():
+    return make_real_header
 
 
 @pytest.fixture
@@ -50,6 +136,27 @@ def viewer(make_napari_viewer_proxy):
         except Exception:
             # bail if viewer or its window is already gone
             pass
+
+
+@pytest.fixture
+def keypoint_controls_and_dock(viewer):
+    dock, controls = viewer.window.add_plugin_dock_widget(
+        "napari-deeplabcut",
+        "Keypoint controls",
+    )
+    return controls, dock
+
+
+@pytest.fixture
+def keypoint_controls(keypoint_controls_and_dock):
+    controls, _dock = keypoint_controls_and_dock
+    return controls
+
+
+@pytest.fixture
+def keypoint_controls_dock(keypoint_controls_and_dock):
+    _controls, dock = keypoint_controls_and_dock
+    return dock
 
 
 @pytest.fixture
@@ -133,7 +240,7 @@ def config_path(tmp_path_factory):
         },
     }
     path = str(tmp_path_factory.mktemp("configs") / "config.yaml")
-    _writer._write_config(
+    io.write_config(
         path,
         params=cfg,
     )
@@ -158,75 +265,60 @@ def video_path(tmp_path_factory):
 
 
 @pytest.fixture
-def superkeypoints_assets(tmp_path, monkeypatch):
-    """
-    Create a fake module dir with the expected assets layout:
-
-        module_dir/_reader_fake.py       -> patched as __file__
-        module_dir/assets/fake.json
-        module_dir/assets/fake.jpg
-
-    This mirrors the code under test:
-      Path(__file__).parent / "assets" / f"{super_animal}.json|.jpg"
-    """
-    module_dir = tmp_path / "module"
-    assets_dir = module_dir / "assets"
-    assets_dir.mkdir(parents=True)
-
-    super_animal = "fake"
-    data = {
-        "SK1": [10.0, 20.0],
-        "SK2": [40.0, 60.0],
-    }
-
-    # JSON with superkeypoints coordinates
-    (assets_dir / f"{super_animal}.json").write_text(json.dumps(data))
-
-    # Small 10x10 RGB diagram
-    Image.new("RGB", (10, 10), "white").save(assets_dir / f"{super_animal}.jpg")
-
-    # Patch the module's __file__ so that Path(__file__).parent == module_dir
-    fake_module_file = module_dir / "_reader_fake.py"
-    fake_module_file.write_text("# fake")
-    monkeypatch.setattr("napari_deeplabcut._reader.__file__", str(fake_module_file))
-
-    return {
-        "module_dir": module_dir,
-        "assets_dir": assets_dir,
-        "super_animal": super_animal,
-        "data": data,
-    }
+def superkeypoints_assets():
+    super_animal = "superanimal_quadruped"
+    json_path = Path(__file__).resolve().parents[1] / "assets" / f"{super_animal}.json"
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    return {"data": data, "super_animal": super_animal}
 
 
 @pytest.fixture
-def mapped_points(points, superkeypoints_assets, config_path):
+def single_animal_project(tmp_path: Path):
+    project = tmp_path / "project_single"
+    project.mkdir(parents=True, exist_ok=True)
+
+    cfg = {
+        "scorer": "John",
+        "dotsize": 8,
+        "pcutoff": 0.6,
+        "colormap": "viridis",
+        "bodyparts": ["cfg1", "cfg2"],
+        "video_sets": {},
+    }
+
+    config_path = project / "config.yaml"
+    io.write_config(config_path, cfg)
+    return project, config_path
+
+
+@pytest.fixture
+def multianimal_config_project(tmp_path: Path):
     """
-    Return a DLC Points layer that is ready for _map_keypoints():
-      - metadata['project'] is set (so the widget can write config.yaml)
-      - metadata['tables'] contains a mapping for two real bodyparts -> SK1/SK2
-      - at least two rows have coordinates exactly on the SK1/SK2 positions
-        and their labels are set to those bodyparts, guaranteeing a neighbor match.
+    Minimal DLC-style multi-animal project config used for E2E tests.
+
+    Returns:
+        project_dir, config_path
     """
-    layer = points  # DLC layer created via viewer.open(..., plugin="napari-deeplabcut")
-    super_animal = superkeypoints_assets["super_animal"]
-    superkpts = superkeypoints_assets["data"]
+    import yaml
 
-    # Required by _map_keypoints to locate and write config.yaml
-    # NOTE: This relies on config_path pointing to a file directly under the
-    # project directory, so that Path(config_path).parent is the project root.
-    layer.metadata["project"] = str(Path(config_path).parent)
-    header = layer.metadata["header"]
-    bp1, bp2 = header.bodyparts[:2]
+    project = tmp_path / "project_multi"
+    project.mkdir(parents=True, exist_ok=True)
 
-    # Inject a conversion table into metadata
-    layer.metadata["tables"] = {super_animal: {bp1: "SK1", bp2: "SK2"}}
+    cfg = {
+        "scorer": "John",
+        "dotsize": 8,
+        "pcutoff": 0.6,
+        "colormap": "viridis",
+        # DLC multi-animal flags/fields expected by napari_deeplabcut.config.models.DLCHeaderModel.from_config
+        "multianimalproject": True,
+        "individuals": ["animal1", "animal2"],
+        "multianimalbodyparts": ["bodypart1", "bodypart2"],
+        # Often present in DLC configs; safe to include even if empty
+        "uniquebodyparts": [],
+        # Keep bodyparts too (some parts of the plugin still read it)
+        "bodyparts": ["bodypart1", "bodypart2"],
+    }
 
-    # Ensure _map_keypoints finds matches:
-    # Put the first two rows exactly on SK1/SK2 and set their labels accordingly.
-    layer.data[0, 1:] = np.array(superkpts["SK1"], dtype=float)
-    layer.properties["label"][0] = bp1
-
-    layer.data[1, 1:] = np.array(superkpts["SK2"], dtype=float)
-    layer.properties["label"][1] = bp2
-
-    return layer, super_animal, bp1, bp2
+    config_path = project / "config.yaml"
+    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    return project, config_path
