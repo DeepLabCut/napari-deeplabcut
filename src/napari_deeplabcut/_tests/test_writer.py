@@ -89,7 +89,7 @@ def _add_source_io(metadata: dict, *, root: Path, kind: AnnotationKind, source_n
         "project_root": str(root),
         "source_relpath_posix": source_name.replace("\\", "/"),
         "kind": kind,  # AnnotationKind.GT or AnnotationKind.MACHINE
-        "dataset_key": "keypoints",
+        "dataset_key": "df_with_missing",
     }
     # legacy migration compatibility (optional but good)
     md["source_h5"] = str((root / source_name).resolve())
@@ -105,7 +105,7 @@ def _add_save_target(metadata: dict, *, root: Path, scorer: str) -> None:
         "project_root": str(root),
         "source_relpath_posix": f"CollectedData_{scorer}.h5",
         "kind": AnnotationKind.GT,
-        "dataset_key": "keypoints",
+        "dataset_key": "df_with_missing",
         "scorer": scorer,
     }
 
@@ -271,13 +271,13 @@ def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, m
     # Convert to MultiIndex of path components (matches refactored indexing model)
     guarantee_multiindex_rows(gt)
 
-    gt.to_hdf(gt_path, key="keypoints", mode="w")
+    gt.to_hdf(gt_path, key="df_with_missing", mode="w")
 
     # Create a machine file too; it must remain untouched
     machine_path = root / "machinelabels-iter0.h5"
     df_machine = pd.DataFrame(np.nan, index=[0], columns=fake_keypoints.columns)
-    df_machine.to_hdf(machine_path, key="keypoints", mode="w")
-    machine_before = pd.read_hdf(machine_path, key="keypoints")
+    df_machine.to_hdf(machine_path, key="df_with_missing", mode="w")
+    machine_before = pd.read_hdf(machine_path, key="df_with_missing")
 
     points = np.column_stack([np.arange(n_rows), rng.random(n_rows), rng.random(n_rows)])
 
@@ -285,14 +285,14 @@ def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, m
     assert Path(fnames[0]).name == "CollectedData_me.h5"
 
     # GT should exist and be readable
-    df = pd.read_hdf(fnames[0], key="keypoints")
+    df = pd.read_hdf(fnames[0], key="df_with_missing")
     assert isinstance(df, pd.DataFrame)
 
     # Must still be scored as "me" after promotion
     assert df.columns.get_level_values("scorer")[0] == "me"
 
     # Machine file must be unchanged
-    machine_after = pd.read_hdf(machine_path, key="keypoints")
+    machine_after = pd.read_hdf(machine_path, key="df_with_missing")
     pd.testing.assert_frame_equal(machine_before, machine_after)
 
 
@@ -382,7 +382,7 @@ def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, m
     out_h5 = Path(fnames[0])
     assert out_h5.exists()
 
-    df = pd.read_hdf(out_h5, key="keypoints")
+    df = pd.read_hdf(out_h5, key="df_with_missing")
     assert df.columns.get_level_values("scorer")[0] == "alice"
 
     # Ensure we still did NOT write back to a machine source file

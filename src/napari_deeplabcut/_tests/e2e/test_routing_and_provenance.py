@@ -356,7 +356,7 @@ def test_promotion_first_save_skip_config_then_prompt_scorer_and_create_sidecar(
     labeled_folder = _make_labeled_folder_with_machine_only(tmp_path)
 
     machine_path = labeled_folder / "machinelabels-iter0.h5"
-    machine_pre = pd.read_hdf(machine_path, key="keypoints")
+    machine_pre = pd.read_hdf(machine_path, key="df_with_missing")
 
     # Open folder
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
@@ -406,7 +406,7 @@ def test_promotion_first_save_skip_config_then_prompt_scorer_and_create_sidecar(
     assert gt_path.exists()
 
     # Machine file unchanged
-    machine_post = pd.read_hdf(machine_path, key="keypoints")
+    machine_post = pd.read_hdf(machine_path, key="df_with_missing")
     pd.testing.assert_frame_equal(machine_pre, machine_post)
 
 
@@ -429,7 +429,7 @@ def test_promotion_second_save_skip_config_then_use_sidecar_without_scorer_promp
     sidecar.write_text('{"schema_version": 1, "default_scorer": "Alice"}', encoding="utf-8")
 
     machine_path = labeled_folder / "machinelabels-iter0.h5"
-    machine_pre = pd.read_hdf(machine_path, key="keypoints")
+    machine_pre = pd.read_hdf(machine_path, key="df_with_missing")
 
     controls = keypoint_controls
     viewer.window.add_dock_widget(controls, name="Keypoint controls", area="right")
@@ -457,7 +457,7 @@ def test_promotion_second_save_skip_config_then_use_sidecar_without_scorer_promp
     gt_path = labeled_folder / "CollectedData_Alice.h5"
     assert gt_path.exists()
 
-    machine_post = pd.read_hdf(machine_path, key="keypoints")
+    machine_post = pd.read_hdf(machine_path, key="df_with_missing")
     pd.testing.assert_frame_equal(machine_pre, machine_post)
 
     controls._save_layers_dialog(selected=True)
@@ -601,7 +601,7 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     assert points.metadata["paths"] == expected_paths
 
     # H5 row index contains canonical DLC row keys for the safe cases
-    df = pd.read_hdf(expected_h5, key="keypoints")
+    df = pd.read_hdf(expected_h5, key="df_with_missing")
     if isinstance(df.index, pd.MultiIndex):
         observed_rows = ["/".join(map(str, idx)) for idx in df.index]
     else:
@@ -724,7 +724,7 @@ def test_promotion_nearby_config_wins_no_dialog_no_prompt(
     sidecar = labeled_folder / ".napari-deeplabcut.json"
     sidecar.write_text('{"schema_version": 1, "default_scorer": "Alice"}', encoding="utf-8")
 
-    machine_pre = pd.read_hdf(machine_path, key="keypoints")
+    machine_pre = pd.read_hdf(machine_path, key="df_with_missing")
 
     dialog_calls = {"count": 0}
 
@@ -769,7 +769,7 @@ def test_promotion_nearby_config_wins_no_dialog_no_prompt(
     assert expected_gt.exists(), f"Expected GT with config scorer to be created: {expected_gt}"
     assert not unexpected_gt.exists(), f"Sidecar scorer must be ignored when config.yaml is nearby: {unexpected_gt}"
 
-    machine_post = pd.read_hdf(machine_path, key="keypoints")
+    machine_post = pd.read_hdf(machine_path, key="df_with_missing")
     pd.testing.assert_frame_equal(machine_pre, machine_post)
 
 
@@ -792,7 +792,7 @@ def test_promotion_selected_external_config_wins_no_scorer_prompt(
     """
     labeled_folder = _make_labeled_folder_with_machine_only(tmp_path)
     machine_path = labeled_folder / "machinelabels-iter0.h5"
-    machine_pre = pd.read_hdf(machine_path, key="keypoints")
+    machine_pre = pd.read_hdf(machine_path, key="df_with_missing")
 
     # External DLC project whose config scorer should be used.
     external_project, external_config_path, _external_dataset = _make_project_config_and_frames_no_gt(
@@ -856,7 +856,7 @@ def test_promotion_selected_external_config_wins_no_scorer_prompt(
         f"Sidecar scorer must be ignored when a valid external config is selected: {unexpected_gt}"
     )
 
-    machine_post = pd.read_hdf(machine_path, key="keypoints")
+    machine_post = pd.read_hdf(machine_path, key="df_with_missing")
     pd.testing.assert_frame_equal(machine_pre, machine_post)
 
 

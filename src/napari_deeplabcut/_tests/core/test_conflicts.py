@@ -254,7 +254,7 @@ def test_compute_overwrite_report_returns_report_for_existing_gt_file_with_confl
 
     assert result is report
     assert seen["set_df_scorer"] == (raw_new_df, "target_scorer")
-    assert seen["read_hdf_calls"] == [(out, "keypoints")]
+    assert seen["read_hdf_calls"] == [(out, "df_with_missing")]
     assert seen["keypoint_conflicts"] == (old_df, promoted_df)
     assert seen["build_report"] == (
         key_conflict,
@@ -316,7 +316,7 @@ def test_compute_overwrite_report_falls_back_when_keyed_hdf_read_fails(monkeypat
 
     def fake_read_hdf(path, key=None):
         calls.append((Path(path), key))
-        if key == "keypoints":
+        if key == "df_with_missing":
             raise KeyError("missing key")
         return old_df
 
@@ -335,7 +335,7 @@ def test_compute_overwrite_report_falls_back_when_keyed_hdf_read_fails(monkeypat
 
     assert result is report
     assert calls == [
-        (out, "keypoints"),
+        (out, "df_with_missing"),
         (out, None),
     ]
 

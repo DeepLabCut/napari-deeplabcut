@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_config_first_hazard_regression_no_silent_deletion(viewer, keypoint_controls, qtbot, tmp_path, caplog):
+def test_config_regression_no_silent_deletion(viewer, keypoint_controls, qtbot, tmp_path, caplog):
     """
     Regression for the original report:
     Save the WRONG (placeholder) layer and still preserve previous labels due to merge-on-save.
@@ -22,7 +22,7 @@ def test_config_first_hazard_regression_no_silent_deletion(viewer, keypoint_cont
 
     project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
-    pre = pd.read_hdf(h5_path, key="keypoints")
+    pre = pd.read_hdf(h5_path, key="df_with_missing")
     assert np.isfinite(_get_coord_from_df(pre, "bodypart1", "x"))
     assert np.isnan(_get_coord_from_df(pre, "bodypart2", "x"))
 
@@ -57,7 +57,7 @@ def test_config_first_hazard_regression_no_silent_deletion(viewer, keypoint_cont
     viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(200)
 
-    post = pd.read_hdf(h5_path, key="keypoints")
+    post = pd.read_hdf(h5_path, key="df_with_missing")
     b1x_post = _get_coord_from_df(post, "bodypart1", "x")
     b2x_post = _get_coord_from_df(post, "bodypart2", "x")
 
@@ -129,7 +129,7 @@ def test_no_overwrite_warning_when_only_filling_nans(viewer, keypoint_controls, 
     viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(200)
 
-    post = pd.read_hdf(h5_path, key="keypoints")
+    post = pd.read_hdf(h5_path, key="df_with_missing")
     assert np.isfinite(_get_coord_from_df(post, "bodypart1", "x"))
     assert np.isfinite(_get_coord_from_df(post, "bodypart2", "x"))
 
@@ -163,7 +163,7 @@ def test_overwrite_warning_triggers_on_conflict(viewer, keypoint_controls, qtbot
     assert overwrite_confirm.calls[0]["n_pairs"] is not None
     assert overwrite_confirm.calls[0]["n_pairs"] >= 1
 
-    post = pd.read_hdf(h5_path, key="keypoints")
+    post = pd.read_hdf(h5_path, key="df_with_missing")
     assert _get_coord_from_df(post, "bodypart1", "x") == 99.0
 
 
@@ -176,7 +176,7 @@ def test_overwrite_warning_cancel_aborts_write(viewer, keypoint_controls, qtbot,
 
     project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
-    pre = pd.read_hdf(h5_path, key="keypoints")
+    pre = pd.read_hdf(h5_path, key="df_with_missing")
     b1x_pre = _get_coord_from_df(pre, "bodypart1", "x")
     b1y_pre = _get_coord_from_df(pre, "bodypart1", "y")
 
@@ -203,6 +203,6 @@ def test_overwrite_warning_cancel_aborts_write(viewer, keypoint_controls, qtbot,
 
     assert len(overwrite_confirm.calls) == 1, "Expected overwrite confirmation to be requested once."
 
-    post = pd.read_hdf(h5_path, key="keypoints")
+    post = pd.read_hdf(h5_path, key="df_with_missing")
     assert _get_coord_from_df(post, "bodypart1", "x") == b1x_pre
     assert _get_coord_from_df(post, "bodypart1", "y") == b1y_pre
