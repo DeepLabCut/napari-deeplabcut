@@ -1,4 +1,4 @@
-# src/napari_deeplabcut/_tests/tracking/core/test_merge.py
+# src/napari_deeplabcut/_tests/tracking/test_merge.py
 from __future__ import annotations
 
 import numpy as np
