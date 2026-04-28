@@ -254,9 +254,13 @@ class PointsLayerSaveWorkflow:
         hist = get_save_history()
         dlg.setHistory(hist)
 
+        if hist and hist[0]:
+            dir_hint = hist[0]
+        else:
+            dir_hint = str(Path.home())
         filename, _ = dlg.getSaveFileName(
             caption=f"Save {'selected' if selected else 'all'} layers",
-            dir=hist[0],  # home dir by default
+            dir=dir_hint,  # home dir by default
         )
 
         if not filename:
@@ -462,7 +466,7 @@ class PointsLayerSaveWorkflow:
 
         from ...config.models import PointsMetadata  # local import to avoid unnecessary module load in import path
 
-        if not safe_folder_anchor_from_points_layer(layer) and not is_machine_layer(layer := layer):
+        if not safe_folder_anchor_from_points_layer(layer):
             # Preserve old fast path for non-machine layers
             return True
 
