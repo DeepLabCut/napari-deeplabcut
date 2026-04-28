@@ -9,7 +9,7 @@
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL%203.0-blue.svg)](https://www.gnu.org/licenses/lgpl-3.0)
 [![PyPI](https://img.shields.io/pypi/v/napari-deeplabcut.svg?color=green)](https://pypi.org/project/napari-deeplabcut)
 [![Python Version](https://img.shields.io/pypi/pyversions/napari-deeplabcut.svg?color=green)](https://python.org)
-[![tests](https://github.com/DeepLabCut/napari-deeplabcut/workflows/tests/badge.svg)](https://github.com/DeepLabCut/napari-deeplabcut/actions)
+[![tests](https://github.com/DeepLabCut/napari-deeplabcut/actions/workflows/test_and_deploy.yml/badge.svg?branch=main)](https://github.com/DeepLabCut/napari-deeplabcut/actions/workflows/test_and_deploy.yml)
 [![codecov](https://codecov.io/gh/DeepLabCut/napari-deeplabcut/branch/main/graph/badge.svg)](https://codecov.io/gh/DeepLabCut/napari-deeplabcut)
 [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-deeplabcut)](https://napari-hub.org/plugins/napari-deeplabcut)
 
@@ -25,7 +25,7 @@ You can also install `napari-deeplabcut` as a standalone keypoint annotation plu
 
 ### Standard install
 
-Using `pip`:
+Using `pip` (e.g. in a `conda` environment):
 
 ```bash
 pip install napari-deeplabcut
@@ -34,11 +34,13 @@ pip install napari-deeplabcut
 Using `uv`:
 
 ```bash
-uv add napari-deeplabcut
+uv venv -p 3.12 # create a new virtual environment with Python 3.12
+source .venv/bin/activate # activate the virtual environment. Use the relevant command for your OS/shell if different.
+uv pip install napari-deeplabcut
 ```
 
 > [!NOTE]
-> A conda environment is not strictly required, please use your preferred package manager!
+> A conda environment or uv venv is not strictly required. Please use your preferred package manager!
 
 ### Latest development version
 
@@ -65,7 +67,7 @@ Then activate the plugin in:
 Accepted files such as `config.yaml`, image folders, videos, and `.h5` annotation files can be loaded either by dragging them onto the canvas or through the **File** menu.
 
 > [!TIP]
-> The widget will open automatically when drag-and-dropping a compatible labeled data folder
+> The widget opens automatically when drag-and-dropping a compatible labeled-data folder.
 
 ### Recommended way to get started
 
@@ -119,7 +121,7 @@ Additional dock controls include:
 Use:
 
 > **File → Save Selected Layer(s)...**
->
+
 or the shortcut:
 
 ```text
@@ -145,6 +147,8 @@ For convenience, the companion `.csv` file is written in the same folder.
   Instead, refined annotations are written into the appropriate `CollectedData...` file.
 - If saving would overwrite existing annotations, the plugin will prompt for confirmation.
   - While labeling, confirmation can be disabled by unchecking the "Warn on overwrite" option in the dock widget.
+- Several plugin functions implicitly expect `config.yaml` to be present two folders up from the saved `CollectedData...` file, so make sure to keep the config in the project directory structure for best results. Fallback behaviors are present but may not cover all edge cases.
+  - If you save a Points layer without a config file present in the expected location, you will be prompted to provide the path to the config file that matches the dataset you are working on. The plugin will then save the points and metadata into the correct folder based on the config path provided. Afterwards, it is recommended to move the dataset folder into the correct location within the project directory structure for best compatibility with other DeepLabCut functions. Please edit the `config.yaml` file if needed to update the paths to the videos and image folders.
 
 ---
 
@@ -191,12 +195,12 @@ CollectedData_<ScorerName>.csv
 
 Use this when the folder already contains a `CollectedData_<ScorerName>.h5` file.
 
-Open the folder in napari. The existing keypoint metadata and annotations will be loaded from the H5 file, so loading `config.yaml` is not needed nor recommended.
+Open (or drag-and-drop) the folder in napari. The existing keypoint metadata and annotations will be loaded from the H5 file, so loading `config.yaml` is not needed nor recommended.
 
 However, loading the config is still useful if:
 
 - The project’s bodyparts changed
-- you want to refresh the configured color scheme from the project config
+- You would like to refresh the configured color scheme from the project config
 
 ---
 
