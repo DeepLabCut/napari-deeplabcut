@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from html import escape
 
 from napari.layers import Points
 from qtpy.QtCore import Qt
@@ -134,14 +135,14 @@ class TrackingMergeConflictsDialog(QDialog):
         layout.addWidget(summary)
 
         src_label = QLabel(
-            f"<b>Source:</b> {_layer_display_name(None) if preview is None else preview.source_layer_name}"
+            f"<b>Source:</b> {escape(_layer_display_name(None) if preview is None else preview.source_layer_name)}"
         )
         src_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         src_label.setWordWrap(True)
         layout.addWidget(src_label)
 
         tgt_label = QLabel(
-            f"<b>Target:</b> {_layer_display_name(None) if preview is None else preview.target_layer_name}"
+            f"<b>Target:</b> {escape(_layer_display_name(None) if preview is None else preview.target_layer_name)}"
         )
         tgt_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         tgt_label.setWordWrap(True)
@@ -374,7 +375,7 @@ class TrackingMergeDialog(QDialog):
             if source_layer is not None and target_layer is not None:
                 preview = preview_tracking_merge(source_layer, target_layer)
         except Exception as e:
-            logger.exception("Failed to build tracking merge preview", exc_info=e)
+            logger.exception("Failed to build tracking merge preview")
             self._summary_label.setText(f"Could not preview merge:\n{e}")
             self._merge_btn.setEnabled(False)
             self._review_conflicts_btn.setEnabled(False)
@@ -540,7 +541,7 @@ class TrackingMergeWorkflow:
                 preview=preview,
             )
         except Exception as e:
-            self.logger.exception("Failed to apply tracking merge", exc_info=e)
+            self.logger.exception("Failed to apply tracking merge")
             QMessageBox.warning(
                 self.parent,
                 "Merge failed",
@@ -555,7 +556,7 @@ class TrackingMergeWorkflow:
             self.viewer.layers.selection.active = target
             mark_layer_presentation_changed(target)
         except Exception as e:
-            self.logger.exception("Failed to write merged data back to target layer", exc_info=e)
+            self.logger.exception("Failed to write merged data back to target layer")
             QMessageBox.warning(
                 self.parent,
                 "Merge failed",
