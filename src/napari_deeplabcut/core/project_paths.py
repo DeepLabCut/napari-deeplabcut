@@ -667,7 +667,6 @@ def infer_dlc_project_from_image_layer(
     )
 
 
-# FIXME @C-Achard 2026-04-22 Add unit tests for below funcs
 def infer_dlc_project_from_labeled_folder(
     folder: str | Path,
     *,

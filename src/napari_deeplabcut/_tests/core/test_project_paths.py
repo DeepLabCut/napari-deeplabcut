@@ -11,6 +11,7 @@ from napari_deeplabcut.core.project_paths import (
     coerce_paths_to_dlc_row_keys,
     dataset_folder_has_files,
     infer_dlc_project_from_config,
+    infer_dlc_project_from_labeled_folder,
     resolve_project_root_from_config,
     target_dataset_folder_for_config,
 )
@@ -618,3 +619,90 @@ def test_infer_dlc_project_from_config_rejects_invalid_path(tmp_path):
 
     with pytest.raises(ValueError):
         infer_dlc_project_from_config(bad_config)
+
+
+# -----------------------------------------------------------------------------
+# infer_dlc_project_from_labeled_folder
+# -----------------------------------------------------------------------------
+def test_infer_dlc_project_from_labeled_folder_without_config_uses_dataset_as_anchor(
+    tmp_path: Path,
+):
+    dataset = tmp_path / "labeled-data" / "mouse1"
+    dataset.mkdir(parents=True)
+
+    ctx = infer_dlc_project_from_labeled_folder(dataset)
+
+    assert ctx.dataset_folder == dataset.resolve()
+    assert ctx.root_anchor == dataset.resolve()
+    assert ctx.project_root is None
+    assert ctx.config_path is None
+
+
+def test_infer_dlc_project_from_labeled_folder_with_config_prefers_project_root(
+    tmp_path: Path,
+):
+    project = tmp_path / "project"
+    dataset = project / "labeled-data" / "mouse1"
+    dataset.mkdir(parents=True)
+
+    cfg = project / "config.yaml"
+    cfg.touch()
+
+    ctx = infer_dlc_project_from_labeled_folder(
+        dataset,
+        prefer_project_root=True,
+    )
+
+    assert ctx.dataset_folder == dataset.resolve()
+    assert ctx.project_root == project.resolve()
+    assert ctx.config_path == cfg.resolve()
+    assert ctx.root_anchor == project.resolve()
+
+
+def test_infer_dlc_project_from_labeled_folder_with_config_can_keep_dataset_anchor(
+    tmp_path: Path,
+):
+    project = tmp_path / "project"
+    dataset = project / "labeled-data" / "mouse1"
+    dataset.mkdir(parents=True)
+
+    cfg = project / "config.yaml"
+    cfg.touch()
+
+    ctx = infer_dlc_project_from_labeled_folder(
+        dataset,
+        prefer_project_root=False,
+    )
+
+    assert ctx.dataset_folder == dataset.resolve()
+    assert ctx.project_root == project.resolve()
+    assert ctx.config_path == cfg.resolve()
+    assert ctx.root_anchor == dataset.resolve()
+
+
+def test_infer_dlc_project_from_labeled_folder_respects_max_levels(tmp_path: Path):
+    project = tmp_path / "project"
+    dataset = project / "a" / "b" / "c" / "labeled-data" / "mouse1"
+    dataset.mkdir(parents=True)
+
+    cfg = project / "config.yaml"
+    cfg.touch()
+
+    # Too shallow: should not reach project/config.yaml
+    ctx = infer_dlc_project_from_labeled_folder(dataset, max_levels=2)
+    assert ctx.dataset_folder == dataset.resolve()
+    assert ctx.root_anchor == dataset.resolve()
+    assert ctx.project_root is None
+    assert ctx.config_path is None
+
+    # Deep enough: should find config and elevate to project root by default
+    ctx = infer_dlc_project_from_labeled_folder(dataset, max_levels=5)
+    assert ctx.dataset_folder == dataset.resolve()
+    assert ctx.project_root == project.resolve()
+    assert ctx.config_path == cfg.resolve()
+    assert ctx.root_anchor == project.resolve()
+
+
+def test_infer_dlc_project_from_labeled_folder_rejects_unusable_input():
+    with pytest.raises(ValueError, match="Could not normalize labeled folder"):
+        infer_dlc_project_from_labeled_folder(object())
