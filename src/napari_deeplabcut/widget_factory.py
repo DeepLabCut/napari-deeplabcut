@@ -5,7 +5,12 @@ from ._widgets import KeypointControls
 
 
 def get_existing_keypoint_controls(viewer) -> KeypointControls | None:
-    return KeypointControls.get_existing(viewer)
+    wdg = KeypointControls.get_existing(viewer)
+    if wdg is None:
+        return None
+    if not KeypointControls.is_docked(viewer, wdg):
+        return None
+    return wdg
 
 
 def get_or_create_keypoint_controls(viewer) -> KeypointControls:
