@@ -1,4 +1,4 @@
-# src/napari_deeplabcut/ui/dialogs/save.py
+# src/napari_deeplabcut/ui/ui_dialogs/save.py
 from __future__ import annotations
 
 import logging

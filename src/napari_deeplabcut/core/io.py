@@ -148,7 +148,9 @@ def read_hdf(filename: str) -> list[LayerData]:
 def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[LayerData]:
     """Read a single H5 file and attach provenance with optional explicit kind.
     Dataset may be under keypoints/ or df_with_missing/ for compatibility with various DLC versions.
-    We use read_hdf without specifying a key to allow pandas to auto-detect the correct one.
+    We use _read_hdf_any_key with df_with_missing and other legacy keys,
+    and then without specifying a key to allow pandas to auto-detect the correct one.
+    See _read_hdf_any_key for details.
 
     - Produces one Points layer per H5 file
     - Points.data contains only finite coordinates
