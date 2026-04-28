@@ -168,7 +168,9 @@ class InMemoryDebugRecorder(logging.Handler):
         lines: list[str] = []
         try:
             records = self.snapshot()[-max(1, int(limit)) :]
-            if not records and self._dropped == 0:
+            if not records:
+                if self._dropped:
+                    return f"[debug-recorder] no captured logs, {self._dropped} internal failures"
                 return ""
 
             base = records[0].created
