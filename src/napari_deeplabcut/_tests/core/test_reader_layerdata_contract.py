@@ -19,7 +19,7 @@ def _write_minimal_h5(path: Path, scorer: str, with_likelihood: bool = False, al
         row = [10.0, 20.0] + ([0.9] if with_likelihood else [])
     df = pd.DataFrame([row], index=["img000.png"], columns=cols)
     path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_hdf(path, key="keypoints", mode="w")
+    df.to_hdf(path, key="df_with_missing", mode="w")
     return df
 
 
@@ -68,7 +68,7 @@ def test_read_hdf_single_filters_data_and_properties_consistently(tmp_path: Path
     h5 = tmp_path / "CollectedData_John.h5"
     cols = pd.MultiIndex.from_product([["John"], ["bp1", "bp2"], ["x", "y"]], names=["scorer", "bodyparts", "coords"])
     df = pd.DataFrame([[10.0, 20.0, np.nan, np.nan]], index=["img000.png"], columns=cols)
-    df.to_hdf(h5, key="keypoints", mode="w")
+    df.to_hdf(h5, key="df_with_missing", mode="w")
 
     layers = read_hdf_single(h5, kind=AnnotationKind.GT)
     data, meta, _ = layers[0]

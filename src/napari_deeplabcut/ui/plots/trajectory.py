@@ -23,12 +23,12 @@ from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QSlider, QVBoxLayout, QWidget
 
 import napari_deeplabcut.core.io as io
-from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.config.settings import (
     DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP,
     DEFAULT_SINGLE_ANIMAL_CMAP,
 )
 from napari_deeplabcut.core.keypoints import build_color_cycles
+from napari_deeplabcut.core.layer_lifecycle import LayerLifecycleManager
 from napari_deeplabcut.core.layers import (
     get_first_image_layer,
     get_first_video_image_layer,
@@ -184,44 +184,6 @@ class TrajectoryMatplotlibCanvas(QWidget):
         Smallest comfortable size before the widget becomes cramped.
         """
         return QSize(280, 340)
-
-    def _get_header_model_from_metadata(self, md: dict) -> DLCHeaderModel | None:
-        """Return DLCHeaderModel from metadata['header'] when possible.
-        TODO: Check codebase for duplicate logic and centralize if needed.
-        """
-        if not isinstance(md, dict):
-            return None
-
-        hdr = md.get("header", None)
-        if hdr is None:
-            return None
-
-        if isinstance(hdr, DLCHeaderModel):
-            return hdr
-
-        if isinstance(hdr, dict):
-            try:
-                return DLCHeaderModel.model_validate(hdr)
-            except Exception:
-                return None
-
-        try:
-            return DLCHeaderModel(columns=hdr)
-        except Exception:
-            return None
-
-    def _is_multianimal_layer(self, layer: Points) -> bool:
-        """TODO: Check codebase for duplicate logic and centralize if needed."""
-        md = getattr(layer, "metadata", None) or {}
-        header = self._get_header_model_from_metadata(md)
-        if header is None:
-            return False
-
-        try:
-            inds = getattr(header, "individuals", None)
-            return bool(inds and len(inds) > 0 and str(inds[0]) != "")
-        except Exception:
-            return False
 
     def _get_config_colormap(self, layer: Points) -> str:
         """Return the colormap for the given layer based on its metadata.
@@ -661,7 +623,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
         - single-animal falls back to the bodypart cycle for both
         """
         md = getattr(layer, "metadata", None) or {}
-        header = self._get_header_model_from_metadata(md)
+        header = LayerLifecycleManager.get_header_model_from_metadata(md)
         if header is None:
             return {}
 
@@ -673,7 +635,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
             logger.debug("Trajectory plot: failed to build bodypart color cycles", exc_info=True)
             bodypart_cycles = {}
 
-        if self._is_multianimal_layer(layer):
+        if LayerLifecycleManager.is_multianimal(layer):
             try:
                 individual_cycles = build_color_cycles(header, DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP) or {}
             except Exception:
@@ -705,7 +667,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
         individual_key = self._normalized_individual_name(individual)
         bodypart_key = str(bodypart)
 
-        if mode == "individual" and self._is_multianimal_layer(points_layer):
+        if mode == "individual" and LayerLifecycleManager.is_multianimal(points_layer):
             if individual_key and individual_key in id_cycle:
                 return id_cycle[individual_key]
             if bodypart_key in label_cycle:

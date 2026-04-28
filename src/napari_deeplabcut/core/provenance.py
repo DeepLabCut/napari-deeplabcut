@@ -51,7 +51,7 @@ def build_gt_save_target(
     anchor: str,
     scorer: str,
     *,
-    dataset_key: str = "keypoints",
+    dataset_key: str = "df_with_missing",
 ) -> IOProvenance:
     """
     Build a GT save_target pointing to CollectedData_<scorer>.h5 under a folder anchor.
@@ -72,7 +72,7 @@ def apply_gt_save_target(
     *,
     anchor: str,
     scorer: str,
-    dataset_key: str = "keypoints",
+    dataset_key: str = "df_with_missing",
 ) -> PointsMetadata:
     """
     Return an updated PointsMetadata with a GT promotion save_target attached.

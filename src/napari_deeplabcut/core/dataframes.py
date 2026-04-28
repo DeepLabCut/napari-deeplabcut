@@ -8,9 +8,98 @@ import numpy as np
 import pandas as pd
 
 from napari_deeplabcut.config.models import ConflictEntry, OverwriteConflictReport
-from napari_deeplabcut.core.schemas import PointsWriteInputModel
+from napari_deeplabcut.core.schemas import DLCHeaderModel, PointsWriteInputModel
 
 logger = logging.getLogger(__name__)
+
+
+def _is_logical_single_animal_header(
+    header: DLCHeaderModel | None,
+    *,
+    is_ma_project: bool | None = None,
+) -> bool:
+    """
+    Determine whether the target should be written in canonical single-animal format.
+
+    Priority
+    --------
+    1) Explicit project-mode signal from DLC config (is_ma_project)
+    2) Original header shape
+    3) Blank-individuals fallback
+    """
+    if is_ma_project is not None:
+        return not bool(is_ma_project)
+
+    if header is None:
+        return False
+
+    # Canonical/original SA header
+    if header.nlevels == 3:
+        return True
+
+    # Fallback for normalized 4-level headers that still represent SA
+    if header.nlevels == 4:
+        inds = [str(i) for i in header.individuals if str(i) != ""]
+        return len(inds) == 0
+
+    return False
+
+
+def restore_dlc_on_disk_header_shape(
+    df: pd.DataFrame, header: DLCHeaderModel, *, is_ma_project: bool | None = None
+) -> pd.DataFrame:
+    """
+    Args:
+        df: DataFrame with arbitrary column structure produced from napari Points + metadata.
+        header: Authoritative DLCHeaderModel that defines the expected column structure on disk.
+        is_ma_from_config: Optional boolean indicating if the project is multi-animal based on DLC config.
+
+    Restore the DataFrame column structure to match the authoritative DLC header
+    that should be used on disk.
+
+    - If the logical target is single-animal, collapse an empty 'individuals' level.
+    - Reindex to the authoritative header order.
+    """
+    if not isinstance(df.columns, pd.MultiIndex):
+        return df
+
+    df_out = df.copy()
+
+    if _is_logical_single_animal_header(header, is_ma_project=is_ma_project):
+        # If the normalized dataframe has an empty individuals level, collapse it.
+        if df_out.columns.nlevels == 4 and "individuals" in (df_out.columns.names or []):
+            inds = pd.Index(df_out.columns.get_level_values("individuals")).astype(str)
+            non_empty_inds = {x for x in inds if x != ""}
+            if non_empty_inds:
+                raise ValueError(
+                    "Refusing to write single-animal format because dataframe contains "
+                    f"non-empty individuals: {sorted(non_empty_inds)}"
+                )
+
+            df_out = df_out.droplevel("individuals", axis=1)
+            df_out.columns = df_out.columns.set_names(["scorer", "bodyparts", "coords"])
+
+        # Reindex to the original authoritative 3-level header order
+        try:
+            # For an SA header, header.columns is the original 3-level tuples
+            target_cols = pd.MultiIndex.from_tuples(
+                header.columns,
+                names=header.names or ["scorer", "bodyparts", "coords"],
+            )
+            df_out = df_out.reindex(target_cols, axis=1)
+        except Exception:
+            logger.debug("Could not reindex collapsed SA dataframe to authoritative header", exc_info=True)
+
+        return df_out
+
+    # Multi-animal: use canonical 4-level ordering
+    try:
+        target_cols = header.as_multiindex()
+        df_out = df_out.reindex(target_cols, axis=1)
+    except Exception:
+        logger.debug("Could not reindex MA dataframe to authoritative header", exc_info=True)
+
+    return df_out
 
 
 def set_df_scorer(df: pd.DataFrame, scorer: str) -> pd.DataFrame:
@@ -124,6 +213,9 @@ def guarantee_multiindex_rows(df: pd.DataFrame) -> None:
     Legacy DLC data may use an index with pathto/video/file.png strings as Index.
     The new format uses a MultiIndex with each path component as a level.
     """
+    if len(df.index) == 0:
+        return
+
     # Make paths platform-agnostic if they are not already
     if not isinstance(df.index, pd.MultiIndex):  # Backwards compatibility
         path = df.index[0]

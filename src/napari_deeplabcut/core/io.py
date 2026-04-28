@@ -43,6 +43,7 @@ from napari_deeplabcut.core.dataframes import (
     harmonize_keypoint_column_index,
     harmonize_keypoint_row_index,
     merge_multiple_scorers,
+    restore_dlc_on_disk_header_shape,
     set_df_scorer,
 )
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
@@ -62,6 +63,7 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 _GLOB_MAGIC = set("*?[")
 _SUPPORTED_SUFFIXES = {ext.lower() for ext in SUPPORTED_IMAGES}
+DLC_CANONICAL_H5_KEY = "df_with_missing"  # TODO use this key instead of str literal in all places
 
 
 def _has_glob_magic(name: str) -> bool:
@@ -116,6 +118,26 @@ def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
 # and attaches provenance via attach_source_and_io_to_layer_kwargs.
 
 
+def _read_hdf_any_key(file: Path) -> pd.DataFrame:
+    """Read an HDF file without knowing the key in advance. Try common DLC keys."""
+    file = str(file)
+    try:
+        return pd.read_hdf(file, key=DLC_CANONICAL_H5_KEY)
+    except (KeyError, ValueError):
+        logger.error(f"Key '{DLC_CANONICAL_H5_KEY}' not found in {file}. Trying to read without specifying a key.")
+    fallback_keys = ["keypoints"]
+    for k in fallback_keys:
+        try:
+            return pd.read_hdf(file, key=k)
+        except (KeyError, ValueError):
+            logger.error(f"Key '{k}' not found in {file}.")
+    logger.error(
+        f"None of the expected keys {fallback_keys + [DLC_CANONICAL_H5_KEY]} were found in {file}. "
+        "Falling back to default read_hdf which may raise its own error if no valid key is found."
+    )
+    return pd.read_hdf(file)  # Let pandas guess instead
+
+
 def read_hdf(filename: str) -> list[LayerData]:
     layers = []
     for file in Path(filename).parent.glob(Path(filename).name):
@@ -125,13 +147,16 @@ def read_hdf(filename: str) -> list[LayerData]:
 
 def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[LayerData]:
     """Read a single H5 file and attach provenance with optional explicit kind.
+    Dataset may be under keypoints/ or df_with_missing/ for compatibility with various DLC versions.
+    We use read_hdf without specifying a key to allow pandas to auto-detect the correct one.
 
     - Produces one Points layer per H5 file
     - Points.data contains only finite coordinates
     - Unlabeled keypoints are omitted from Points.data
     - Empty Points layers are valid
     """
-    temp = pd.read_hdf(str(file))
+    # temp = pd.read_hdf(str(file))
+    temp = _read_hdf_any_key(file)
     temp = merge_multiple_scorers(temp)
     header = DLCHeaderModel(columns=temp.columns)
     temp = temp.droplevel("scorer", axis=1)
@@ -288,7 +313,48 @@ def form_df(
     return df
 
 
-def _atomic_to_hdf(df: pd.DataFrame, out_path: Path, key: str = "keypoints") -> None:
+def _resolve_multianimalproject_for_write(
+    *,
+    out_path: Path,
+    pts_meta: PointsMetadata,
+) -> bool | None:
+    """
+    Best-effort resolve of DLC config multianimalproject flag for save.
+
+    Resolution order
+    ----------------
+    1) pts_meta.project / explicit project context if available
+    2) config near output path
+    3) config near pts_meta.root
+    4) None if not resolvable
+    """
+    candidates: list[Path] = []
+
+    project = getattr(pts_meta, "project", None)
+    if project:
+        candidates.append(Path(project) / "config.yaml")
+
+    candidates.append(out_path.parent)
+
+    root = getattr(pts_meta, "root", None)
+    if root:
+        candidates.append(Path(root))
+
+    for candidate in candidates:
+        try:
+            cfg_path = find_nearest_config(candidate, max_levels=3)
+            cfg = load_config(str(cfg_path))
+            if isinstance(cfg, dict) and "multianimalproject" in cfg:
+                logger.debug("Resolved multianimalproject=True from config at %s", cfg_path)
+                return bool(cfg.get("multianimalproject", False))
+        except Exception:
+            continue
+
+    logger.debug("Could not resolve multianimalproject flag from any candidate configs.")
+    return None
+
+
+def _atomic_to_hdf(df: pd.DataFrame, out_path: Path, key: str = DLC_CANONICAL_H5_KEY) -> None:
     """Best-effort atomic write: write to temp and replace."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_suffix(out_path.suffix + ".tmp")
@@ -351,6 +417,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     # If promoting to GT and scorer is known, rewrite scorer level
     if target_scorer:
         df_new = set_df_scorer(df_new, target_scorer)
+    header_for_write = pts_meta.header.with_scorer(target_scorer) if target_scorer else pts_meta.header
 
     # Never write back to machine sources without an explicit promotion target
     if not out_path and source_kind == AnnotationKind.MACHINE:
@@ -404,10 +471,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
 
     # Merge-on-save for GT
     if destination_kind == AnnotationKind.GT and out.exists():
-        try:
-            df_old = pd.read_hdf(out, key="keypoints")
-        except (KeyError, ValueError):
-            df_old = pd.read_hdf(out)
+        df_old = _read_hdf_any_key(out)
 
         # Harmonize indices and merge
         try:
@@ -420,25 +484,33 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
         df_new = harmonize_keypoint_column_index(df_new)
         df_old = harmonize_keypoint_column_index(df_old)
         df_out = df_new.combine_first(df_old)
-
-        # Normalize columns to DLC header if possible
-        try:
-            header = DLCHeaderModel(columns=df_out.columns)
-            df_out = df_out.reindex(header.columns, axis=1)
-        except Exception:
-            pass
     else:
         df_out = df_new
 
-    # Final cleanup
+    # Final cleanup of rows
     try:
         guarantee_multiindex_rows(df_out)
     except Exception:
         pass
     df_out.sort_index(inplace=True)
 
+    # Restore canonical on-disk DLC header shape from the header.
+    is_ma_project = _resolve_multianimalproject_for_write(
+        out_path=out,
+        pts_meta=pts_meta,
+    )
+    df_out = restore_dlc_on_disk_header_shape(df_out, header_for_write, is_ma_project=is_ma_project)
+
+    logger.debug("FINAL WRITE columns nlevels: %s", getattr(df_out.columns, "nlevels", None))
+    logger.debug("FINAL WRITE columns names: %s", getattr(df_out.columns, "names", None))
+    if isinstance(df_out.columns, pd.MultiIndex) and "individuals" in (df_out.columns.names or []):
+        logger.debug(
+            "FINAL WRITE individuals values: %s",
+            list(dict.fromkeys(df_out.columns.get_level_values("individuals").astype(str))),
+        )
+
     # Write .h5 and .csv
-    _atomic_to_hdf(df_out, out, key="keypoints")
+    _atomic_to_hdf(df_out, out, key=DLC_CANONICAL_H5_KEY)
     csv_path = out.with_suffix(".csv")
     df_out.to_csv(csv_path)
 
@@ -661,65 +733,44 @@ def _lazy_imread(
         ) from e
 
 
+def _build_image_layer_kwargs(
+    *,
+    filepaths: list[Path],
+    dlc_meta: dict | None = None,
+    name: str = "images",
+) -> dict[str, Any]:
+    metadata = {
+        "paths": [canonicalize_path(fp, 3) for fp in filepaths],
+        "root": str(filepaths[0].parent),
+    }
+    if dlc_meta is not None:
+        metadata["dlc"] = dlc_meta
+
+    return {
+        "name": name,
+        "metadata": metadata,
+    }
+
+
 # Read images from a list of files or a glob/string path
-def read_images(path: str | Path | list[str | Path]):
-    """Reads one or multiple images and returns a Napari Image layer.
-
-    Uses `_expand_image_paths` to resolve the input into a list of valid
-    image files. Supports single paths, glob expressions, directories,
-    and lists or tuples of such paths.
-
-    Behavior:
-        * If one file is found:
-            - Loaded using `dask_image.imread.imread`.
-        * If multiple files are found:
-            - Loaded lazily using `lazy_imread` into a stacked image
-              layer.
-
-    Args:
-        path (str | Path | list[str | Path]):
-            Input path(s), directory, or glob pattern(s) to expand into
-            supported image files.
-
-    Returns:
-        list[LayerData]:
-            A list containing one Napari layer tuple of the form
-            `(data, metadata, "image")`.
-
-    Raises:
-        OSError: If no supported images are found after expansion.
-    """
+def read_images(
+    path: str | Path | list[str | Path],
+    *,
+    dlc_meta: dict | None = None,
+) -> list[LayerData]:
     filepaths = _expand_image_paths(path)
-
     if not filepaths:
         raise OSError(f"No supported images were found in {path}")
 
     filepaths = natsorted(filepaths, key=str)
+    kwargs = _build_image_layer_kwargs(filepaths=filepaths, dlc_meta=dlc_meta, name="images")
 
-    # Multiple images → lazy-imread stack
     if len(filepaths) > 1:
-        # NOTE: canonicalize_path(fp, 3) stores a stable relative-ish path for the UI/metadata.
-        relative_paths = [canonicalize_path(fp, 3) for fp in filepaths]
-        params = {
-            "name": "images",
-            "metadata": {
-                "paths": relative_paths,
-                "root": str(filepaths[0].parent),
-            },
-        }
         data = _lazy_imread(filepaths, use_dask=True, stack=True)
-        return [(data, params, "image")]
+    else:
+        data = imread(str(filepaths[0]))
 
-    # Single image → old behavior
-    image_path = filepaths[0]
-    params = {
-        "name": "images",
-        "metadata": {
-            "paths": [canonicalize_path(image_path, 3)],
-            "root": str(image_path.parent),
-        },
-    }
-    return [(imread(str(image_path)), params, "image")]
+    return [(data, kwargs, "image")]
 
 
 # =============================================================================
@@ -772,7 +823,7 @@ class Video:
         self.stream.release()
 
 
-def read_video(filename: str, opencv: bool = True):
+def read_video(filename: str, opencv: bool = True, *, dlc_meta: dict | None = None):
     if opencv:
         stream = Video(filename)
         # NOTE construct output shape tuple in (H, W, C) order to match read_frame() data
@@ -805,4 +856,7 @@ def read_video(filename: str, opencv: bool = True):
             "root": root,
         },
     }
+    if dlc_meta is not None:
+        params["metadata"]["dlc"] = dlc_meta
+
     return [(movie, params, "image")]

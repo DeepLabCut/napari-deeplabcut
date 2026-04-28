@@ -85,6 +85,13 @@ def test_guarantee_multiindex_rows_leaves_numeric_index_unchanged():
     assert not isinstance(df.index, pd.MultiIndex)
 
 
+def test_guarantee_multiindex_rows_empty_df_is_noop():
+    df = pd.DataFrame(columns=["x", "y"])
+    guarantee_multiindex_rows(df)
+    assert len(df.index) == 0
+    assert not isinstance(df.index, pd.MultiIndex)
+
+
 # -----------------------------------------------------------------------------
 # 2) harmonize_keypoint_column_index
 # -----------------------------------------------------------------------------

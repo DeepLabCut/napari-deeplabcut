@@ -74,7 +74,7 @@ def _make_minimal_dlc_project(tmp_path: Path):
     df0 = pd.DataFrame([[10.0, 20.0, np.nan, np.nan]], index=idx, columns=cols)
 
     h5_path = labeled / "CollectedData_John.h5"
-    df0.to_hdf(h5_path, key="keypoints", mode="w")
+    df0.to_hdf(h5_path, key="df_with_missing", mode="w")
     df0.to_csv(str(h5_path).replace(".h5", ".csv"))
 
     return project, config_path, labeled, h5_path
@@ -97,7 +97,7 @@ def _make_labeled_folder_with_machine_only(tmp_path: Path) -> Path:
     )
     df0 = pd.DataFrame([[np.nan, np.nan, np.nan, np.nan]], index=["img000.png"], columns=cols)
     (folder / "machinelabels-iter0.h5").unlink(missing_ok=True)
-    df0.to_hdf(folder / "machinelabels-iter0.h5", key="keypoints", mode="w")
+    df0.to_hdf(folder / "machinelabels-iter0.h5", key="df_with_missing", mode="w")
     df0.to_csv(str(folder / "machinelabels-iter0.csv"))
 
     return folder
@@ -126,7 +126,7 @@ def _write_keypoints_h5(
     df = pd.DataFrame([values], index=idx, columns=cols)
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_hdf(path, key="keypoints", mode="w")
+    df.to_hdf(path, key="df_with_missing", mode="w")
     df.to_csv(str(path).replace(".h5", ".csv"))
     return path
 
@@ -211,7 +211,7 @@ def _make_project_config_and_frames_no_gt(tmp_path: Path):
 
 
 def _read_h5_keypoints(path: Path) -> pd.DataFrame:
-    return pd.read_hdf(path, key="keypoints")
+    return pd.read_hdf(path, key="df_with_missing")
 
 
 def _index_mask_for_img(df: pd.DataFrame, basename: str) -> np.ndarray:
