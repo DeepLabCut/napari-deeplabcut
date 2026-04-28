@@ -259,7 +259,8 @@ def apply_tracking_merge(
         If the preview is invalid, stale, or incompatible with the current layer state.
     """
     if not preview.is_valid:
-        raise ValueError(preview.invalid_reason or "Cannot apply an invalid tracking merge preview.")
+        reason = preview.invalid_reason or "Unknown reason."
+        raise ValueError(f"Cannot apply an invalid tracking merge preview: {reason}")
 
     if preview.policy is not TrackingMergePolicy.FILL_MISSING:
         raise ValueError(f"Unsupported merge policy: {preview.policy!r}")
