@@ -1,4 +1,4 @@
-# src/napari_deeplabcut/_widget_factory.py
+# src/napari_deeplabcut/widget_factory.py
 from __future__ import annotations
 
 from ._widgets import KeypointControls

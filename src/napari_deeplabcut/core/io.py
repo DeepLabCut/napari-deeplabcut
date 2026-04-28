@@ -124,14 +124,14 @@ def _read_hdf_any_key(file: Path) -> pd.DataFrame:
     try:
         return pd.read_hdf(file, key=DLC_CANONICAL_H5_KEY)
     except (KeyError, ValueError):
-        logger.error(f"Key '{DLC_CANONICAL_H5_KEY}' not found in {file}. Trying to read without specifying a key.")
+        logger.warning(f"Key '{DLC_CANONICAL_H5_KEY}' not found in {file}. Trying to read without specifying a key.")
     fallback_keys = ["keypoints"]
     for k in fallback_keys:
         try:
             return pd.read_hdf(file, key=k)
         except (KeyError, ValueError):
-            logger.error(f"Key '{k}' not found in {file}.")
-    logger.error(
+            logger.warning(f"Key '{k}' not found in {file}.")
+    logger.warning(
         f"None of the expected keys {fallback_keys + [DLC_CANONICAL_H5_KEY]} were found in {file}. "
         "Falling back to default read_hdf which may raise its own error if no valid key is found."
     )
@@ -345,7 +345,9 @@ def _resolve_multianimalproject_for_write(
             cfg_path = find_nearest_config(candidate, max_levels=3)
             cfg = load_config(str(cfg_path))
             if isinstance(cfg, dict) and "multianimalproject" in cfg:
-                logger.debug("Resolved multianimalproject=True from config at %s", cfg_path)
+                logger.debug(
+                    "Resolved multianimalproject=%s from config at %s", cfg.get("multianimalproject"), cfg_path
+                )
                 return bool(cfg.get("multianimalproject", False))
         except Exception:
             continue

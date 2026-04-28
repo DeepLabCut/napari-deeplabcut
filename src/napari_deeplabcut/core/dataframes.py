@@ -52,7 +52,7 @@ def restore_dlc_on_disk_header_shape(
     Args:
         df: DataFrame with arbitrary column structure produced from napari Points + metadata.
         header: Authoritative DLCHeaderModel that defines the expected column structure on disk.
-        is_ma_from_config: Optional boolean indicating if the project is multi-animal based on DLC config.
+        is_ma_project: Optional boolean indicating if the project is multi-animal based on DLC config.
 
     Restore the DataFrame column structure to match the authoritative DLC header
     that should be used on disk.
