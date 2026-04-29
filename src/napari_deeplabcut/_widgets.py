@@ -10,14 +10,17 @@ NOTE: This file is generally already too long. For future development, please co
 - Lifecycle of UI elements and Qt wiring should ideally:
     - Use parent child widgets/controllers to KeypointControls
     - Use child QTimers instead of fire-and-forget QTimer.singleShot for deferred UI work
+      - DONE via mixin in ViewerSingletonWidget
     - Use normal Qt signal connections for Qt-owned objects
     - Keep explicit cleanup only for non-Qt subscriptions/resources
     (e.g. napari event connections, observer install/uninstall, monkey-patch restoration)
 
 TODO: And general dev notes:
-- The saving workflow is crammed into save_layers_dialog() right now,
+- The saving workflow is crammed into save_layers_dialog() right now
   and should move to a dedicated  e.g. PointsLayerSaveFactory class in a dedicated file.
+  - DONE, fixed by PointsLayerSaveWorkflow
 - Something that owns UI sync state (what to refresh, why, when) could help with the heavy wiring.
+  - STARTED, LayerLifecycleManager is a step in this direction
 - I'd suggest keeping in this file:
     - color/label mode, menu/help actions, widget visibility and user interaction hooks.
 """
@@ -35,7 +38,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from napari.layers import Image, Points
 from napari.utils.events import Event
-from qtpy.QtCore import QSettings, QSignalBlocker, Qt, QTimer
+from qtpy.QtCore import QSettings, QSignalBlocker, Qt
 from qtpy.QtGui import QAction
 from qtpy.QtWidgets import (
     QButtonGroup,
@@ -141,11 +144,6 @@ class KeypointControls(ViewerSingletonWidget):
         self.layer_manager.points_layers_merged_requested.connect(self._on_points_layers_merged_requested)
         self.layer_manager.points_layer_removed_requested.connect(self._on_points_layer_removed_requested)
         self.layer_manager.tracks_layer_removed_requested.connect(self._on_tracks_layer_removed_requested)
-        ## Timers
-        self._timers = {}
-        self._temp_timers = set()
-        self.destroyed.connect(self._cleanup_timers)
-
         ## Debug ##
         self._debug_recorder = install_debug_recorder()
         self._debug_window = None
@@ -348,65 +346,6 @@ class KeypointControls(ViewerSingletonWidget):
     @cached_property
     def settings(self):
         return QSettings()
-
-    def _cleanup_timers(self, *_args) -> None:
-        # FIXME @C-Achard move to singleton base class for other widgets to reuse, and maybe add logs
-        """Stop/delete all timers owned by this widget.
-
-        This is intentionally defensive: by teardown time, some underlying
-        C++ objects may already be in the process of destruction.
-        """
-        for timer in list(getattr(self, "_timers", {}).values()):
-            try:
-                timer.stop()
-                timer.deleteLater()
-            except RuntimeError:
-                pass
-        self._timers = {}
-
-        for timer in list(getattr(self, "_temp_timers", set())):
-            try:
-                timer.stop()
-                timer.deleteLater()
-            except RuntimeError:
-                pass
-        self._temp_timers.clear()
-
-    def _schedule_once(self, name: str, msec: int, callback) -> None:
-        """Schedule/coalesce a named single-shot callback owned by this widget."""
-        timer = self._timers.get(name)
-        if timer is None:
-            timer = QTimer(self)
-            timer.setSingleShot(True)
-            timer.timeout.connect(callback)
-            self._timers[name] = timer
-        try:
-            timer.start(msec)
-        except RuntimeError:
-            # Widget/timer already in teardown
-            pass
-
-    def _single_shot_owned(self, msec: int, callback) -> None:
-        """Schedule a one-off callback using a child QTimer tracked by this widget."""
-        timer = QTimer(self)
-        timer.setSingleShot(True)
-        self._temp_timers.add(timer)
-
-        def _fire():
-            try:
-                callback()
-            finally:
-                self._temp_timers.discard(timer)
-                try:
-                    timer.deleteLater()
-                except RuntimeError:
-                    pass
-
-        timer.timeout.connect(_fire)
-        try:
-            timer.start(msec)
-        except RuntimeError:
-            self._temp_timers.discard(timer)
 
     def _flush_recolor_pending(self) -> None:
         pending = tuple(self._recolor_pending)
@@ -807,6 +746,11 @@ class KeypointControls(ViewerSingletonWidget):
         if {"selection", "active_layer", "layers"} & set(event.reasons):
             traj_canvas.sync_visible_lines_to_points_selection()
 
+    @deprecated(
+        details="This workflow looks partially implemented and "
+        "cannot be triggered as DLC never writes the required 'tables' key. "
+        "Either finish it or remove it."
+    )
     def load_superkeypoints_diagram(self):
         points_layer = get_first_points_layer(self.viewer)
         if points_layer is None:
@@ -837,6 +781,11 @@ class KeypointControls(ViewerSingletonWidget):
             pass
         self._keypoint_mapping_button.clicked.connect(lambda: self._map_keypoints(super_animal))
 
+    @deprecated(
+        details="This workflow looks partially implemented and cannot be reached in any way, "
+        "since DLC never writes the required 'tables' key."
+        "Either finish it or remove it."
+    )
     def _map_keypoints(self, super_animal: str):
         # NOTE: This implementation makes several assumptions that may need review:
         # - Assumes points_layer.metadata contains "project" and "header" keys with the expected structure.

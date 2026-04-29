@@ -5,8 +5,10 @@ from typing import ClassVar
 
 from qtpy.QtWidgets import QWidget
 
+from ._qt_timers import OwnedTimersMixin
 
-class ViewerSingletonWidget(QWidget):
+
+class ViewerSingletonWidget(QWidget, OwnedTimersMixin):
     """Base QWidget enforcing at most one live instance per viewer per subclass."""
 
     _instances_by_cls: ClassVar[
@@ -139,6 +141,7 @@ class ViewerSingletonWidget(QWidget):
             return
         self._viewer_singleton_finalize_done = True
         self.destroyed.connect(self._on_singleton_destroyed)
+        self._init_owned_timers()
 
     def _on_singleton_destroyed(self, *args) -> None:
         key = getattr(self, "_viewer_singleton_key", None)

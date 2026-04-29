@@ -273,11 +273,19 @@ def test_matplotlib_canvas_initialization_and_slider(viewer, points, qtbot):
 @pytest.fixture(autouse=True)
 def _no_autodock(monkeypatch):
     """
-    Prevent the QTimer.singleShot in KeypointControls.__init__ from auto-calling
-    silently_dock_matplotlib_canvas during tests, which would otherwise race
-    with these scenarios and make assertions flaky.
+    Prevent deferred owned-timer callbacks in KeypointControls from running
+    asynchronously during tests.
     """
-    monkeypatch.setattr(_widgets.QTimer, "singleShot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        _widgets.KeypointControls,
+        "_single_shot_owned",
+        lambda self, _ms, fn: None,
+    )
+    monkeypatch.setattr(
+        _widgets.KeypointControls,
+        "_schedule_once",
+        lambda self, _name, _ms, fn: None,
+    )
 
 
 @pytest.mark.usefixtures("qtbot")
