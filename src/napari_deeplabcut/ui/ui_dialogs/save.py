@@ -85,14 +85,31 @@ def _prompt_for_scorer(parent_widget, *, anchor: str, suggested: str) -> str | N
     return scorer
 
 
+def _replace_layer_metadata_in_place(layer: Points, metadata: dict) -> None:
+    """Replace layer.metadata contents while preserving the mapping object."""
+    current = layer.metadata
+    if current is None:
+        layer.metadata = {}
+        current = layer.metadata
+
+    current.clear()
+    current.update(metadata or {})
+
+
 @contextmanager
 def _temporary_layer_metadata(layer: Points, metadata: dict):
-    old_metadata = dict(layer.metadata or {})
-    layer.metadata = metadata
+    current = layer.metadata
+    if current is None:
+        layer.metadata = {}
+        current = layer.metadata
+
+    old_metadata = dict(current)
     try:
+        _replace_layer_metadata_in_place(layer, metadata)
         yield
     finally:
-        layer.metadata = old_metadata
+        current.clear()
+        current.update(old_metadata)
 
 
 class PointsLayerSaveWorkflow:
@@ -239,7 +256,7 @@ class PointsLayerSaveWorkflow:
 
         # Persist successful save-time metadata improvements into the live layer.
         if metadata_changed:
-            layer.metadata = dict(save_metadata)
+            _replace_layer_metadata_in_place(layer, save_metadata)
 
         self._persist_folder_ui_state_for_layers([layer])
 
