@@ -807,6 +807,10 @@ class KeypointControls(ViewerSingletonWidget):
         if {"selection", "active_layer", "layers"} & set(event.reasons):
             traj_canvas.sync_visible_lines_to_points_selection()
 
+    @deprecated(
+        details="This workflow looks partially implemented and "
+        "cannot be triggered in any way. Either finish it or remove it."
+    )
     def load_superkeypoints_diagram(self):
         points_layer = get_first_points_layer(self.viewer)
         if points_layer is None:
@@ -837,6 +841,10 @@ class KeypointControls(ViewerSingletonWidget):
             pass
         self._keypoint_mapping_button.clicked.connect(lambda: self._map_keypoints(super_animal))
 
+    @deprecated(
+        details="This workflow looks partially implemented and cannot be triggered in any way. "
+        "Either finish it or remove it."
+    )
     def _map_keypoints(self, super_animal: str):
         # NOTE: This implementation makes several assumptions that may need review:
         # - Assumes points_layer.metadata contains "project" and "header" keys with the expected structure.
