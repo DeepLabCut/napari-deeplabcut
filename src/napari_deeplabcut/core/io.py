@@ -461,6 +461,8 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             out = candidates[0]
         else:
             scorer = target_scorer or pts_meta.header.scorer
+            if scorer is None:
+                raise ValueError("Scorer is required to write DLC keypoints.")
             out = root_path / f"CollectedData_{scorer}.h5"
     else:
         out = Path(out_path)
