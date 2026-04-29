@@ -505,7 +505,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         )
 
         if reorder and index is not None:
-            # QTimer.singleShot(10, lambda ly=layer: self.move_image_layer_to_bottom_requested.emit(ly))
             self._single_shot_owned(10, lambda ly=layer: self.move_image_layer_to_bottom_requested.emit(ly))
 
     def _wire_points_layer(self, layer: Points) -> KeypointStore | None:
@@ -856,7 +855,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             )
 
         if disposition is MergeDisposition.HIDE_NEW:
-            # QTimer.singleShot(0, lambda ly=layer: self._remove_layer_if_present(ly))
             self._single_shot_owned(0, lambda ly=layer: self._remove_layer_if_present(ly))
             return True
 
@@ -912,7 +910,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         self.points_layers_merged_requested.emit(tuple(affected_layers))
 
         # Remove the temporary placeholder layer explicitly by identity.
-        # QTimer.singleShot(0, lambda ly=layer: self._remove_layer_if_present(ly))
         self._single_shot_owned(0, lambda ly=layer: self._remove_layer_if_present(ly))
 
         # General panel refreshes

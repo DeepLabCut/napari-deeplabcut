@@ -44,7 +44,8 @@ class OwnedTimersMixin:
                 timer.deleteLater()
             except RuntimeError:
                 pass
-        self._temp_timers.clear()
+        if hasattr(self, "_temp_timers"):
+            self._temp_timers.clear()
 
     def _schedule_once(self, name: str, msec: int, callback) -> None:
         """Schedule/coalesce a named single-shot callback owned by this QObject."""

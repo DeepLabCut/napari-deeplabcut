@@ -748,7 +748,8 @@ class KeypointControls(ViewerSingletonWidget):
 
     @deprecated(
         details="This workflow looks partially implemented and "
-        "cannot be triggered in any way. Either finish it or remove it."
+        "cannot be triggered as DLC never writes the required 'tables' key. "
+        "Either finish it or remove it."
     )
     def load_superkeypoints_diagram(self):
         points_layer = get_first_points_layer(self.viewer)
@@ -781,7 +782,8 @@ class KeypointControls(ViewerSingletonWidget):
         self._keypoint_mapping_button.clicked.connect(lambda: self._map_keypoints(super_animal))
 
     @deprecated(
-        details="This workflow looks partially implemented and cannot be triggered in any way. "
+        details="This workflow looks partially implemented and cannot be reached in any way, "
+        "since DLC never writes the required 'tables' key."
         "Either finish it or remove it."
     )
     def _map_keypoints(self, super_animal: str):
