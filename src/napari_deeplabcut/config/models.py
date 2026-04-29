@@ -196,8 +196,9 @@ class DLCHeaderModel(BaseModel):
     # Core shape helpers (pandas-free)
     # ----------------------------
     @property
-    def nlevels(self) -> int:
-        return len(self.columns[0]) if self.columns else 0
+    def is_single_animal(self) -> bool:
+        canon = self._canonical_4()
+        return bool(canon) and all(t[1] == "" for t in canon)
 
     def _level_index(self, name: str) -> int | None:
         if not self.names:
