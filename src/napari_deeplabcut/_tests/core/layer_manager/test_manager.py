@@ -178,9 +178,14 @@ def immediate_qtimer(monkeypatch):
     from napari_deeplabcut.core.layer_lifecycle import manager as manager_module
 
     monkeypatch.setattr(
-        manager_module.QTimer,
-        "singleShot",
-        staticmethod(lambda _ms, fn: fn()),
+        manager_module.LayerLifecycleManager,
+        "_single_shot_owned",
+        lambda self, _ms, fn: fn(),
+    )
+    monkeypatch.setattr(
+        manager_module.LayerLifecycleManager,
+        "_schedule_once",
+        lambda self, _name, _ms, fn: fn(),
     )
 
 
