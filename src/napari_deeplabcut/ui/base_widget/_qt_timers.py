@@ -23,7 +23,7 @@ class OwnedTimersMixin:
 
         try:
             self.destroyed.connect(self._cleanup_owned_timers)
-        except Exception:
+        except (RuntimeError, AttributeError):
             # Defensive: if destroyed is unavailable during odd proxy/test states,
             # explicit cleanup can still be called manually.
             pass
@@ -48,13 +48,27 @@ class OwnedTimersMixin:
             self._temp_timers.clear()
 
     def _schedule_once(self, name: str, msec: int, callback) -> None:
-        """Schedule/coalesce a named single-shot callback owned by this QObject."""
+        """Schedule/coalesce a named single-shot callback owned by this QObject.
+
+        Reusing the same name replaces the previous timeout callback with the new one.
+        """
         timer = self._timers.get(name)
         if timer is None:
             timer = QTimer(self)
             timer.setSingleShot(True)
-            timer.timeout.connect(callback)
             self._timers[name] = timer
+        else:
+            try:
+                timer.timeout.disconnect()
+            except (TypeError, RuntimeError):
+                # No previous connection, or timer already tearing down.
+                pass
+
+        try:
+            timer.timeout.connect(callback)
+        except RuntimeError:
+            # QObject/timer already tearing down
+            return
 
         try:
             timer.start(msec)

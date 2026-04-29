@@ -23,6 +23,12 @@ class FakeSignal:
     def connect(self, callback):
         self.callbacks.append(callback)
 
+    def disconnect(self, callback=None):
+        if callback is None:
+            self.callbacks.clear()
+        else:
+            self.callbacks = [cb for cb in self.callbacks if cb is not callback]
+
 
 class FakeTimer:
     def __init__(self, parent=None, *, fail_on_start=False, fail_on_stop=False, fail_on_delete=False):
@@ -224,3 +230,27 @@ def test_cleanup_owned_timers_swallows_runtime_error(owner, fake_qtimer_state):
 
     assert owner._timers == {}
     assert owner._temp_timers == set()
+
+
+def test_schedule_once_replaces_callback_when_same_name_is_reused(owner, fake_qtimer_state):
+    calls = []
+
+    def cb1():
+        calls.append("cb1")
+
+    def cb2():
+        calls.append("cb2")
+
+    owner._schedule_once("refresh", 0, cb1)
+    owner._schedule_once("refresh", 10, cb2)
+
+    created = fake_qtimer_state["created"]
+    assert len(created) == 1
+
+    timer = created[0]
+    assert timer.started_with == [0, 10]
+    assert timer.timeout.callbacks == [cb2]
+
+    # Simulate timeout: latest callback should win
+    timer.timeout.callbacks[0]()
+    assert calls == ["cb2"]
