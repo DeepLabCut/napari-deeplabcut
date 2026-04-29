@@ -10,14 +10,17 @@ NOTE: This file is generally already too long. For future development, please co
 - Lifecycle of UI elements and Qt wiring should ideally:
     - Use parent child widgets/controllers to KeypointControls
     - Use child QTimers instead of fire-and-forget QTimer.singleShot for deferred UI work
+      - DONE via mixin in ViewerSingletonWidget
     - Use normal Qt signal connections for Qt-owned objects
     - Keep explicit cleanup only for non-Qt subscriptions/resources
     (e.g. napari event connections, observer install/uninstall, monkey-patch restoration)
 
 TODO: And general dev notes:
-- The saving workflow is crammed into save_layers_dialog() right now,
+- The saving workflow is crammed into save_layers_dialog() right now
   and should move to a dedicated  e.g. PointsLayerSaveFactory class in a dedicated file.
+  - DONE, fixed by PointsLayerSaveWorkflow
 - Something that owns UI sync state (what to refresh, why, when) could help with the heavy wiring.
+  - STARTED, LayerLifecycleManager is a step in this direction
 - I'd suggest keeping in this file:
     - color/label mode, menu/help actions, widget visibility and user interaction hooks.
 """
