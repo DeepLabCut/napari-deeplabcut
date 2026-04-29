@@ -9,7 +9,7 @@ import numpy as np
 from napari.layers import Image, Layer, Points, Tracks
 from napari.utils.events import Event
 from napari.utils.history import update_save_history
-from qtpy.QtCore import QObject, QTimer, Signal
+from qtpy.QtCore import QObject, Signal
 
 from ...config.keybinds import install_points_layer_keybindings
 from ...config.models import DLCHeaderModel, ImageMetadata, PointsMetadata
@@ -28,6 +28,7 @@ from ...core.project_paths import PathMatchPolicy
 from ...core.remap import remap_layer_data_by_paths
 from ...napari_compat import install_add_wrapper, install_paste_patch
 from ...napari_compat.points_layer import make_paste_data
+from ...ui.base_widget._qt_timers import OwnedTimersMixin
 from ...ui.cropping import resolve_project_path_from_image_layer
 from ...utils.debug import log_timing
 from .merge import MergeDecisionProvider, MergeDecisionRequest, MergeDecisionResult, MergeDisposition
@@ -48,7 +49,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("napari-deeplabcut.lifecycle")
 
 
-class LayerLifecycleManager(QObject):
+class LayerLifecycleManager(QObject, OwnedTimersMixin):
     """Lifecycle wrapper around existing widget behavior.
 
     Goals
@@ -97,17 +98,9 @@ class LayerLifecycleManager(QObject):
         self._image_meta = ImageMetadata()
         self._project_path: str | None = None
 
-        # Layers management
-        ## Layer insertion
-        self._initial_adopt_timer = QTimer(self)
-        self._initial_adopt_timer.setSingleShot(True)
-        self._initial_adopt_timer.timeout.connect(self.adopt_existing_layers)
-        ## Layer removal
-        self._post_remove_refresh_timer = QTimer(self)
-        self._post_remove_refresh_timer.setSingleShot(True)
-        self._post_remove_refresh_timer.timeout.connect(self._flush_post_remove_refresh)
-
         self._attached = False
+
+        self._init_owned_timers()
 
     # ------------------------------------------------------------------ #
     # Centralized access API                                             #
@@ -212,7 +205,7 @@ class LayerLifecycleManager(QObject):
 
     def schedule_initial_adoption(self) -> None:
         """Schedule adoption of existing layers after the event loop starts."""
-        self._initial_adopt_timer.start(0)
+        self._schedule_once("initial_adopt", 0, self.adopt_existing_layers)
 
     def _dlc_meta_for_layer(self, layer: Layer) -> dict | None:
         md = layer.metadata or {}
@@ -278,7 +271,7 @@ class LayerLifecycleManager(QObject):
                     exc_info=True,
                 )
 
-        QTimer.singleShot(0, _remove_later)
+        self._single_shot_owned(0, _remove_later)
 
     # ------------------------------------------------------------------ #
     # Layer setup managers                                               #
@@ -512,7 +505,8 @@ class LayerLifecycleManager(QObject):
         )
 
         if reorder and index is not None:
-            QTimer.singleShot(10, lambda ly=layer: self.move_image_layer_to_bottom_requested.emit(ly))
+            # QTimer.singleShot(10, lambda ly=layer: self.move_image_layer_to_bottom_requested.emit(ly))
+            self._single_shot_owned(10, lambda ly=layer: self.move_image_layer_to_bottom_requested.emit(ly))
 
     def _wire_points_layer(self, layer: Points) -> KeypointStore | None:
         """Lifecycle-owned wiring of a managed Points layer.
@@ -640,7 +634,7 @@ class LayerLifecycleManager(QObject):
 
     def _schedule_post_remove_refresh(self) -> None:
         """Coalesce repeated UI refreshes during layer removal bursts."""
-        self._post_remove_refresh_timer.start(0)
+        self._schedule_once("post_remove_refresh", 0, self._flush_post_remove_refresh)
 
     def _flush_post_remove_refresh(self) -> None:
         with log_timing(logger, "_flush_post_remove_refresh total", threshold_ms=0.01):
@@ -862,7 +856,8 @@ class LayerLifecycleManager(QObject):
             )
 
         if disposition is MergeDisposition.HIDE_NEW:
-            QTimer.singleShot(0, lambda ly=layer: self._remove_layer_if_present(ly))
+            # QTimer.singleShot(0, lambda ly=layer: self._remove_layer_if_present(ly))
+            self._single_shot_owned(0, lambda ly=layer: self._remove_layer_if_present(ly))
             return True
 
         if disposition is MergeDisposition.CANCEL:
@@ -917,7 +912,8 @@ class LayerLifecycleManager(QObject):
         self.points_layers_merged_requested.emit(tuple(affected_layers))
 
         # Remove the temporary placeholder layer explicitly by identity.
-        QTimer.singleShot(0, lambda ly=layer: self._remove_layer_if_present(ly))
+        # QTimer.singleShot(0, lambda ly=layer: self._remove_layer_if_present(ly))
+        self._single_shot_owned(0, lambda ly=layer: self._remove_layer_if_present(ly))
 
         # General panel refreshes
         self.refresh_layer_status_requested.emit()
