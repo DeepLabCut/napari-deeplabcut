@@ -409,6 +409,11 @@ def add(store: KeypointStore, coord):
     return store.add(coord)
 
 
+@deprecated(
+    details="This was meant to be used for the SuperAnimalConversionTables workflow, "
+    "but said workflow is currently not reachable. "
+    "Either finish that workflow or remove this function."
+)
 def find_nearest_neighbors(xy_true, xy_pred, k=5):
     n_preds = xy_pred.shape[0]
     tree = cKDTree(xy_pred)
