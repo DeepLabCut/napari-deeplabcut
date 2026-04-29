@@ -285,7 +285,7 @@ def test_parse_points_metadata_drops_controls_and_coerces_kinds(monkeypatch):
             "kind": "gt",
             "project_root": "/tmp",
             "source_relpath_posix": "CollectedData_A.h5",
-            "dataset_key": "keypoints",
+            "dataset_key": "df_with_missing",
         },
         "save_target": {"kind": "MACHINE"},
     }
@@ -361,7 +361,7 @@ def test_prepare_points_payload_migrates_legacy_source_h5(monkeypatch):
     monkeypatch.setattr(
         metadata_mod,
         "_build_io_from_source_h5",
-        lambda src, dataset_key="keypoints": {"kind": AnnotationKind.GT, "dataset_key": dataset_key},
+        lambda src, dataset_key="df_with_missing": {"kind": AnnotationKind.GT, "dataset_key": dataset_key},
     )
 
     payload = metadata_mod._prepare_points_payload(
@@ -370,7 +370,7 @@ def test_prepare_points_payload_migrates_legacy_source_h5(monkeypatch):
     )
 
     assert payload["io"]["kind"] == AnnotationKind.GT
-    assert payload["io"]["dataset_key"] == "keypoints"
+    assert payload["io"]["dataset_key"] == "df_with_missing"
 
 
 # -----------------------------------------------------------------------------
@@ -394,7 +394,7 @@ def test_attach_source_and_io_to_layer_kwargs_sets_legacy_fields_and_io(monkeypa
     assert inner["source_h5"].endswith("CollectedData_Jane.h5")
     assert inner["io"]["kind"] == AnnotationKind.GT
     assert inner["io"]["source_relpath_posix"] == "CollectedData_Jane.h5"
-    assert inner["io"]["dataset_key"] == "keypoints"
+    assert inner["io"]["dataset_key"] == "df_with_missing"
 
 
 # -----------------------------------------------------------------------------
@@ -532,14 +532,14 @@ def test_build_io_provenance_dict_keeps_enum_kind_object(tmp_path: Path):
         project_root=tmp_path,
         source_relpath_posix="CollectedData_Jane.h5",
         kind=AnnotationKind.GT,
-        dataset_key="keypoints",
+        dataset_key="df_with_missing",
     )
     # mode="python" => should keep enum object at runtime
     assert isinstance(d["kind"], AnnotationKind)
     assert d["kind"] == AnnotationKind.GT
     assert d["project_root"] == str(tmp_path)
     assert d["source_relpath_posix"] == "CollectedData_Jane.h5"
-    assert d["dataset_key"] == "keypoints"
+    assert d["dataset_key"] == "df_with_missing"
     assert d["schema_version"] == 1
 
 
@@ -548,6 +548,6 @@ def test_build_io_provenance_dict_excludes_none_fields(tmp_path: Path):
         project_root=tmp_path,
         source_relpath_posix="CollectedData_Jane.h5",
         kind=None,  # exclude_none=True => kind should be absent
-        dataset_key="keypoints",
+        dataset_key="df_with_missing",
     )
     assert "kind" not in d

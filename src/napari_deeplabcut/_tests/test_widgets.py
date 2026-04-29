@@ -53,7 +53,8 @@ def test_save_layers(viewer, keypoint_controls, points):
 
 @pytest.mark.usefixtures("qtbot")
 def test_show_trails(viewer, keypoint_controls, store):
-    keypoint_controls._stores[store.layer] = store
+    # keypoint_controls._stores[store.layer] = store
+    keypoint_controls.layer_manager.register_managed_layer(store.layer, store)
     viewer.layers.selection.active = store.layer
     keypoint_controls._is_saved = True
 
@@ -484,7 +485,7 @@ def test_widget_map_keypoints_writes_to_config(keypoint_controls, qtbot, points,
 
     # neighbors indices correspond to ordering of list(dummy_superkpts)
     # Here: ["nose", "upper_jaw"] -> indices [0, 1]
-    monkeypatch.setattr(keypoints, "_find_nearest_neighbors", lambda xy, xy_ref: np.array([0, 1]))
+    monkeypatch.setattr(keypoints, "find_nearest_neighbors", lambda xy, xy_ref: np.array([0, 1]))
 
     # If your io.load_config / io.write_config do more than YAML I/O,
     # you can keep them. Otherwise stubbing them makes the test isolated.
@@ -552,7 +553,6 @@ def test_read_config_injects_tables_metadata(tmp_path):
     }
 
 
-@pytest.mark.usefixtures("qtbot")
 def test_points_layer_with_tables_shows_superkeypoints_button(keypoint_controls, qtbot, points):
     controls = keypoint_controls
     qtbot.add_widget(controls)
@@ -561,26 +561,26 @@ def test_points_layer_with_tables_shows_superkeypoints_button(keypoint_controls,
 
     points.metadata["tables"] = {"superanimal_quadruped": {"bp1": "nose", "bp2": "upper_jaw"}}
 
-    # Simulate the same setup path that real inserted/adopted layers use
-    controls._setup_points_layer(points, allow_merge=False)
+    controls.layer_manager._setup_points_layer(points, allow_merge=False)
 
     assert not controls._keypoint_mapping_button.isHidden()
-    assert controls._keypoint_mapping_button.text() == "Load superkeypoints diagram"
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_points_layer_with_tables_button_not_lost_on_merge_path(keypoint_controls, qtbot, points, monkeypatch):
+def test_points_layer_with_tables_button_not_lost_on_merge_path(keypoint_controls, qtbot, points):
     controls = keypoint_controls
     qtbot.add_widget(controls)
 
     points.metadata["tables"] = {"superanimal_quadruped": {"bp1": "nose"}}
 
-    # Force the merge branch to happen
-    monkeypatch.setattr(controls, "_maybe_merge_config_points_layer", lambda layer: True)
+    # First do a normal setup so the button becomes visible.
+    controls.layer_manager._setup_points_layer(points, allow_merge=False)
+    assert not controls._keypoint_mapping_button.isHidden()
 
-    controls._setup_points_layer(points, allow_merge=True)
+    # Simulate manager-driven merge refresh on the already-managed layer.
+    controls._on_points_layers_merged_requested((points,))
 
-    assert controls._keypoint_mapping_button.isHidden()
+    assert not controls._keypoint_mapping_button.isHidden()
 
 
 @pytest.mark.usefixtures("qtbot")

@@ -85,7 +85,7 @@ def test_read_hdf_old_index(tmp_path_factory, fake_keypoints):
     path = str(tmp_path_factory.mktemp("folder") / "data.h5")
     old_index = [f"labeled-data/video/img{i}.png" for i in range(fake_keypoints.shape[0])]
     fake_keypoints.index = old_index
-    fake_keypoints.to_hdf(path, key="keypoints")
+    fake_keypoints.to_hdf(path, key="df_with_missing")
     layers = read_hdf(path)
     assert len(layers) == 1
     image_paths = layers[0][1]["metadata"]["paths"]
@@ -104,7 +104,7 @@ def test_read_hdf_new_index(tmp_path_factory, fake_keypoints):
         ]
     )
     fake_keypoints.index = new_index
-    fake_keypoints.to_hdf(path, key="keypoints")
+    fake_keypoints.to_hdf(path, key="df_with_missing")
     layers = read_hdf(path)
     assert len(layers) == 1
     image_paths = layers[0][1]["metadata"]["paths"]

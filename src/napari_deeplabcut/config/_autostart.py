@@ -8,9 +8,9 @@ from napari.layers import Points
 from napari.utils.events import Event
 from qtpy.QtCore import QTimer
 
-from napari_deeplabcut._widgets import KeypointControls
 from napari_deeplabcut.config.settings import get_auto_open_keypoint_controls
 from napari_deeplabcut.core.metadata import read_points_meta
+from napari_deeplabcut.widget_factory import get_existing_keypoint_controls
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +27,6 @@ def _is_dlc_points_layer(layer) -> bool:
     if hasattr(res, "errors"):
         return False
     return res.header is not None
-
-
-def get_existing_keypoint_controls(viewer):
-    for widget in viewer.window.dock_widgets.values():
-        if isinstance(widget, KeypointControls):
-            return widget
-    return None
 
 
 def _ensure_keypoint_controls_open(viewer) -> None:

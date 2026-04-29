@@ -55,7 +55,7 @@ def test_config_placeholder_points_layer_colors_after_first_keypoint_added(viewe
     assert "header" in md, "Expected header in metadata for config.yaml placeholder layer"
 
     # 3) Begin editing: add bodypart1 then bodypart2
-    store = controls._stores.get(placeholder)
+    store = controls.get_layer_store(placeholder)
     assert store is not None, "Expected KeypointStore to be registered for placeholder Points layer"
 
     # Add first point
@@ -134,7 +134,7 @@ def test_config_placeholder_multianimal_colors_by_id_after_first_keypoint_added(
     assert "animal2" in id_cycles, f"Expected 'animal2' in derived id cycles; got keys={list(id_cycles)[:10]}"
 
     # 3) Begin editing: add a point for animal1, then animal2
-    store = controls._stores.get(placeholder)
+    store = controls.get_layer_store(placeholder)
     assert store is not None, "Expected KeypointStore for placeholder Points layer"
 
     # Add first point: (frame, y, x)
@@ -212,7 +212,7 @@ def test_color_scheme_panel_toggle_shows_active_then_full_config_bodyparts(
     # Make sure the placeholder is the active target layer
     viewer.layers.selection.active = placeholder
 
-    store = controls._stores.get(placeholder)
+    store = controls.get_layer_store(placeholder)
     assert store is not None
 
     # Deterministically add bodypart1
@@ -273,8 +273,8 @@ def test_color_scheme_panel_multianimal_toggle_shows_active_then_full_config_ind
     assert placeholder.data is None or len(placeholder.data) == 0
 
     # Wait until the existing controls instance has wired the layer
-    qtbot.waitUntil(lambda: placeholder in controls._stores, timeout=5_000)
-    store = controls._stores.get(placeholder)
+    qtbot.waitUntil(lambda: controls.get_layer_store(placeholder) is not None, timeout=5_000)
+    store = controls.get_layer_store(placeholder)
     assert store is not None
 
     # This assertion is now valid because we're using the controls instance

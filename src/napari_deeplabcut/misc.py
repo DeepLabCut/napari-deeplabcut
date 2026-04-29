@@ -14,6 +14,8 @@ from napari_deeplabcut.core.project_paths import canonicalize_path
 from napari_deeplabcut.utils.deprecations import DeprecationMode, deprecated
 
 logger = logging.getLogger(__name__)
+# DEPRECATED: If another refactor occurs, please consider finalizing the deprecation of this file
+# and moving any remaining functions to more specific locations.
 
 
 class HeaderLike(Protocol):
@@ -41,6 +43,7 @@ def is_latest_version():
     return __version__ == latest_version, latest_version
 
 
+@deprecated(details="Should be moved out of misc.py, likely to io.py where it is currently only used.")
 def encode_categories(categories: Sequence, return_unique: bool = False, is_path: bool = True, do_sort: bool = True):
     """
     Convert a list of categories (typically filenames) into integer indices
@@ -78,6 +81,7 @@ def unsorted_unique(array: Sequence) -> np.ndarray:
     return np.asarray(array)[np.sort(inds)]
 
 
+# TODO move to keypoints.py
 class CycleEnumMeta(EnumMeta):
     def __new__(metacls, cls, bases, classdict, **kwargs):
         enum_ = super().__new__(metacls, cls, bases, classdict, **kwargs)
@@ -96,6 +100,7 @@ class CycleEnumMeta(EnumMeta):
         return super().__getitem__(item)
 
 
+# TODO move to keypoints.py
 class CycleEnum(Enum, metaclass=CycleEnumMeta):
     def _generate_next_value_(name, start, count, last_values):
         return name.lower()

@@ -18,7 +18,7 @@ def test_resolve_output_path_returns_none_for_machine_without_save_target():
                 "project_root": str(Path.cwd()),
                 "source_relpath_posix": "machinelabels-iter0.h5",
                 "kind": AnnotationKind.MACHINE,
-                "dataset_key": "keypoints",
+                "dataset_key": "df_with_missing",
             }
         }
     }
@@ -39,7 +39,7 @@ def test_write_hdf_refuses_machine_without_promotion(tmp_path: Path):
                 "project_root": str(tmp_path),
                 "source_relpath_posix": "machinelabels-iter0.h5",
                 "kind": AnnotationKind.MACHINE,
-                "dataset_key": "keypoints",
+                "dataset_key": "df_with_missing",
             },
             # header is required by writer
             "header": {
@@ -84,7 +84,7 @@ def test_write_hdf_aborts_machine_without_promotion_target(tmp_path: Path):
                 "project_root": str(tmp_path),
                 "source_relpath_posix": "machinelabels-iter0.h5",
                 "kind": AnnotationKind.MACHINE,
-                "dataset_key": "keypoints",
+                "dataset_key": "df_with_missing",
             },
             "header": {"columns": [("S", "", "bp1", "x"), ("S", "", "bp1", "y")]},
         },
