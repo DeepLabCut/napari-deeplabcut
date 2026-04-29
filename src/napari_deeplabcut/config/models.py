@@ -249,11 +249,7 @@ class DLCHeaderModel(BaseModel):
                 else:
                     out.append((tt[0], "", tt[1], tt[2]))
             else:
-                # unknown shape: do best-effort padding/truncation
-                scorer = tt[0] if len(tt) > 0 else ""
-                bodypart = tt[1] if len(tt) > 1 else ""
-                coords = tt[-1] if len(tt) > 0 else ""
-                out.append((scorer, "", bodypart, coords))
+                raise ValueError(f"Unknown header shape: {tt}. HDF file seems to be corrupted.")
 
         return out
 
