@@ -389,7 +389,9 @@ def harmonize_keypoint_column_index(df: pd.DataFrame) -> pd.DataFrame:
         df2.columns = cols.set_names(["scorer", "individuals", "bodyparts", "coords"])
         return df2
 
-    # Legacy 3-level: (scorer, bodyparts, coords) -> insert individuals=""
+    # Single animal 3-level: (scorer, bodyparts, coords) -> insert individuals=""
+    # THIS IS ONLY FOR INTERNAL COMPARISONS; we do NOT want to write an SA header
+    # with an empty individuals level to disk.
     if cols.nlevels == 3:
         # We only insert individuals if it looks like the DLC pattern
         # (names might be missing/None depending on earlier ops)

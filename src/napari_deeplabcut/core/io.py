@@ -162,6 +162,10 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     temp = merge_multiple_scorers(temp)
     header = DLCHeaderModel(columns=temp.columns)
     temp = temp.droplevel("scorer", axis=1)
+    logger.debug("READ_HDF file=%s", file)
+    logger.debug("READ_HDF raw column names=%s", getattr(temp.columns, "names", None))
+    logger.debug("READ_HDF raw first columns=%s", list(temp.columns[:10]))
+    logger.debug("READ_HDF header.bodyparts=%s", header.bodyparts)
 
     # Handle legacy/single-animal column layout by inserting empty "individuals" level.
     # Colormap selection also falls back to config when possible.
@@ -211,6 +215,8 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     data = data[finite]
     df = df.loc[finite].reset_index(drop=True)
 
+    logger.debug("STACKED df bodyparts unique=%s", list(dict.fromkeys(df["bodyparts"].astype(str)))[:30])
+    logger.debug("STACKED df individuals unique=%s", list(dict.fromkeys(df["individuals"].astype(str)))[:30])
     layer_props = populate_keypoint_layer_properties(
         header,
         labels=df["bodyparts"],
@@ -403,6 +409,8 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     logger.debug("HEADER names: %s", ctx.meta.header.as_multiindex().names)
 
     # Build df from points + plugin metadata + layer properties
+    logger.debug("WRITE header bodyparts=%s", ctx.meta.header.bodyparts)
+    logger.debug("WRITE props labels unique=%s", list(dict.fromkeys(map(str, attrs.properties.get("label", []))))[:30])
     df_new = form_df_from_validated(ctx)
 
     logger.debug("DF_NEW columns nlevels: %s", df_new.columns.nlevels)
@@ -505,8 +513,16 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     )
     df_out = restore_dlc_on_disk_header_shape(df_out, header_for_write, is_ma_project=is_ma_project)
 
+    logger.debug("FINAL WRITE first columns=%s", list(df_out.columns[:10]))
+    logger.debug(
+        "FINAL WRITE bodyparts unique=%s",
+        list(dict.fromkeys(df_out.columns.get_level_values("bodyparts").astype(str)))[:30]
+        if isinstance(df_out.columns, pd.MultiIndex) and "bodyparts" in df_out.columns.names
+        else None,
+    )
     logger.debug("FINAL WRITE columns nlevels: %s", getattr(df_out.columns, "nlevels", None))
     logger.debug("FINAL WRITE columns names: %s", getattr(df_out.columns, "names", None))
+
     if isinstance(df_out.columns, pd.MultiIndex) and "individuals" in (df_out.columns.names or []):
         logger.debug(
             "FINAL WRITE individuals values: %s",
