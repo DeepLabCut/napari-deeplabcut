@@ -17,8 +17,8 @@ from time import perf_counter_ns
 _DEBUG_HANDLER_ATTR = "_napari_dlc_debug_recorder"
 LOG_QUEUE_MAXLEN = 1000
 
-# FIXME disable for release to avoid any overhead, or make configurable via env var/settings
-NAPARI_DLC_LOG_TIMING = True
+# TODO @C-Achard Consider making this configurable via env var/settings
+NAPARI_DLC_LOG_TIMING = False
 
 
 @contextmanager
