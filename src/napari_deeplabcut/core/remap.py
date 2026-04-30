@@ -159,7 +159,18 @@ def _filter_and_remap_array(
             dropped_rows,
             dropped_frames,
             RemapReason.PARTIAL_ROWS_DROPPED,
-            (f"Dropped {dropped_rows} unmappable row(s)."),
+            (
+                f"Partially remapped data; dropped {dropped_rows} row(s) whose frame indices "
+                "were not found in the new image stack."
+            ),
+        )
+    if not np.any(keep_mask):
+        return (
+            None,
+            int(drop_mask.sum()),
+            tuple(sorted(set(t))),
+            RemapReason.NO_MAPPABLE_ROWS,
+            ("No rows could be mapped to the new image stack."),
         )
 
     return kept, 0, (), RemapReason.REMAPPED, "Remapped all rows."
@@ -233,9 +244,16 @@ def remap_time_indices(
     data: Any,
     time_col: int,
     idx_map: Mapping[int, int],
+    allow_partial: bool = False,
 ) -> RemapResult:
     """
-    Remap time indices in a data container (array-like or list-of-arrays).
+    Remap time indices in a data container.
+
+    If allow_partial is False, all used frame indices must be present in
+    idx_map.
+
+    If allow_partial is True, rows whose frame index is not present in idx_map
+    are dropped and reported as APPLIED_PARTIAL.
     """
     mapped_count = len(idx_map)
 
@@ -244,6 +262,9 @@ def remap_time_indices(
         reason: RemapReason,
         message: str,
         data_out: Any | None = None,
+        *,
+        dropped_row_count: int = 0,
+        dropped_frame_indices: tuple[int, ...] = (),
     ) -> RemapResult:
         return RemapResult(
             outcome=outcome,
@@ -252,108 +273,157 @@ def remap_time_indices(
             mapped_count=mapped_count,
             message=message,
             data=data_out,
+            dropped_row_count=dropped_row_count,
+            dropped_frame_indices=dropped_frame_indices,
         )
 
     if data is None:
-        return _result(RemapOutcome.SKIPPED, RemapReason.NO_DATA, "No data to remap (data is None).")
-
-    if not idx_map:
-        return _result(RemapOutcome.SKIPPED, RemapReason.EMPTY_MAPPING, "No index mapping available (empty idx_map).")
-
-    # Shapes-like: list of arrays
-    if isinstance(data, list):
-        new_data = []
-        changed = False
-
-        for verts in data:
-            arr = np.asarray(verts)
-
-            if arr.size == 0:
-                new_data.append(arr)
-                continue
-
-            if arr.ndim < 2 or arr.shape[1] <= time_col:
-                new_data.append(arr)
-                continue
-
-            arr2 = np.array(arr, copy=True)
-            t = arr2[:, time_col]
-
-            try:
-                t2 = _remap_array(t, idx_map)
-            except Exception as e:
-                return _result(
-                    RemapOutcome.REJECTED,
-                    RemapReason.REMAP_FAILED,
-                    f"Failed to remap list-like vertices: {e}",
-                )
-
-            try:
-                if not np.array_equal(t2, np.asarray(t).astype(int, copy=False)):
-                    changed = True
-            except Exception:
-                changed = True
-
-            arr2[:, time_col] = t2
-            new_data.append(arr2)
-
-        if changed:
-            return _result(
-                RemapOutcome.APPLIED_FULL,
-                RemapReason.REMAPPED,
-                "Remapped list-like vertices.",
-                new_data,
-            )
-
-        return _result(
-            RemapOutcome.NOOP,
-            RemapReason.ALREADY_ALIGNED,
-            "List-like vertices already aligned; no remap needed.",
-        )
-
-    # Array-like
-    arr = np.asarray(data)
-
-    if arr.size == 0:
-        return _result(RemapOutcome.SKIPPED, RemapReason.NO_DATA, "No data to remap (empty array).")
-
-    if arr.ndim < 2 or arr.shape[1] <= time_col:
         return _result(
             RemapOutcome.SKIPPED,
-            RemapReason.INVALID_TIME_COLUMN,
-            "Data shape does not contain a valid time column.",
+            RemapReason.NO_DATA,
+            "No data to remap (data is None).",
         )
 
-    arr2 = np.array(arr, copy=True)
-    t = arr2[:, time_col]
-
-    try:
-        t2 = _remap_array(t, idx_map)
-    except Exception as e:
+    if not idx_map:
         return _result(
-            RemapOutcome.REJECTED,
-            RemapReason.REMAP_FAILED,
-            f"Failed to remap time column: {e}",
+            RemapOutcome.SKIPPED,
+            RemapReason.EMPTY_MAPPING,
+            "No index mapping available (empty idx_map).",
         )
 
-    try:
-        unchanged = np.array_equal(t2, np.asarray(t).astype(int, copy=False))
-    except Exception:
-        unchanged = False
+    # Array-like path. This is the common Points-layer case.
+    if not isinstance(data, list):
+        arr = np.asarray(data)
 
-    if unchanged:
+        if arr.size == 0:
+            return _result(
+                RemapOutcome.SKIPPED,
+                RemapReason.NO_DATA,
+                "No data to remap (empty array).",
+            )
+
+        if arr.ndim < 2 or arr.shape[1] <= time_col:
+            return _result(
+                RemapOutcome.SKIPPED,
+                RemapReason.INVALID_TIME_COLUMN,
+                "Data shape does not contain a valid time column.",
+            )
+
+        if allow_partial:
+            remapped, dropped_rows, dropped_frames, reason, message = _filter_and_remap_array(
+                arr,
+                time_col=time_col,
+                idx_map=dict(idx_map),
+            )
+
+            if remapped is None:
+                outcome = (
+                    RemapOutcome.REJECTED
+                    if reason
+                    in {
+                        RemapReason.NO_MAPPABLE_ROWS,
+                        RemapReason.INVALID_TIME_COLUMN,
+                    }
+                    else RemapOutcome.SKIPPED
+                )
+                return _result(
+                    outcome,
+                    reason,
+                    message,
+                    dropped_row_count=dropped_rows,
+                    dropped_frame_indices=dropped_frames[:_SAMPLE_N],
+                )
+
+            outcome = RemapOutcome.APPLIED_PARTIAL if dropped_rows else RemapOutcome.APPLIED_FULL
+            return _result(
+                outcome,
+                reason,
+                message,
+                remapped,
+                dropped_row_count=dropped_rows,
+                dropped_frame_indices=dropped_frames[:_SAMPLE_N],
+            )
+
+        arr2 = np.array(arr, copy=True)
+        t = arr2[:, time_col]
+
+        try:
+            t2 = _remap_array(t, idx_map)
+        except Exception as e:
+            return _result(
+                RemapOutcome.REJECTED,
+                RemapReason.REMAP_FAILED,
+                f"Failed to remap time column: {e}",
+            )
+
+        try:
+            unchanged = np.array_equal(t2, np.asarray(t).astype(int, copy=False))
+        except Exception:
+            unchanged = False
+
+        if unchanged:
+            return _result(
+                RemapOutcome.NOOP,
+                RemapReason.ALREADY_ALIGNED,
+                "Time column already aligned; no remap needed.",
+            )
+
+        arr2[:, time_col] = t2
         return _result(
-            RemapOutcome.NOOP,
-            RemapReason.ALREADY_ALIGNED,
-            "Time column already aligned; no remap needed.",
+            RemapOutcome.APPLIED_FULL,
+            RemapReason.REMAPPED,
+            "Remapped array-like data.",
+            arr2,
         )
 
-    arr2[:, time_col] = t2
+    # Existing list-like behavior can remain strict for now.
+    new_data = []
+    changed = False
+
+    for verts in data:
+        arr = np.asarray(verts)
+
+        if arr.size == 0:
+            new_data.append(arr)
+            continue
+
+        if arr.ndim < 2 or arr.shape[1] <= time_col:
+            new_data.append(arr)
+            continue
+
+        arr2 = np.array(arr, copy=True)
+        t = arr2[:, time_col]
+
+        try:
+            t2 = _remap_array(t, idx_map)
+        except Exception as e:
+            return _result(
+                RemapOutcome.REJECTED,
+                RemapReason.REMAP_FAILED,
+                f"Failed to remap list-like vertices: {e}",
+            )
+
+        try:
+            if not np.array_equal(t2, np.asarray(t).astype(int, copy=False)):
+                changed = True
+        except Exception:
+            changed = True
+
+        arr2[:, time_col] = t2
+        new_data.append(arr2)
+
+    if changed:
+        return _result(
+            RemapOutcome.APPLIED_FULL,
+            RemapReason.REMAPPED,
+            "Remapped list-like vertices.",
+            new_data,
+        )
+
     return _result(
-        RemapOutcome.APPLIED_FULL,
-        RemapReason.REMAPPED,
-        "Remapped array-like data.",
-        arr2,
+        RemapOutcome.NOOP,
+        RemapReason.ALREADY_ALIGNED,
+        "List-like vertices already aligned; no remap needed.",
     )
 
 
@@ -364,6 +434,7 @@ def remap_layer_data_by_paths(
     new_paths: Iterable[str] | None,
     time_col: int,
     policy: PathMatchPolicy = PathMatchPolicy.ORDERED_DEPTHS,
+    allow_partial: bool = False,
 ) -> RemapResult:
     """
     Remap layer time/frame indices after the image stack path list changes.
@@ -573,7 +644,7 @@ def remap_layer_data_by_paths(
         logger.warning("Remap may be ambiguous/risky: %s", w)
 
     # Reject if the layer actually uses frame indices that do not map.
-    if unmapped_used:
+    if unmapped_used and not allow_partial:
         msg = "Rejected remap because some labeled frame indices have no mapping in the new image stack."
         logger.warning(
             "%s depth=%s unmapped_used_count=%s examples=%s",
@@ -596,6 +667,14 @@ def remap_layer_data_by_paths(
             depth_used=depth,
             mapped_count=len(idx_map),
             warnings=warnings,
+        )
+
+    if unmapped_used and allow_partial:
+        warnings.append(
+            f"Partial remap: {len(unmapped_used)} used frame index/indices have no mapping "
+            f"at depth={depth}; rows on those frames will be dropped. "
+            f"Examples: {sorted(unmapped_used)[:_SAMPLE_N]}"
+            f"{'...' if len(unmapped_used) > _SAMPLE_N else ''}"
         )
 
     # Reject ambiguous canonicalization/matching.
@@ -625,7 +704,7 @@ def remap_layer_data_by_paths(
 
     # --- Apply
 
-    res = remap_time_indices(data=data, time_col=time_col, idx_map=idx_map)
+    res = remap_time_indices(data=data, time_col=time_col, idx_map=idx_map, allow_partial=allow_partial)
 
     return _result(
         res.outcome,

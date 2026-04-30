@@ -770,6 +770,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 new_paths=new_paths,
                 time_col=time_col,
                 policy=PathMatchPolicy.ORDERED_DEPTHS,
+                allow_partial=isinstance(layer, Points),
             )
 
             logger.debug(
@@ -843,6 +844,34 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                     res.mapped_count,
                     res.message,
                     res.warnings,
+                )
+
+            if res.outcome is RemapOutcome.APPLIED_PARTIAL:
+                logger.warning(
+                    "Partial remap applied for %s "
+                    "(depth=%s, mapped=%s, dropped_rows=%s, dropped_frames=%s): %s | warnings=%s",
+                    getattr(layer, "name", str(layer)),
+                    res.depth_used,
+                    res.mapped_count,
+                    res.dropped_row_count,
+                    res.dropped_frame_indices,
+                    res.message,
+                    res.warnings,
+                )
+
+                self._notify_remap_issue(
+                    layer=layer,
+                    level="warning",
+                    message=(
+                        "Partially aligned this annotation layer to the current image stack. "
+                        "Rows referring to frames that could not be matched were ignored."
+                    ),
+                    details=[
+                        res.message,
+                        f"Dropped rows: {res.dropped_row_count}",
+                        f"Dropped frame examples: {list(res.dropped_frame_indices)}",
+                        *res.warnings,
+                    ],
                 )
 
             if res.applied and res.warnings:
