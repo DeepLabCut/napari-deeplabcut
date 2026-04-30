@@ -10,9 +10,9 @@ license = "LGPL-3.0-only"
 license-files = [ "LICENSE" ]
 requires-python = ">=3.10"
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 4 - Beta",
   "Framework :: napari",
-  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.10",
@@ -46,8 +46,9 @@ email = "admin@deeplabcut.org"
 [project.entry-points."napari.manifest"]
 napari-deeplabcut = "napari_deeplabcut:napari.yaml"
 [project.optional-dependencies]
-testing = [
+dev = [
   "pillow",
+  "pre-commit",
   "pytest",
   "pytest-cov",
   "pytest-qt",
@@ -65,7 +66,11 @@ Documentation = "https://github.com/DeepLabCut/napari-deeplabcut#README.md"
 [tool.setuptools]
 include-package-data = true
 [tool.setuptools.package-data]
-napari_deeplabcut = [ "napari.yaml" ]
+napari_deeplabcut = [
+  "napari.yaml",
+  "assets/black/*.png",
+  "assets/white/*.png",
+]
 [tool.setuptools.package-dir]
 "" = "src"
 [tool.setuptools.packages.find]
@@ -98,3 +103,7 @@ table_format = "long"
 
 [tool.pytest.ini_options]
 qt_api = "pyside6"
+testpaths = [ "src/napari_deeplabcut/_tests" ]
+markers = [
+  "e2e: end-to-end tests. Invoke napari viewer fixtures, slow.",
+]

@@ -1,61 +1,90 @@
+"""
+NOTE: This file can be somewhat non-specific, please ensure functionalities from ui/ are tested
+in the _tests/ui folder and consider moving tests below to more specific files as needed."""
+
+# src/napari_deeplabcut/_tests/test_widgets.py
 import os
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
 import yaml
-from qtpy.QtSvgWidgets import QSvgWidget
+from napari.layers import Image, Tracks
+from qtpy.QtWidgets import QScrollArea
 from vispy import keys
 
 from napari_deeplabcut import _widgets
+from napari_deeplabcut.core import io, keypoints
+from napari_deeplabcut.core.io import populate_keypoint_layer_properties
+from napari_deeplabcut.ui.color_scheme_display import ColorSchemeDisplay
+from napari_deeplabcut.ui.dialogs import ShortcutRow
+from napari_deeplabcut.ui.labels_and_dropdown import KeypointsDropdownMenu, LabelPair
+from napari_deeplabcut.ui.plots.trajectory import TrajectoryMatplotlibCanvas
+
+from .conftest import force_show
 
 
 def test_guess_continuous():
-    # Hack: guess_continuous overrides napari's default logic to avoid misclassifying categorical properties
-    assert _widgets.guess_continuous(np.array([0.0]))  # Floats → continuous
-    assert not _widgets.guess_continuous(np.array(list("abc")))  # Strings → categorical
+    import numpy as np
+    from napari.layers.utils import color_manager
+
+    # Patch is applied during KeypointControls init (or import-time depending on your setup)
+    # Expect float -> continuous
+    assert color_manager.guess_continuous(np.array([0.0]))
+    # Expect object/categorical -> NOT continuous
+    assert not color_manager.guess_continuous(np.array(["a", "b"], dtype=object))
 
 
-def test_keypoint_controls(viewer, qtbot):
-    controls = _widgets.KeypointControls(viewer)
+@pytest.mark.usefixtures("qtbot")
+def test_keypoint_controls(keypoint_controls):
+    controls = keypoint_controls
     controls.label_mode = "loop"
     assert controls._radio_group.checkedButton().text() == "Loop"
     controls.cycle_through_label_modes()
     assert controls._radio_group.checkedButton().text() == "Sequential"
 
 
-def test_save_layers(viewer, points):
-    controls = _widgets.KeypointControls(viewer)
+@pytest.mark.usefixtures("qtbot")
+def test_save_layers(viewer, keypoint_controls, points):
     viewer.layers.selection.add(points)
-    # _save_layers_dialog bypasses napari's Save dialog for Points layers (used in headless tests)
-    _widgets._save_layers_dialog(controls)
+    keypoint_controls._save_layers_dialog()
 
 
-def test_show_trails(viewer, store):
-    controls = _widgets.KeypointControls(viewer)
-    controls._stores["temp"] = store
-    controls._is_saved = True
-    controls._show_trails(state=2)
+@pytest.mark.usefixtures("qtbot")
+def test_show_trails(viewer, keypoint_controls, store):
+    # keypoint_controls._stores[store.layer] = store
+    keypoint_controls.layer_manager.register_managed_layer(store.layer, store)
+    viewer.layers.selection.active = store.layer
+    keypoint_controls._is_saved = True
+
+    keypoint_controls._trail_cb.setChecked(True)
+
+    trails = keypoint_controls._trails_controller.layer
+    assert trails is not None
+    assert isinstance(trails, Tracks)
+    assert trails.visible is True
 
 
-def test_extract_single_frame(viewer, images):
+@pytest.mark.usefixtures("qtbot")
+def test_extract_single_frame(keypoint_controls, viewer, images):
     viewer.layers.selection.add(images)
-    controls = _widgets.KeypointControls(viewer)
-    controls._extract_single_frame()
+    keypoint_controls._extract_single_frame()
 
 
-def test_store_crop_coordinates(viewer, images, config_path):
+@pytest.mark.usefixtures("qtbot")
+def test_store_crop_coordinates(keypoint_controls, viewer, images, config_path):
     viewer.layers.selection.add(images)
     _ = viewer.add_shapes(np.random.random((4, 3)), shape_type="rectangle")
-    controls = _widgets.KeypointControls(viewer)
-    controls._images_meta = {
-        "name": "fake_video",
-        "project": os.path.dirname(config_path),
-    }
+    # _image_meta is expected to be an ImageMetadata instance
+    keypoint_controls._image_meta = _widgets.ImageMetadata(name="fake_video")
+    # _store_crop_coordinates now uses _project_path instead of reading "project" from _image_meta
+    keypoint_controls._project_path = os.path.dirname(config_path)
     # Stores crop coordinates from a rectangle shape into the project's config.yaml
-    controls._store_crop_coordinates()
+    keypoint_controls._store_crop_coordinates()
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_toggle_face_color(viewer, points):
     viewer.layers.selection.add(points)
     view = viewer.window._qt_viewer
@@ -67,6 +96,7 @@ def test_toggle_face_color(viewer, points):
     assert points._face.color_properties.name == "id"
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_toggle_edge_color(viewer, points):
     viewer.layers.selection.add(points)
     view = viewer.window._qt_viewer
@@ -76,6 +106,7 @@ def test_toggle_edge_color(viewer, points):
     np.testing.assert_array_equal(points.border_width, 2)
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_dropdown_menu(qtbot):
     widget = _widgets.DropdownMenu(list("abc"))
     qtbot.add_widget(widget)
@@ -86,8 +117,9 @@ def test_dropdown_menu(qtbot):
     assert widget.currentText() == "a"
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_keypoints_dropdown_menu_selection_updates_store(store, qtbot):
-    widget = _widgets.KeypointsDropdownMenu(store)
+    widget = KeypointsDropdownMenu(store)
     qtbot.add_widget(widget)
     id_menu = widget.menus.get("id")
     label_menu = widget.menus["label"]
@@ -103,16 +135,18 @@ def test_keypoints_dropdown_menu_selection_updates_store(store, qtbot):
         assert store.current_label == label_menu.currentText()
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_keypoints_dropdown_menu_single_animal_has_no_id_menu(single_animal_store, qtbot):
-    widget = _widgets.KeypointsDropdownMenu(single_animal_store)
+    widget = KeypointsDropdownMenu(single_animal_store)
     qtbot.add_widget(widget)
     assert "id" not in widget.menus
     assert "label" in widget.menus
     assert widget.menus["label"].count() > 0
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_keypoints_dropdown_menu(store, qtbot):
-    widget = _widgets.KeypointsDropdownMenu(store)
+    widget = KeypointsDropdownMenu(store)
     qtbot.add_widget(widget)
     # Menus for both "id" and "label" should exist; label menu reflects current keypoint
     # This confirms we have multi-animal data
@@ -132,16 +166,18 @@ def test_keypoints_dropdown_menu(store, qtbot):
         assert [label_menu.itemText(i) for i in range(label_menu.count())] == expected_labels_second
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_keypoints_dropdown_menu_unknown_id_yields_empty_list(store):
     # If an invalid ID is selected, the label menu should be empty
-    widget = _widgets.KeypointsDropdownMenu(store)
+    widget = KeypointsDropdownMenu(store)
     label_menu = widget.menus["label"]
     widget.refresh_label_menu("__NON_EXISTENT_ID__")
     assert label_menu.count() == 0  # defaultdict(list) → no labels
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_keypoints_dropdown_menu_updates_from_store_current_properties(store, qtbot):
-    widget = _widgets.KeypointsDropdownMenu(store)
+    widget = KeypointsDropdownMenu(store)
     qtbot.add_widget(widget)
     id_menu = widget.menus.get("id")
     label_menu = widget.menus["label"]
@@ -158,9 +194,11 @@ def test_keypoints_dropdown_menu_updates_from_store_current_properties(store, qt
     assert label_menu.currentText() == target.label
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_keypoints_dropdown_menu_smart_reset(store, qtbot):
-    widget = _widgets.KeypointsDropdownMenu(store)
+    widget = KeypointsDropdownMenu(store)
     qtbot.add_widget(widget)
+    force_show(widget, qtbot)
     label_menu = widget.menus["label"]
     label_menu.update_to("kpt_2")
     widget._locked = True
@@ -173,8 +211,9 @@ def test_keypoints_dropdown_menu_smart_reset(store, qtbot):
     assert label_menu.currentText() == "kpt_0"
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_color_pair(qtbot):
-    pair = _widgets.LabelPair(color="pink", name="kpt", parent=None)
+    pair = LabelPair(color="pink", name="kpt", parent=None)
     qtbot.add_widget(pair)
     # LabelPair couples a color swatch with a clickable label
     # Ensure setters update both UI and tooltip
@@ -185,8 +224,9 @@ def test_color_pair(qtbot):
     assert pair.color_label.toolTip() == "kpt2"
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_color_scheme_display(qtbot):
-    widget = _widgets.ColorSchemeDisplay(None)
+    widget = ColorSchemeDisplay(None)
     qtbot.add_widget(widget)
     widget._build()
     # Initially empty: no color scheme entries and no layout widgets
@@ -197,9 +237,10 @@ def test_color_scheme_display(qtbot):
     assert widget._container.layout().count() == 1
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_matplotlib_canvas_initialization_and_slider(viewer, points, qtbot):
     # Create the canvas widget
-    canvas = _widgets.KeypointMatplotlibCanvas(viewer)
+    canvas = TrajectoryMatplotlibCanvas(viewer)
     qtbot.add_widget(canvas)
 
     # Simulate adding a Points layer (triggers _load_dataframe)
@@ -218,8 +259,11 @@ def test_matplotlib_canvas_initialization_and_slider(viewer, points, qtbot):
     assert canvas._window == initial_window + 100
     assert canvas.slider_value.text() == str(initial_window + 100)
 
-    # Test plot refresh on frame change
+    # Test plot refresh does nothing when plot is hidden
     canvas.update_plot_range(event=type("Event", (), {"value": [5]}))
+    assert canvas._n == 0
+    # Test plot refresh on frame change (forced as it is hidden)
+    canvas.update_plot_range(event=type("Event", (), {"value": [5]}), force=True)
     assert canvas._n == 5
     # Check that x-limits reflect the new window
     start, end = canvas.ax.get_xlim()
@@ -229,17 +273,25 @@ def test_matplotlib_canvas_initialization_and_slider(viewer, points, qtbot):
 @pytest.fixture(autouse=True)
 def _no_autodock(monkeypatch):
     """
-    Prevent the QTimer.singleShot in KeypointControls.__init__ from auto-calling
-    silently_dock_matplotlib_canvas during tests, which would otherwise race
-    with these scenarios and make assertions flaky.
+    Prevent deferred owned-timer callbacks in KeypointControls from running
+    asynchronously during tests.
     """
-    monkeypatch.setattr(_widgets.QTimer, "singleShot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        _widgets.KeypointControls,
+        "_single_shot_owned",
+        lambda self, _ms, fn: None,
+    )
+    monkeypatch.setattr(
+        _widgets.KeypointControls,
+        "_schedule_once",
+        lambda self, _name, _ms, fn: None,
+    )
 
 
-def test_ensure_mpl_canvas_docked_already_docked(viewer, qtbot, monkeypatch):
+@pytest.mark.usefixtures("qtbot")
+def test_ensure_mpl_canvas_docked_already_docked(keypoint_controls, qtbot, monkeypatch):
     """If already docked, it must be a no-op: do not call add_dock_widget again."""
-    controls = _widgets.KeypointControls(viewer)
-    qtbot.add_widget(controls)
+    controls = keypoint_controls
     controls._mpl_docked = True  # simulate already docked
 
     called = {"count": 0}
@@ -250,29 +302,49 @@ def test_ensure_mpl_canvas_docked_already_docked(viewer, qtbot, monkeypatch):
     # Ensure it wouldn't try to dock again
     monkeypatch.setattr(controls.viewer.window, "add_dock_widget", fake_add_dock_widget)
 
-    controls._ensure_mpl_canvas_docked()
+    controls._ensure_traj_canvas_docked()
     assert called["count"] == 0, "add_dock_widget should not be called when already docked"
     assert controls._mpl_docked is True  # stays docked
 
 
-def test_ensure_mpl_canvas_docked_missing_window(viewer, qtbot):
+@pytest.mark.usefixtures("qtbot")
+def test_ensure_mpl_canvas_docked_missing_window(keypoint_controls, qtbot):
     """If viewer has no window attribute, method should safely no-op."""
-    controls = _widgets.KeypointControls(viewer)
+    controls = keypoint_controls
     qtbot.add_widget(controls)
 
     # Swap the viewer for a minimal stub object with *no* 'window' attribute
     controls.viewer = types.SimpleNamespace()  # no 'window'
 
     controls._mpl_docked = False
-    controls._ensure_mpl_canvas_docked()
+    controls._ensure_traj_canvas_docked()
 
     # Nothing should change; crucially, no exceptions should be raised
     assert controls._mpl_docked is False
 
 
-def test_ensure_mpl_canvas_docked_missing_qt_window(viewer, qtbot):
+@pytest.mark.usefixtures("qtbot")
+def test_trajectory_loader_ignores_invalid_properties(viewer, keypoint_controls, make_real_header_factory):
+    header = make_real_header_factory(individuals=("",))
+    md = populate_keypoint_layer_properties(
+        header,
+        labels=["bodypart1"],
+        ids=[""],
+        likelihood=np.array([1.0], dtype=float),
+        paths=[],
+        colormap="viridis",
+    )
+    md["properties"]["label"] = [np.nan]  # invalid
+
+    layer = viewer.add_points(np.array([[0.0, 10.0, 20.0]]), **md)
+    assert layer is not None
+    assert keypoint_controls._traj_mpl_canvas.df is None  # loader should have bailed out safely
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_ensure_traj_canvas_docked_missing_qt_window(keypoint_controls, qtbot):
     """If window._qt_window is None, method should safely no-op."""
-    controls = _widgets.KeypointControls(viewer)
+    controls = keypoint_controls
     qtbot.add_widget(controls)
 
     class DummyWindow:
@@ -285,15 +357,16 @@ def test_ensure_mpl_canvas_docked_missing_qt_window(viewer, qtbot):
     controls.viewer = types.SimpleNamespace(window=DummyWindow())
 
     controls._mpl_docked = False
-    controls._ensure_mpl_canvas_docked()
+    controls._ensure_traj_canvas_docked()
 
     # Still undocked, no crash
     assert controls._mpl_docked is False
 
 
-def test_ensure_mpl_canvas_docked_exception_during_docking(viewer, qtbot):
+@pytest.mark.usefixtures("qtbot")
+def test_ensure_mpl_canvas_docked_exception_during_docking(keypoint_controls, qtbot):
     """If add_dock_widget raises, method should catch, log, and remain undocked (no crash)."""
-    controls = _widgets.KeypointControls(viewer)
+    controls = keypoint_controls
     qtbot.add_widget(controls)
 
     class DummyWindow:
@@ -308,15 +381,16 @@ def test_ensure_mpl_canvas_docked_exception_during_docking(viewer, qtbot):
     controls._mpl_docked = False
 
     # Should not raise
-    controls._ensure_mpl_canvas_docked()
+    controls._ensure_traj_canvas_docked()
 
     # Docking failed → remains undocked
     assert controls._mpl_docked is False
 
 
-def test_display_shortcuts_dialog(viewer, qtbot):
+@pytest.mark.usefixtures("qtbot")
+def test_display_shortcuts_dialog(keypoint_controls, qtbot):
     """Ensure that the Shortcuts dialog can be created and shown without errors."""
-    controls = _widgets.KeypointControls(viewer)
+    controls = keypoint_controls
     qtbot.add_widget(controls)
 
     # Create the dialog directly
@@ -329,48 +403,216 @@ def test_display_shortcuts_dialog(viewer, qtbot):
 
     # Verify it is visible
     assert dlg.isVisible()
-
-    # Ensure the SVG widget is present
-    found_svg = False
-    for child in dlg.children():
-        if isinstance(child, QSvgWidget):
-            found_svg = True
-            break
-
-    assert found_svg, "Shortcuts dialog should contain a QSvgWidget with the shortcuts image."
+    assert dlg.windowTitle() == "Keyboard shortcuts"
+    assert dlg.findChildren(QScrollArea)
+    assert dlg.findChildren(ShortcutRow)
 
 
 # NOTE SuperAnimal keypoints functionality and testing may need an overhaul in the future:
 # these tests currently exercise only a narrow "everything fine" path and rely on specific metadata
 # layout and SuperAnimal conversion-table conventions, which makes them susceptible to API changes
-def test_widget_load_superkeypoints_diagram(viewer, qtbot, points, superkeypoints_assets):
-    controls = _widgets.KeypointControls(viewer)
-    qtbot.add_widget(controls)
-
-    # Inject conversion table into the existing Points layer
+@pytest.mark.usefixtures("qtbot")
+def test_widget_load_superkeypoints_diagram(keypoint_controls, viewer, qtbot, points, monkeypatch):
+    # Arrange: conversion table uses *realistic* keys (not SK1/SK2),
+    # and does not depend on any asset conventions.
     layer = points
-    super_animal = superkeypoints_assets["super_animal"]
-    layer.metadata["tables"] = {super_animal: {"kp1": "SK1", "kp2": "SK2"}}
+    super_animal = "superanimal_quadruped"
+    layer.metadata["tables"] = {super_animal: {"kp1": "nose", "kp2": "upper_jaw"}}
+
+    # Arrange: stub I/O so the test doesn't depend on installed assets
+    dummy_img = np.zeros((8, 8), dtype=np.uint8)
+    dummy_superkpts = {
+        "nose": [1.0, 2.0],
+        "upper_jaw": [3.0, 4.0],
+    }
+    monkeypatch.setattr(io, "load_superkeypoints_diagram", lambda name: dummy_img)
+    monkeypatch.setattr(io, "load_superkeypoints", lambda name: dummy_superkpts)
 
     n_layers_before = len(viewer.layers)
-    controls.load_superkeypoints_diagram()
 
+    # Act
+    keypoint_controls.load_superkeypoints_diagram()
+
+    # Assert: one new image layer is added
     assert len(viewer.layers) == n_layers_before + 1
+    assert isinstance(viewer.layers[-1], Image)
+    assert viewer.layers[-1].data.shape == dummy_img.shape
+
+    # Assert: labels match the table keys (reference keypoints)
     assert list(layer.properties["label"]) == ["kp1", "kp2"]
-    assert controls._keypoint_mapping_button.text() == "Map keypoints"
+
+    # Assert: points data updated to [0, x, y] for each mapping
+    assert layer.data.shape == (2, 3)
+    assert np.allclose(layer.data[:, 0], 0.0)
+    assert np.allclose(layer.data[:, 1:], np.array([[1.0, 2.0], [3.0, 4.0]]))
+
+    # Assert: UI updated
+    assert keypoint_controls._keypoint_mapping_button.text() == "Map keypoints"
+    assert keypoint_controls._keypoint_mapping_button.text() == "Map keypoints"
 
 
-def test_widget_map_keypoints_writes_to_config(viewer, qtbot, mapped_points, config_path):
-    controls = _widgets.KeypointControls(viewer)
+@pytest.mark.usefixtures("qtbot")
+def test_widget_map_keypoints_writes_to_config(keypoint_controls, qtbot, points, config_path, monkeypatch):
+    controls = keypoint_controls
     qtbot.add_widget(controls)
 
-    _, super_animal, bp1, bp2 = mapped_points
-    controls._map_keypoints(super_animal)
+    # Arrange: ensure the points layer has some data (shape: [t, x, y])
+    points.data = np.array(
+        [
+            [0.0, 10.0, 20.0],
+            [0.0, 30.0, 40.0],
+        ],
+        dtype=float,
+    )
 
+    # Arrange: provide the metadata that _map_keypoints expects
+    # _map_keypoints builds config_path as Path(project)/"config.yaml"
+    project_dir = Path(config_path).parent
+    points.metadata["project"] = str(project_dir)
+    points.metadata["tables"] = {"superanimal_quadruped": {}}
+
+    import pandas as pd
+
+    from napari_deeplabcut.config.models import DLCHeaderModel
+
+    cols = pd.MultiIndex.from_product(
+        [["S"], [""], ["bp1", "bp2"], ["x", "y"]],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
+    points.metadata["header"] = DLCHeaderModel(
+        columns=cols,
+    )
+
+    # Ensure config file exists (some setups create it already; this is safe)
+    Path(config_path).write_text("{}", encoding="utf-8")
+
+    # Arrange: stub superkeypoints + nearest-neighbor results to be deterministic
+    # Your JSON is dict(key -> [x,y]) so we mimic that.
+    dummy_superkpts = {"nose": [0.0, 0.0], "upper_jaw": [1.0, 1.0]}
+    monkeypatch.setattr(io, "load_superkeypoints", lambda name: dummy_superkpts)
+
+    # neighbors indices correspond to ordering of list(dummy_superkpts)
+    # Here: ["nose", "upper_jaw"] -> indices [0, 1]
+    monkeypatch.setattr(keypoints, "find_nearest_neighbors", lambda xy, xy_ref: np.array([0, 1]))
+
+    # If your io.load_config / io.write_config do more than YAML I/O,
+    # you can keep them. Otherwise stubbing them makes the test isolated.
+    def _load_config(path):
+        with open(path, encoding="utf-8") as fh:
+            return yaml.safe_load(fh) or {}
+
+    def _write_config(path, cfg):
+        with open(path, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(cfg, fh, sort_keys=False)
+
+    monkeypatch.setattr(io, "load_config", _load_config)
+    monkeypatch.setattr(io, "write_config", _write_config)
+
+    # Act
+    controls._map_keypoints("superanimal_quadruped")
+
+    # Assert
     with open(config_path, encoding="utf-8") as fh:
-        cfg = yaml.safe_load(fh)
+        cfg = yaml.safe_load(fh) or {}
+
     assert "SuperAnimalConversionTables" in cfg
-    assert cfg["SuperAnimalConversionTables"][super_animal] == {
-        bp1: "SK1",
-        bp2: "SK2",
+
+    # Optional stronger assertion: verify the mapping is written as expected
+    assert cfg["SuperAnimalConversionTables"]["superanimal_quadruped"] == {
+        "bp1": "nose",
+        "bp2": "upper_jaw",
     }
+
+
+def test_read_config_injects_tables_metadata(tmp_path):
+    cfg = {
+        "Task": "demo",
+        "scorer": "Tester",
+        "date": "2026-03-27",
+        "multianimalproject": False,
+        "identity": "",
+        "project_path": str(tmp_path),
+        "bodyparts": ["bp1", "bp2"],
+        "skeleton": [],
+        "pcutoff": 0.6,
+        "dotsize": 8,
+        "colormap": "viridis",
+        "SuperAnimalConversionTables": {
+            "superanimal_quadruped": {
+                "bp1": "nose",
+                "bp2": "upper_jaw",
+            }
+        },
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+    layers = io.read_config(str(config_path))
+    _, layer_props, layer_type = layers[0]
+
+    assert layer_type == "points"
+    assert "tables" in layer_props["metadata"]
+    assert layer_props["metadata"]["tables"] == {
+        "superanimal_quadruped": {
+            "bp1": "nose",
+            "bp2": "upper_jaw",
+        }
+    }
+
+
+def test_points_layer_with_tables_shows_superkeypoints_button(keypoint_controls, qtbot, points):
+    controls = keypoint_controls
+    qtbot.add_widget(controls)
+
+    assert not controls._keypoint_mapping_button.isVisible()
+
+    points.metadata["tables"] = {"superanimal_quadruped": {"bp1": "nose", "bp2": "upper_jaw"}}
+
+    controls.layer_manager._setup_points_layer(points, allow_merge=False)
+
+    assert not controls._keypoint_mapping_button.isHidden()
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_points_layer_with_tables_button_not_lost_on_merge_path(keypoint_controls, qtbot, points):
+    controls = keypoint_controls
+    qtbot.add_widget(controls)
+
+    points.metadata["tables"] = {"superanimal_quadruped": {"bp1": "nose"}}
+
+    # First do a normal setup so the button becomes visible.
+    controls.layer_manager._setup_points_layer(points, allow_merge=False)
+    assert not controls._keypoint_mapping_button.isHidden()
+
+    # Simulate manager-driven merge refresh on the already-managed layer.
+    controls._on_points_layers_merged_requested((points,))
+
+    assert not controls._keypoint_mapping_button.isHidden()
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_video_panel_has_extraction_options(keypoint_controls):
+    controls = keypoint_controls
+    panel = controls._video_group
+    assert panel.extract_button.text() == "Extract current frame"
+    assert panel.crop_button.text() == "Save crop to config"
+    assert panel.export_labels_cb.text() == "Also export labels"
+    assert panel.apply_crop_cb.text() == "Crop to rectangle"
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_extract_single_frame_warns_without_image_layer(keypoint_controls, qtbot, monkeypatch):
+    controls = keypoint_controls
+    qtbot.addWidget(controls)
+
+    seen = {}
+
+    monkeypatch.setattr(
+        "napari_deeplabcut.ui.cropping.show_warning",
+        lambda msg: seen.setdefault("warning", msg),
+    )
+
+    controls._extract_single_frame()
+
+    assert "No image/video layer is active." in seen["warning"]

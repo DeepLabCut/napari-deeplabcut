@@ -1,0 +1,896 @@
+"""
+Core IO utilities.
+
+Includes:
+- Config file reading/writing
+- HDF reading with provenance attachment
+- Lazy image reading with Dask support
+- Video reading with OpenCV and optional PyAV fallback
+- Superkeypoints diagram and JSON loading
+
+NOTE: write_hdf could use some refactoring to split responsibilities more cleanly
+A potentially interesting direction could be to move toward a more schema-centric
+architecture, where objects own and guarantee their own validity, and writing
+is just a translation of already-valid objects to disk. This would also make
+validation more consistent across reads and writes.
+Config I/O is an especially good candidate for this, the logic is a bit spread right now
+(here, config_sync.py, and the sidecar JSON)
+"""
+# src/napari_deeplabcut/core/io.py
+
+from __future__ import annotations
+
+import fnmatch
+import json
+import logging
+import os
+from collections.abc import Callable
+from glob import has_magic
+from importlib import resources
+from pathlib import Path
+from typing import Any
+
+import cv2
+import dask.array as da
+import numpy as np
+import pandas as pd
+import yaml
+from dask import delayed
+from dask_image.imread import imread
+from napari.types import LayerData
+from natsort import natsorted
+from pydantic import ValidationError
+
+from napari_deeplabcut import misc
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, PointsMetadata
+from napari_deeplabcut.config.settings import DEFAULT_SINGLE_ANIMAL_CMAP
+from napari_deeplabcut.config.supported_files import SUPPORTED_IMAGES, SUPPORTED_VIDEOS
+from napari_deeplabcut.core import schemas as dlc_schemas
+from napari_deeplabcut.core.dataframes import (
+    form_df_from_validated,
+    guarantee_multiindex_rows,
+    harmonize_keypoint_column_index,
+    harmonize_keypoint_row_index,
+    merge_multiple_scorers,
+    restore_dlc_on_disk_header_shape,
+    set_df_scorer,
+)
+from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
+from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
+from napari_deeplabcut.core.metadata import attach_source_and_io_to_layer_kwargs, parse_points_metadata
+from napari_deeplabcut.core.project_paths import (
+    canonicalize_path,
+    find_nearest_config,
+    infer_dlc_project_from_points_meta,
+)
+from napari_deeplabcut.core.provenance import resolve_output_path_from_metadata
+
+logger = logging.getLogger(__name__)
+
+# -----------------------------------------------------------------------------
+# Supported formats (shared by image/video readers)
+# -----------------------------------------------------------------------------
+_SUPPORTED_SUFFIXES = {ext.lower() for ext in SUPPORTED_IMAGES}
+DLC_CANONICAL_H5_KEY = "df_with_missing"  # TODO use this key instead of str literal in all places
+FALLBACK_H5_KEYS = ["keypoints"]
+
+# =============================================================================
+# CONFIG (YAML)
+# =============================================================================
+
+
+def load_config(config_path: str):
+    # NOTE: intentionally minimal; callers own error handling
+    try:
+        with open(config_path) as file:
+            return yaml.safe_load(file)
+    except yaml.YAMLError as e:
+        logger.warning(f"Invalid YAML in config file {config_path}: {e}")
+        raise e
+
+
+# Read config file and create keypoint layer metadata
+def read_config(configname: str) -> list[LayerData]:
+    config = load_config(configname)
+    header = DLCHeaderModel.from_config(config)
+    layer_props = populate_keypoint_layer_properties(
+        header,
+        size=config["dotsize"],
+        pcutoff=config["pcutoff"],
+        colormap=config["colormap"],
+        likelihood=np.array([1]),
+    )
+    layer_props["name"] = f"CollectedData_{config['scorer']}"
+    layer_props["ndim"] = 3
+    layer_props["property_choices"] = layer_props.pop("properties")
+    layer_props["metadata"]["project"] = str(Path(configname).parent)
+    layer_props["metadata"]["config_colormap"] = str(config.get("colormap", DEFAULT_SINGLE_ANIMAL_CMAP))
+
+    conversion_tables = config.get("SuperAnimalConversionTables")
+    if conversion_tables is not None:
+        super_animal, table = conversion_tables.popitem()
+        layer_props["metadata"]["tables"] = {super_animal: table}
+    return [(None, layer_props, "points")]
+
+
+def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
+    """Write DeepLabCut config.yaml parameters."""
+    with open(str(config_path), "w", encoding="utf-8") as f:
+        yaml.safe_dump(params, f)
+
+
+# =============================================================================
+# KEYPOINTS / ANNOTATIONS (HDF5)
+# =============================================================================
+# NOTE: This reader returns a napari Points layer (data + metadata + "points")
+# and attaches provenance via attach_source_and_io_to_layer_kwargs.
+
+
+def _read_hdf_any_key(file: Path) -> pd.DataFrame:
+    """Read an HDF file without knowing the key in advance. Try common DLC keys."""
+    file = str(file)
+    try:
+        return pd.read_hdf(file, key=DLC_CANONICAL_H5_KEY)
+    except (KeyError, ValueError):
+        logger.warning(f"Key '{DLC_CANONICAL_H5_KEY}' not found in {file}. Trying fallback keys.")
+    for k in FALLBACK_H5_KEYS:
+        try:
+            return pd.read_hdf(file, key=k)
+        except (KeyError, ValueError):
+            logger.warning(f"Key '{k}' not found in {file}.")
+    logger.warning(
+        f"None of the expected keys {FALLBACK_H5_KEYS + [DLC_CANONICAL_H5_KEY]} were found in {file}. "
+        "Falling back to default read_hdf which may raise its own error if no valid key is found."
+    )
+    return pd.read_hdf(file)  # Let pandas guess instead
+
+
+def read_hdf(filename: str) -> list[LayerData]:
+    layers = []
+    for file in Path(filename).parent.glob(Path(filename).name):
+        layers.extend(read_hdf_single(file))
+    return layers
+
+
+def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[LayerData]:
+    """Read a single H5 file and attach provenance with optional explicit kind.
+    Dataset may be under keypoints/ or df_with_missing/ for compatibility with various DLC versions.
+    We use _read_hdf_any_key with df_with_missing and other legacy keys,
+    and then without specifying a key to allow pandas to auto-detect the correct one.
+    See _read_hdf_any_key for details.
+
+    - Produces one Points layer per H5 file
+    - Points.data contains only finite coordinates
+    - Unlabeled keypoints are omitted from Points.data
+    - Empty Points layers are valid
+    """
+    # temp = pd.read_hdf(str(file))
+    temp = _read_hdf_any_key(file)
+    temp = merge_multiple_scorers(temp)
+    header = DLCHeaderModel(columns=temp.columns)
+    temp = temp.droplevel("scorer", axis=1)
+    logger.debug("READ_HDF file=%s", file)
+    logger.debug("READ_HDF raw column names=%s", getattr(temp.columns, "names", None))
+    logger.debug("READ_HDF raw first columns=%s", list(temp.columns[:10]))
+    logger.debug("READ_HDF header.bodyparts=%s", header.bodyparts)
+
+    # Handle legacy/single-animal column layout by inserting empty "individuals" level.
+    # Colormap selection also falls back to config when possible.
+    try:
+        cfg = load_config(find_nearest_config(file, max_levels=3))
+        config_colormap = str(cfg.get("colormap", DEFAULT_SINGLE_ANIMAL_CMAP))
+    except Exception as e:
+        logger.warning("Could not load config for %s; falling back to default colormap. Error: %s", file, e)
+        config_colormap = DEFAULT_SINGLE_ANIMAL_CMAP
+    if "individuals" not in temp.columns.names:
+        old_idx = temp.columns.to_frame()
+        old_idx.insert(0, "individuals", "")
+        temp.columns = pd.MultiIndex.from_frame(old_idx)
+
+    # If the on-disk index is a MultiIndex (path parts), collapse it to string paths.
+    if isinstance(temp.index, pd.MultiIndex):
+        temp.index = [str(Path(*row)) for row in temp.index]
+
+    df = (
+        temp.stack(["individuals", "bodyparts"])
+        .reindex(header.individuals, level="individuals")
+        .reindex(header.bodyparts, level="bodyparts")
+        .reset_index()
+    )
+
+    nrows = df.shape[0]
+    data = np.empty((nrows, 3))
+    image_paths = df["level_0"]
+
+    # Convert image keys to integer indices when they are already numeric,
+    # otherwise encode category paths deterministically.
+    if pd.api.types.is_numeric_dtype(getattr(image_paths, "dtype", np.asarray(image_paths).dtype)):
+        image_inds = image_paths.values
+        paths2inds = []
+    else:
+        image_inds, paths2inds = misc.encode_categories(
+            image_paths,
+            is_path=True,
+            return_unique=True,
+            do_sort=True,
+        )
+
+    data[:, 0] = image_inds
+    data[:, 1:] = df[["y", "x"]].to_numpy()
+    finite = np.isfinite(data).all(axis=1)
+    # Keep only finite coords in data, but keep all rows in df for metadata completeness.
+    data = data[finite]
+    df = df.loc[finite].reset_index(drop=True)
+
+    logger.debug("STACKED df bodyparts unique=%s", list(dict.fromkeys(df["bodyparts"].astype(str)))[:30])
+    logger.debug("STACKED df individuals unique=%s", list(dict.fromkeys(df["individuals"].astype(str)))[:30])
+    layer_props = populate_keypoint_layer_properties(
+        header,
+        labels=df["bodyparts"],
+        ids=df["individuals"],
+        likelihood=df.get("likelihood"),
+        paths=list(paths2inds),
+        colormap=config_colormap,
+    )
+    layer_props["name"] = file.stem
+    layer_props["metadata"]["root"] = str(file.parent)
+    layer_props["metadata"]["name"] = layer_props["name"]
+    layer_props["metadata"]["config_colormap"] = config_colormap
+
+    # Attach provenance. If explicit kind provided, we store it directly.
+    if kind is not None:
+        meta = layer_props.setdefault("metadata", {})
+        # Keep legacy source fields too
+        attach_source_and_io_to_layer_kwargs(layer_props, file)
+        # Override kind in io with explicit kind arg
+        if isinstance(meta.get("io"), dict):
+            meta["io"]["kind"] = kind  # stored as actual enum, not value
+    else:
+        attach_source_and_io_to_layer_kwargs(layer_props, file)
+
+    return [(data, layer_props, "points")]
+
+
+# TODO move to dataframes.py
+def form_df(
+    points_data,
+    layer_metadata: dict,
+    layer_properties: dict,
+) -> pd.DataFrame:
+    """
+    Form a DataFrame from points data + layer metadata, structured according to DLC conventions.
+
+    Arguments
+    ---------
+    points_data:
+        array-like of shape (N, 3) in napari-style [frame, y, x]
+    layer_metadata:
+        dict that must contain at least: 'header' (DLCHeaderModel), optional 'paths'
+    layer_properties:
+        dict that must contain: 'label', 'id', optional 'likelihood'
+    """
+    layer_metadata = layer_metadata or {}
+    layer_properties = layer_properties or {}
+
+    # -----------------------------
+    # 1) Normalize/wrap header
+    # -----------------------------
+    header_obj = layer_metadata.get("header", None)
+    if header_obj is None:
+        raise KeyError("layer_metadata['header'] is required to write DLC keypoints.")
+
+    if isinstance(header_obj, dict) and "columns" in header_obj:
+        header_model = DLCHeaderModel.model_validate(header_obj)
+    elif isinstance(header_obj, DLCHeaderModel):
+        header_model = header_obj
+    else:
+        # Accept a DLCHeaderModel-like object (has .columns)
+        cols = getattr(header_obj, "columns", None)
+        if cols is None:
+            raise TypeError("layer_metadata['header'] must be a DLCHeaderModel or an object with a .columns attribute.")
+        header_model = DLCHeaderModel(columns=cols)
+
+    # Build a PointsMetadata model from the layer_metadata dict,
+    # but replace raw header with our DLCHeaderModel wrapper.
+    meta_payload = dict(layer_metadata)
+    meta_payload["header"] = header_model
+    pts_meta = PointsMetadata.model_validate(meta_payload)
+
+    # -----------------------------
+    # 2) Fill missing likelihood (preserve old behavior)
+    # -----------------------------
+    # Your old code assumed likelihood always existed.
+    # To remain backwards compatible, auto-fill with 1.0 if missing/None.
+    n = np.asarray(points_data).shape[0] if points_data is not None else 0
+    props_payload = dict(layer_properties)
+    if props_payload.get("likelihood", None) is None:
+        props_payload["likelihood"] = [1.0] * n
+
+    # -----------------------------
+    # 3) Validate with dedicated schemas
+    # -----------------------------
+    try:
+        points = dlc_schemas.PointsDataModel.model_validate({"data": points_data})
+        props = dlc_schemas.KeypointPropertiesModel.model_validate(props_payload)
+        ctx = dlc_schemas.PointsWriteInputModel.model_validate({"points": points, "meta": pts_meta, "props": props})
+    except ValidationError as e:
+        # Give a concise error that points to the failing part.
+        # The full `e` still has structured details if you want to log it.
+        raise ValueError(f"Invalid keypoint write inputs: {e}") from e
+
+    # -----------------------------
+    # 4) Delegate transformation
+    # -----------------------------
+    df = form_df_from_validated(ctx)
+
+    # Keep your belt-and-suspenders guarantee
+    guarantee_multiindex_rows(df)
+    return df
+
+
+def _resolve_multianimalproject_for_write(
+    *,
+    out_path: Path,
+    pts_meta: PointsMetadata,
+) -> bool | None:
+    """
+    Best-effort resolve of DLC config multianimalproject flag for save.
+
+    Resolution order
+    ----------------
+    1) pts_meta.project / explicit project context if available
+    2) config near output path
+    3) config near pts_meta.root
+    4) None if not resolvable
+    """
+    candidates: list[Path] = []
+
+    project = getattr(pts_meta, "project", None)
+    if project:
+        candidates.append(Path(project) / "config.yaml")
+
+    candidates.append(out_path.parent)
+
+    root = getattr(pts_meta, "root", None)
+    if root:
+        candidates.append(Path(root))
+
+    for candidate in candidates:
+        try:
+            cfg_path = find_nearest_config(candidate, max_levels=3)
+            cfg = load_config(str(cfg_path))
+            if isinstance(cfg, dict) and "multianimalproject" in cfg:
+                logger.debug(
+                    "Resolved multianimalproject=%s from config at %s", cfg.get("multianimalproject"), cfg_path
+                )
+                return bool(cfg.get("multianimalproject", False))
+        except Exception:
+            continue
+
+    logger.debug("Could not resolve multianimalproject flag from any candidate configs.")
+    return None
+
+
+def _atomic_to_hdf(df: pd.DataFrame, out_path: Path, key: str = DLC_CANONICAL_H5_KEY) -> None:
+    """Best-effort atomic write: write to temp and replace."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+    # Write temp
+    df.to_hdf(tmp, key=key, mode="w")
+    # Replace
+    tmp.replace(out_path)
+
+
+def write_hdf(path: str, data, attributes: dict) -> list[str]:
+    """
+    NPE2 single-layer writer.
+
+    Signature required by napari (manifest-based writers):
+        def writer(path: str, data: Any, attributes: dict) -> List[str]
+    Writers must return a list of successfully-written paths.
+
+    Contract:
+    - Empty Points layers may be written only if promoted
+    - Finite Points must always produce finite stored coordinates
+
+    This function writes DLC keypoints to .h5 (and companion .csv).
+    """
+    attrs = dlc_schemas.PointsLayerAttributesModel.model_validate(attributes or {})
+    pts_meta: PointsMetadata = parse_points_metadata(attrs.metadata, drop_header=False)
+    if not pts_meta.header:
+        raise ValueError("Layer metadata must include a valid DLC header to write keypoints.")
+
+    points = dlc_schemas.PointsDataModel.model_validate({"data": data})
+    props = dlc_schemas.KeypointPropertiesModel.model_validate(attrs.properties)
+
+    # Bundle + validate cross-field invariants
+    ctx = dlc_schemas.PointsWriteInputModel.model_validate(
+        {
+            "points": points,
+            "meta": pts_meta,
+            "props": props,
+        }
+    )
+
+    logger.debug("HEADER nlevels: %s", ctx.meta.header.as_multiindex().nlevels)
+    logger.debug("HEADER names: %s", ctx.meta.header.as_multiindex().names)
+
+    # Build df from points + plugin metadata + layer properties
+    logger.debug("WRITE header bodyparts=%s", ctx.meta.header.bodyparts)
+    logger.debug("WRITE props labels unique=%s", list(dict.fromkeys(map(str, attrs.properties.get("label", []))))[:30])
+    df_new = form_df_from_validated(ctx)
+
+    logger.debug("DF_NEW columns nlevels: %s", df_new.columns.nlevels)
+    logger.debug("DF_NEW columns names: %s", df_new.columns.names)
+    logger.debug("DF_NEW finite count: %s", np.isfinite(df_new.to_numpy()).sum())
+
+    # Decide output path:
+    # 1) User-requested path should be ignored in favor of provenance when available
+    #  This is a fallback only used when provenance is missing or unresolvable,
+    #  and is never expected to be set for this plugin
+    # requested_out = _normalize_requested_out_path(path, layer_name)
+
+    # 2) provenance/save_target is always the source of truth for where to write
+    out_path, target_scorer, source_kind = resolve_output_path_from_metadata(attributes)
+
+    # If promoting to GT and scorer is known, rewrite scorer level
+    if target_scorer:
+        df_new = set_df_scorer(df_new, target_scorer)
+    header_for_write = pts_meta.header.with_scorer(target_scorer) if target_scorer else pts_meta.header
+
+    # Never write back to machine sources without an explicit promotion target
+    if not out_path and source_kind == AnnotationKind.MACHINE:
+        raise MissingProvenanceError("Cannot resolve provenance output path for MACHINE source.")
+
+    # If provenance returned nothing, default to requested path
+    if not out_path:
+        # Strict only for MACHINE
+        if source_kind == AnnotationKind.MACHINE:
+            raise MissingProvenanceError("Cannot resolve provenance output path for MACHINE source.")
+
+        # Prefer dataset folder if inferable (DLC convention)
+        project_ctx = infer_dlc_project_from_points_meta(pts_meta, prefer_project_root=False)
+        dataset_dir = None
+        if project_ctx is not None and project_ctx.dataset_folder is not None:
+            dataset_dir = project_ctx.dataset_folder
+
+        # If dataset_dir exists or can be created, use it; else fall back to pts_meta.root
+        if dataset_dir is not None:
+            dataset_dir.mkdir(parents=True, exist_ok=True)
+            root_path = dataset_dir
+        else:
+            root = pts_meta.root
+            if not root:
+                raise MissingProvenanceError("GT fallback requires root (and dataset folder could not be inferred).")
+            root_path = Path(root)
+
+        candidates = sorted(root_path.glob("CollectedData_*.h5"))
+        if len(candidates) > 1:
+            raise AmbiguousSaveError(
+                f"Multiple CollectedData_*.h5 files found in {root_path}."
+                " Cannot determine where to save."
+                " Please specify a save_target with explicit path and scorer.",
+                candidates=[str(c) for c in candidates],
+            )
+        elif len(candidates) == 1:
+            out = candidates[0]
+        else:
+            scorer = target_scorer or pts_meta.header.scorer
+            if scorer is None:
+                raise ValueError("Scorer is required to write DLC keypoints.")
+            out = root_path / f"CollectedData_{scorer}.h5"
+    else:
+        out = Path(out_path)
+
+    # Determine destination kind (promotion writes to GT target)
+    has_save_target = pts_meta.save_target is not None
+    destination_kind = (
+        AnnotationKind.GT
+        if has_save_target
+        else ((pts_meta.io.kind if pts_meta.io is not None else None) or AnnotationKind.GT)
+    )
+
+    # Merge-on-save for GT
+    if destination_kind == AnnotationKind.GT and out.exists():
+        df_old = _read_hdf_any_key(out)
+
+        # Harmonize indices and merge
+        try:
+            guarantee_multiindex_rows(df_new)
+            guarantee_multiindex_rows(df_old)
+        except Exception:
+            logger.warning(
+                "Could not guarantee multiindex rows for new or existing data; "
+                "attempting to harmonize indices for merge.",
+                exc_info=True,
+            )
+            pass
+
+        df_new, df_old = harmonize_keypoint_row_index(df_new, df_old)
+        df_new = harmonize_keypoint_column_index(df_new)
+        df_old = harmonize_keypoint_column_index(df_old)
+        df_out = df_new.combine_first(df_old)
+    else:
+        df_out = df_new
+
+    # Final cleanup of rows
+    try:
+        guarantee_multiindex_rows(df_out)
+    except Exception:
+        pass
+    df_out.sort_index(inplace=True)
+
+    # Restore canonical on-disk DLC header shape from the header.
+    is_ma_project = _resolve_multianimalproject_for_write(
+        out_path=out,
+        pts_meta=pts_meta,
+    )
+    df_out = restore_dlc_on_disk_header_shape(df_out, header_for_write, is_ma_project=is_ma_project)
+
+    logger.debug("FINAL WRITE first columns=%s", list(df_out.columns[:10]))
+    logger.debug(
+        "FINAL WRITE bodyparts unique=%s",
+        list(dict.fromkeys(df_out.columns.get_level_values("bodyparts").astype(str)))[:30]
+        if isinstance(df_out.columns, pd.MultiIndex) and "bodyparts" in df_out.columns.names
+        else None,
+    )
+    logger.debug("FINAL WRITE columns nlevels: %s", getattr(df_out.columns, "nlevels", None))
+    logger.debug("FINAL WRITE columns names: %s", getattr(df_out.columns, "names", None))
+
+    if isinstance(df_out.columns, pd.MultiIndex) and "individuals" in (df_out.columns.names or []):
+        logger.debug(
+            "FINAL WRITE individuals values: %s",
+            list(dict.fromkeys(df_out.columns.get_level_values("individuals").astype(str))),
+        )
+
+    # Write .h5 and .csv
+    _atomic_to_hdf(df_out, out, key=DLC_CANONICAL_H5_KEY)
+    csv_path = out.with_suffix(".csv")
+    df_out.to_csv(csv_path)
+
+    return [str(out), str(csv_path)]
+
+
+# =============================================================================
+# SUPERKEYPOINTS (assets: diagram + JSON)
+# =============================================================================
+# NOTE: These are used to support DLCHeaderModel superkeypoints workflows.
+
+
+def load_superkeypoints_json_from_path(json_path: str | Path):
+    path = Path(json_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Superkeypoints JSON file not found at {json_path}.")
+    with open(path) as f:
+        payload = json.load(f)
+        if payload:
+            return payload
+        else:
+            raise ValueError(f"Superkeypoints JSON file at {json_path} is empty or invalid.")
+
+
+def load_superkeypoints_diagram_from_path(image_path: str | Path):
+    path = Path(image_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Superkeypoints diagram not found at {image_path}.")
+    try:
+        return imread(path).squeeze()
+    except Exception as e:
+        raise RuntimeError(f"Superkeypoints diagram could not be loaded from {image_path}.") from e
+
+
+def load_superkeypoints_diagram(super_animal: str):
+    path = resources.files("napari_deeplabcut") / "assets" / f"{super_animal}.jpg"
+    return load_superkeypoints_diagram_from_path(path)
+
+
+def load_superkeypoints(super_animal: str):
+    path = resources.files("napari_deeplabcut") / "assets" / f"{super_animal}.json"
+    return load_superkeypoints_json_from_path(path)
+
+
+# =============================================================================
+# IMAGES (lazy stack with Dask)
+# =============================================================================
+# NOTE: Image reading uses OpenCV for normalization and Dask for laziness.
+
+
+# Helper functions for lazy image reading and normalization
+# NOTE : forced keyword-only arguments for clarity
+def _read_and_normalize(*, filepath: Path, normalize_func: Callable[[np.ndarray], np.ndarray]) -> np.ndarray:
+    arr = cv2.imread(str(filepath), cv2.IMREAD_UNCHANGED)
+    if arr is None:
+        raise OSError(f"Could not read image: {filepath}")
+    return normalize_func(arr)
+
+
+def _normalize_to_rgb(arr: np.ndarray) -> np.ndarray:
+    if arr.ndim == 2:
+        return cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
+    if arr.ndim == 3 and arr.shape[2] == 4:
+        return cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
+    return cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+
+
+# FIXME remove later
+# def _expand_image_paths(path: str | Path | list[str | Path] | tuple[str | Path, ...]) -> list[Path]:
+#     # Normalize input to list[Path]
+#     raw_paths = [Path(p) for p in path] if isinstance(path, (list, tuple)) else [Path(path)]
+
+#     expanded: list[Path] = []
+#     for p in tqdm(raw_paths, desc="Expanding image paths", leave=False, unit="files"):
+#         if p.is_dir() and p.suffix.lower() != ".zarr":
+#             file_matches: list[Path] = []
+#             for ext in SUPPORTED_IMAGES:
+#                 file_matches.extend(p.glob(f"*{ext}"))
+#             expanded.extend(x for x in natsorted(file_matches, key=str) if x.is_file())
+#         else:
+#             matches = list(p.parent.glob(p.name))
+#             expanded.extend(matches or [p])
+
+#     return [p for p in expanded if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGES]
+
+
+def _expand_image_paths(path: str | Path | list[str | Path] | tuple[str | Path, ...]) -> list[Path]:
+    raw_paths = [Path(p) for p in path] if isinstance(path, (list, tuple)) else [Path(path)]
+    expanded: list[Path] = []
+
+    for p in raw_paths:
+        if p.is_dir() and p.suffix.lower() != ".zarr":
+            try:
+                with os.scandir(p) as it:
+                    files = [
+                        Path(entry.path)
+                        for entry in it
+                        if entry.is_file() and Path(entry.name).suffix.lower() in _SUPPORTED_SUFFIXES
+                    ]
+            except OSError:
+                continue
+
+            files.sort(key=lambda q: q.name)
+            expanded.extend(files)
+            continue
+
+        if not has_magic(p.name):
+            if p.is_file() and p.suffix.lower() in _SUPPORTED_SUFFIXES:
+                expanded.append(p)
+            continue
+
+        parent = p.parent if str(p.parent) else Path(".")
+        pattern = p.name
+        try:
+            with os.scandir(parent) as it:
+                matches = [
+                    Path(entry.path)
+                    for entry in it
+                    if entry.is_file()
+                    and fnmatch.fnmatchcase(entry.name, pattern)
+                    and Path(entry.name).suffix.lower() in _SUPPORTED_SUFFIXES
+                ]
+        except OSError:
+            continue
+
+        matches.sort(key=lambda q: q.name)
+        expanded.extend(matches)
+
+    return expanded
+
+
+# Lazy image reader that supports directories and lists of files
+def _lazy_imread(
+    filenames: str | Path | list[str | Path],
+    use_dask: bool | None = None,
+    stack: bool = True,
+) -> np.ndarray | da.Array | list[np.ndarray | da.Array]:
+    """Lazily reads one or more images with optional Dask support.
+
+    Resolves file paths using `_expand_image_paths`, ensuring consistent
+    handling of directories, glob patterns, and lists/tuples of paths.
+    Images are normalized to RGB and may be wrapped in Dask delayed
+    objects for lazy loading.
+
+    Behavior:
+        * If a single image is resolved:
+            - The image is read eagerly and returned as a NumPy array.
+        * If multiple images are resolved:
+            - The first image is read eagerly to determine shape and dtype.
+            - Subsequent images are loaded lazily via Dask unless
+              `use_dask=False`.
+            - Stacking behavior is controlled by `stack`.
+
+    Args:
+        filenames (str | Path | list[str | Path]):
+            File path(s), directory, or glob pattern(s) to load.
+        use_dask (bool | None, optional):
+            Whether to load images lazily using Dask.
+            Defaults to `True` when multiple files are found, otherwise
+            `False`.
+        stack (bool, optional):
+            If True, stack images along axis 0 into a single array.
+            If False, return a list of arrays or delayed arrays.
+            Defaults to True.
+
+    Returns:
+        np.ndarray | da.Array | list[np.ndarray | da.Array]:
+            Loaded image data. The return type depends on the number of
+            images found, the `use_dask` flag, and the `stack` option.
+
+    Raises:
+        ValueError: If no supported images are found.
+    """
+    expanded = _expand_image_paths(filenames)
+
+    if not expanded:
+        raise ValueError(f"No supported images were found for input: {filenames}")
+
+    if use_dask is None:
+        use_dask = len(expanded) > 1
+
+    images = []
+    first_shape = None
+    first_dtype = None
+
+    def make_delayed_array(fp: Path, first_shape: tuple[int, ...], first_dtype: np.dtype) -> da.Array:
+        """Create a dask array for a single file."""
+        return da.from_delayed(
+            delayed(_read_and_normalize)(filepath=fp, normalize_func=_normalize_to_rgb),
+            shape=first_shape,
+            dtype=first_dtype,
+        )
+
+    for fp in expanded:
+        if first_shape is None:
+            arr0 = _read_and_normalize(filepath=fp, normalize_func=_normalize_to_rgb)
+            first_shape = arr0.shape
+            first_dtype = arr0.dtype
+
+            if use_dask:
+                images.append(make_delayed_array(fp, first_shape, first_dtype))
+            else:
+                images.append(arr0)
+            continue
+
+        if use_dask:
+            images.append(make_delayed_array(fp, first_shape, first_dtype))
+        else:
+            images.append(_read_and_normalize(filepath=fp, normalize_func=_normalize_to_rgb))
+
+    if len(images) == 1:
+        return images[0]
+
+    try:
+        return da.stack(images) if use_dask and stack else (np.stack(images) if stack else images)
+    except ValueError as e:
+        raise ValueError(
+            "Cannot stack images with different shapes using NumPy. "
+            "Ensure all images have the same shape or set stack=False."
+        ) from e
+
+
+def _build_image_layer_kwargs(
+    *,
+    filepaths: list[Path],
+    dlc_meta: dict | None = None,
+    name: str = "images",
+) -> dict[str, Any]:
+    metadata = {
+        "paths": [canonicalize_path(fp, 3) for fp in filepaths],
+        "root": str(filepaths[0].parent),
+    }
+    if dlc_meta is not None:
+        metadata["dlc"] = dlc_meta
+
+    return {
+        "name": name,
+        "metadata": metadata,
+    }
+
+
+# Read images from a list of files or a glob/string path
+def read_images(
+    path: str | Path | list[str | Path],
+    *,
+    dlc_meta: dict | None = None,
+) -> list[LayerData]:
+    filepaths = _expand_image_paths(path)
+    if not filepaths:
+        raise OSError(f"No supported images were found in {path}")
+
+    filepaths = natsorted(filepaths, key=str)
+    kwargs = _build_image_layer_kwargs(filepaths=filepaths, dlc_meta=dlc_meta, name="images")
+
+    if len(filepaths) > 1:
+        data = _lazy_imread(filepaths, use_dask=True, stack=True)
+    else:
+        data = imread(str(filepaths[0]))
+
+    return [(data, kwargs, "image")]
+
+
+# =============================================================================
+# VIDEO (OpenCV; optional PyAV fallback)
+# =============================================================================
+
+
+def is_video(filename: str) -> bool:
+    return any(filename.lower().endswith(ext) for ext in SUPPORTED_VIDEOS)
+
+
+# Video reader using OpenCV
+class Video:
+    def __init__(self, video_path):
+        if not Path(video_path).is_file():
+            raise ValueError(f'Video path "{video_path}" does not point to a file.')
+
+        self.path = video_path
+        self.stream = cv2.VideoCapture(video_path)
+        if not self.stream.isOpened():
+            raise OSError("Video could not be opened.")
+
+        self._n_frames = int(self.stream.get(cv2.CAP_PROP_FRAME_COUNT))
+        self._width = int(self.stream.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self._height = int(self.stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self._frame = cv2.UMat(self._height, self._width, cv2.CV_8UC3)
+
+    def __len__(self):
+        return self._n_frames
+
+    @property
+    def width(self):
+        return self._width
+
+    @property
+    def height(self):
+        return self._height
+
+    def set_to_frame(self, ind):
+        ind = min(ind, len(self) - 1)
+        ind += 1  # Unclear why this is needed at all
+        self.stream.set(cv2.CAP_PROP_POS_FRAMES, ind)
+
+    def read_frame(self):
+        self.stream.retrieve(self._frame)
+        cv2.cvtColor(self._frame, cv2.COLOR_BGR2RGB, self._frame, 3)
+        return self._frame.get()
+
+    def close(self):
+        self.stream.release()
+
+
+def read_video(filename: str, opencv: bool = True, *, dlc_meta: dict | None = None):
+    if opencv:
+        stream = Video(filename)
+        # NOTE construct output shape tuple in (H, W, C) order to match read_frame() data
+        shape = stream.height, stream.width, 3
+
+        def _read_frame(ind):
+            stream.set_to_frame(ind)
+            return stream.read_frame()
+
+        lazy_reader = delayed(_read_frame)
+    else:  # pragma: no cover
+        from pims import PyAVReaderIndexed
+
+        try:
+            stream = PyAVReaderIndexed(filename)
+        except ImportError:
+            raise ImportError("`pip install av` to use the PyAV video reader.") from None
+
+        shape = stream.frame_shape
+        lazy_reader = delayed(stream.get_frame)
+
+    movie = da.stack([da.from_delayed(lazy_reader(i), shape=shape, dtype=np.uint8) for i in range(len(stream))])
+    elems = list(Path(filename).parts)
+    elems[-2] = "labeled-data"
+    elems[-1] = Path(elems[-1]).stem  # + Path(filename).suffix
+    root = str(Path(*elems))
+    params = {
+        "name": filename,
+        "metadata": {
+            "root": root,
+        },
+    }
+    if dlc_meta is not None:
+        params["metadata"]["dlc"] = dlc_meta
+
+    return [(movie, params, "image")]

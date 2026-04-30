@@ -1,12 +1,15 @@
 # test_misc.py
-import inspect
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from napari_deeplabcut import _reader, misc
+from napari_deeplabcut import misc
+from napari_deeplabcut.config.models import DLCHeaderModel
+from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows, merge_multiple_scorers
+from napari_deeplabcut.core.io import load_config
+from napari_deeplabcut.core.keypoints import build_color_cycle
 
 
 # ----------------------------
@@ -23,62 +26,6 @@ from napari_deeplabcut import _reader, misc
 def test_unsorted_unique(seq, expected):
     out = misc.unsorted_unique(seq)
     assert list(out) == expected
-
-
-# ----------------------------
-# canonicalize_path tests
-# ----------------------------
-@pytest.mark.parametrize(
-    "p, n, expected",
-    [
-        # basic POSIX cases
-        ("root/sub1/sub2/file.png", 3, "sub1/sub2/file.png"),
-        ("root/sub/file.png", 2, "sub/file.png"),
-        ("root/sub/file.png", 1, "file.png"),
-        ("a/b/c", 10, "a/b/c"),
-        (Path("a/b/c/d.txt"), 3, "b/c/d.txt"),
-        ("", 3, ""),
-        (".", 3, ""),
-        ("..", 3, ""),
-        ("/", 3, ""),
-        ("a/b/c/", 3, "a/b/c"),
-        # n <= 0 raises ValueError
-        ("a/b/c", 0, ValueError),
-        ("a/b/c/d", -1, ValueError),
-        # non-string coercion
-        (123, 3, "123"),
-        # Windows-style backslashes normalized to POSIX; last 3 components kept
-        (r"a\b\c\file.png", 3, "b/c/file.png"),
-        # Mixed separators: double backslash becomes empty path component after replace -> filtered out
-        (r"frames\\test\video0/img001.png", 3, "test/video0/img001.png"),
-    ],
-)
-def test_canonicalize_path_cases(p, n, expected):
-    # If expected is an Exception class, assert it is raised
-    is_exc_class = inspect.isclass(expected) and issubclass(expected, Exception)
-    if is_exc_class:
-        with pytest.raises(expected):
-            misc.canonicalize_path(p, n=n)
-        return
-
-    out = misc.canonicalize_path(p, n=n)
-    assert out == expected
-
-
-def test_canonicalize_path_converts_and_drops_backslashes():
-    # Dedicated check that backslashes are removed
-    out = misc.canonicalize_path(r"a\b\c\file.png", n=3)
-    assert "\\" not in out
-
-
-def test_canonicalize_path_exception_fallback_still_replaces_backslashes():
-    class Weird:
-        def __str__(self):
-            return r"x\y\z"
-
-    out = misc.canonicalize_path(Weird(), n=3)  # type: ignore[arg-type]
-    assert out == "x/y/z"
-    assert "\\" not in out
 
 
 # ----------------------------
@@ -308,7 +255,7 @@ def test_merge_multiple_scorers_no_likelihood(fake_keypoints):
     temp = fake_keypoints.copy(deep=True)
     temp.columns = temp.columns.set_levels(["you"], level="scorer")
     df = fake_keypoints.merge(temp, left_index=True, right_index=True)
-    df = misc.merge_multiple_scorers(df)
+    df = merge_multiple_scorers(df)
     pd.testing.assert_frame_equal(df, fake_keypoints)
 
 
@@ -324,7 +271,7 @@ def test_merge_multiple_scorers(fake_keypoints):
     fake_keypoints.iloc[:5] = np.nan
     temp.iloc[5:] = np.nan
     df = fake_keypoints.merge(temp, left_index=True, right_index=True)
-    df = misc.merge_multiple_scorers(df)
+    df = merge_multiple_scorers(df)
     pd.testing.assert_index_equal(df.columns, fake_keypoints.columns)
     assert not df.isna().any(axis=None)
 
@@ -335,13 +282,13 @@ def test_merge_multiple_scorers(fake_keypoints):
 def test_guarantee_multiindex_rows():
     fake_index = [f"labeled-data/subfolder_{i}/image_{j}" for i in range(3) for j in range(10)]
     df = pd.DataFrame(index=fake_index)
-    misc.guarantee_multiindex_rows(df)
+    guarantee_multiindex_rows(df)
     assert isinstance(df.index, pd.MultiIndex)
 
     # Substitute index with frame numbers
     frame_numbers = list(range(df.shape[0]))
     df.index = frame_numbers
-    misc.guarantee_multiindex_rows(df)
+    guarantee_multiindex_rows(df)
     assert df.index.to_list() == frame_numbers
 
 
@@ -350,14 +297,14 @@ def test_guarantee_multiindex_rows():
 # ----------------------------
 @pytest.mark.parametrize("n_colors", range(1, 11))
 def test_build_color_cycle(n_colors):
-    color_cycle = misc.build_color_cycle(n_colors)
+    color_cycle = build_color_cycle(n_colors)
     assert color_cycle.shape[0] == n_colors
     # Test whether all colors are different
     assert len(set(map(tuple, color_cycle))) == n_colors
 
 
 # ----------------------------
-# DLCHeader tests
+# DLCHeaderModel tests
 # ----------------------------
 def test_dlc_header():
     n_animals = 2
@@ -374,22 +321,22 @@ def test_dlc_header():
         ],
         names=["scorer", "individuals", "bodyparts", "coords"],
     )
-    header = misc.DLCHeader(fake_columns)
+    header = DLCHeaderModel(columns=fake_columns)
     assert header.scorer == scorer
-    header.scorer = "you"
-    assert header.scorer == "you"
-    assert header.individuals == animals
-    assert header.bodyparts == keypoints
-    assert header.coords == ["x", "y", "likelihood"]
+
+    header2 = header.with_scorer("you")
+    assert header2.scorer == "you"
+    # original header unchanged (functional)
+    assert header.scorer == scorer
 
 
 def test_dlc_header_from_config_multi(config_path):
-    config = _reader._load_config(config_path)
+    config = load_config(config_path)
     config["multianimalproject"] = True
     config["individuals"] = ["animal"]
     config["multianimalbodyparts"] = list("abc")
     config["uniquebodyparts"] = list("de")
-    header = misc.DLCHeader.from_config(config)
+    header = DLCHeaderModel.from_config(config)
     assert header.individuals != [""]
 
 
