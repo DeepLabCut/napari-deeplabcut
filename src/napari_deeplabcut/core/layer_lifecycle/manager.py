@@ -9,6 +9,7 @@ import numpy as np
 from napari.layers import Image, Layer, Points, Tracks
 from napari.utils.events import Event
 from napari.utils.history import update_save_history
+from napari.utils.notifications import show_error, show_warning
 from qtpy.QtCore import QObject, Signal
 
 from ...config.keybinds import install_points_layer_keybindings
@@ -82,6 +83,10 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
     adopted_existing_layers = Signal()
     layer_insert_processed = Signal(object)
     layer_remove_processed = Signal(object)
+
+    # Remap signals
+    remap_warning_requested = Signal(str)
+    remap_error_requested = Signal(str)
 
     # Session management
     session_conflict_rejected = Signal(str)  # if a new DLC folder is loaded on top of the current one
@@ -690,6 +695,30 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
             self._schedule_post_remove_refresh()
 
+    def _notify_remap_issue(
+        self,
+        *,
+        layer: Layer,
+        level: str,
+        message: str,
+        details: tuple[str, ...] | list[str] | None = None,
+    ) -> None:
+        """Show a user-facing remap notification."""
+        details = list(details or [])
+        text = f"{getattr(layer, 'name', 'Layer')}: {message}"
+        if details:
+            text += "\n\n" + "\n".join(details)
+
+        # Keep the status bar concise.
+        self.viewer.status = f"{getattr(layer, 'name', 'Layer')}: {message}"
+
+        if level == "error":
+            self.remap_error_requested.emit(text)
+            show_error(text)
+        else:
+            self.remap_warning_requested.emit(text)
+            show_warning(text)
+
     def _remap_frame_indices(self, layer: Any) -> None:
         """Lifecycle-owned remap of non-Image layer time/frame indices."""
         try:
@@ -761,12 +790,77 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 if isinstance(layer, Points):
                     mark_layer_presentation_changed(layer)
 
+            if res.is_ambiguous or (not res.applied and not res.accept_paths_update):
+                logger.warning(
+                    "Remap rejected for %s (depth=%s, mapped=%s): %s",
+                    getattr(layer, "name", str(layer)),
+                    res.depth_used,
+                    res.mapped_count,
+                    res.message,
+                )
+
+                self._notify_remap_issue(
+                    layer=layer,
+                    level="error",
+                    message=(
+                        "Could not safely align this annotation layer to the current image stack. "
+                        "The layer may refer to a different folder layout, stale paths, or a different frame order."
+                    ),
+                    details=[res.message, *res.warnings],
+                )
+
+                # Hide layers that could not be aligned.
+                # This avoids showing clearly misleading annotations.
+                if isinstance(layer, Points):
+                    self._set_layer_visible(layer, False)
+
+                return
+
+            if res.applied and res.warnings:
+                logger.warning(
+                    "Remap applied with warnings for %s (depth=%s, mapped=%s): %s | warnings=%s",
+                    getattr(layer, "name", str(layer)),
+                    res.depth_used,
+                    res.mapped_count,
+                    res.message,
+                    res.warnings,
+                )
+
+                self._notify_remap_issue(
+                    layer=layer,
+                    level="warning",
+                    message=(
+                        "Annotations were remapped to the current image stack, but the match was considered risky."
+                    ),
+                    details=[res.message, *res.warnings],
+                )
+
+            # Logging only for safe / benign cases
             if res.depth_used is None:
-                logger.debug("Remap skipped for %s: %s", getattr(layer, "name", str(layer)), res.message)
+                logger.debug(
+                    "Remap skipped for %s: %s",
+                    getattr(layer, "name", str(layer)),
+                    res.message,
+                )
+            elif res.applied:
+                logger.debug(
+                    "Remap applied for %s (depth=%s, mapped=%s): %s",
+                    getattr(layer, "name", str(layer)),
+                    res.depth_used,
+                    res.mapped_count,
+                    res.message,
+                )
+            elif res.accept_paths_update:
+                logger.debug(
+                    "Remap accepted-noop for %s (depth=%s, mapped=%s): %s",
+                    getattr(layer, "name", str(layer)),
+                    res.depth_used,
+                    res.mapped_count,
+                    res.message,
+                )
             else:
                 logger.debug(
-                    "Remap %s for %s (depth=%s, mapped=%s): %s",
-                    "applied" if res.changed else "accepted-noop",
+                    "Remap ended without changes for %s (depth=%s, mapped=%s): %s",
                     getattr(layer, "name", str(layer)),
                     res.depth_used,
                     res.mapped_count,
