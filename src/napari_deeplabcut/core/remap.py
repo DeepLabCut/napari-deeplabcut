@@ -78,8 +78,12 @@ def _remap_array(values: np.ndarray, idx_map: Mapping[int, int]) -> np.ndarray:
     except Exception:
         values_int = values.astype(int)
 
+    missing = [int(v) for v in values_int if int(v) not in idx_map]
+    if missing:
+        raise KeyError(f"Unmapped frame indices encountered during remap: {missing[:10]}")
+
     mapped = np.fromiter(
-        (idx_map.get(int(v), int(v)) for v in values_int),
+        (idx_map[int(v)] for v in values_int),
         dtype=values_int.dtype,
         count=len(values_int),
     )
@@ -92,6 +96,25 @@ def _find_duplicates(keys: list[str]) -> dict[str, int]:
     for k in keys:
         counts[k] = counts.get(k, 0) + 1
     return {k: c for k, c in counts.items() if c > 1}
+
+
+def _used_time_indices(data: Any, time_col: int) -> set[int]:
+    if data is None:
+        return set()
+
+    if isinstance(data, list):
+        used = set()
+        for verts in data:
+            arr = np.asarray(verts)
+            if arr.size == 0 or arr.ndim < 2 or arr.shape[1] <= time_col:
+                continue
+            used.update(int(v) for v in arr[:, time_col])
+        return used
+
+    arr = np.asarray(data)
+    if arr.size == 0 or arr.ndim < 2 or arr.shape[1] <= time_col:
+        return set()
+    return set(int(v) for v in arr[:, time_col])
 
 
 def build_frame_index_map(
@@ -267,6 +290,48 @@ def remap_layer_data_by_paths(
         if new_idx is not None:
             idx_map[old_idx] = new_idx
 
+    matched = set(idx_map.keys())
+    used = _used_time_indices(data, time_col)
+    unmapped_used = used - matched
+    mapped_used = used & matched
+
+    logger.debug(
+        "Remap used-frame coverage: depth=%s used=%s mapped_used=%s unmapped_used=%s "
+        "used_examples=%s unmapped_examples=%s",
+        depth,
+        len(used),
+        len(mapped_used),
+        len(unmapped_used),
+        list(mapped_used)[:10],
+        list(unmapped_used)[:10],
+    )
+
+    # Reject remap if any frame index actually used by the layer has no mapping.
+    # Otherwise we risk mixing remapped indices with untouched old indices.
+    if unmapped_used:
+        msg = "Rejected remap because some labeled frame indices have no mapping in the new image stack."
+        logger.warning(
+            "%s depth=%s unmapped_used_count=%s examples=%s",
+            msg,
+            depth,
+            len(unmapped_used),
+            list(unmapped_used)[:10],
+        )
+        return RemapResult(
+            changed=False,
+            applied=False,
+            accept_paths_update=False,
+            is_ambiguous=True,
+            depth_used=depth,
+            mapped_count=len(idx_map),
+            message=msg,
+            data=None,
+            warnings=(
+                f"Used frame indices without mapping at depth={depth}: "
+                f"{list(unmapped_used)[:10]}{'...' if len(unmapped_used) > 10 else ''}",
+            ),
+        )
+
     identity_mappings = sum(1 for old_i, new_i in idx_map.items() if old_i == new_i)
     logger.debug(
         "Remap mapping stats: depth=%s old=%s new=%s mapped=%s identity=%s overlap=%s",
@@ -277,6 +342,15 @@ def remap_layer_data_by_paths(
         identity_mappings,
         len(overlap),
     )
+    for old_i in sorted(idx_map)[:10]:
+        new_i = idx_map[old_i]
+        logger.debug(
+            "Remap example: old_idx=%s -> new_idx=%s | old_path=%r | new_path=%r",
+            old_i,
+            new_i,
+            old_paths[old_i],
+            new_paths[new_i],
+        )
 
     if not idx_map:
         return RemapResult(
@@ -324,9 +398,9 @@ def remap_layer_data_by_paths(
         logger.warning("Remap may be ambiguous/risky: %s", w)
 
     # Reject ambiguous basename-only remaps.
-    ambiguous_depth1 = depth == 1 and (bool(dup_old) or bool(dup_new) or non_bijective)
-    if ambiguous_depth1:
-        msg = "Rejected ambiguous depth=1 remap; keeping original frame indices and paths."
+    is_ambiguous = bool(dup_old) or bool(dup_new) or non_bijective
+    if is_ambiguous:
+        msg = f"Rejected ambiguous remap at depth={depth}; keeping original frame indices and paths."
         logger.warning(msg)
         return RemapResult(
             changed=False,
