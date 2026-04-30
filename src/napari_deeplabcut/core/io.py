@@ -7,6 +7,14 @@ Includes:
 - Lazy image reading with Dask support
 - Video reading with OpenCV and optional PyAV fallback
 - Superkeypoints diagram and JSON loading
+
+NOTE: write_hdf could use some refactoring to split responsibilities more cleanly
+A potentially interesting direction could be to move toward a more schema-centric
+architecture, where objects own and guarantee their own validity, and writing
+is just a translation of already-valid objects to disk. This would also make
+validation more consistent across reads and writes.
+Config I/O is an especially good candidate for this, the logic is a bit spread right now
+(here, config_sync.py, and the sidecar JSON)
 """
 # src/napari_deeplabcut/core/io.py
 
@@ -17,6 +25,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
+from glob import has_magic
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -61,15 +70,9 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # Supported formats (shared by image/video readers)
 # -----------------------------------------------------------------------------
-_GLOB_MAGIC = set("*?[")
 _SUPPORTED_SUFFIXES = {ext.lower() for ext in SUPPORTED_IMAGES}
 DLC_CANONICAL_H5_KEY = "df_with_missing"  # TODO use this key instead of str literal in all places
 FALLBACK_H5_KEYS = ["keypoints"]
-
-
-def _has_glob_magic(name: str) -> bool:
-    return any(ch in name for ch in _GLOB_MAGIC)
-
 
 # =============================================================================
 # CONFIG (YAML)
@@ -78,8 +81,12 @@ def _has_glob_magic(name: str) -> bool:
 
 def load_config(config_path: str):
     # NOTE: intentionally minimal; callers own error handling
-    with open(config_path) as file:
-        return yaml.safe_load(file)
+    try:
+        with open(config_path) as file:
+            return yaml.safe_load(file)
+    except yaml.YAMLError as e:
+        logger.warning(f"Invalid YAML in config file {config_path}: {e}")
+        raise e
 
 
 # Read config file and create keypoint layer metadata
@@ -492,6 +499,11 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             guarantee_multiindex_rows(df_new)
             guarantee_multiindex_rows(df_old)
         except Exception:
+            logger.warning(
+                "Could not guarantee multiindex rows for new or existing data; "
+                "attempting to harmonize indices for merge.",
+                exc_info=True,
+            )
             pass
 
         df_new, df_old = harmonize_keypoint_row_index(df_new, df_old)
@@ -639,7 +651,7 @@ def _expand_image_paths(path: str | Path | list[str | Path] | tuple[str | Path, 
             expanded.extend(files)
             continue
 
-        if not _has_glob_magic(p.name):
+        if not has_magic(p.name):
             if p.is_file() and p.suffix.lower() in _SUPPORTED_SUFFIXES:
                 expanded.append(p)
             continue
