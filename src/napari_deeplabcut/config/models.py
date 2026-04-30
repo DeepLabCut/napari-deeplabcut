@@ -250,7 +250,10 @@ class DLCHeaderModel(BaseModel):
                 else:
                     out.append((tt[0], "", tt[1], tt[2]))
             else:
-                raise ValueError(f"Unknown header shape: {tt}. HDF file seems to be corrupted.")
+                raise ValueError(
+                    f"Unsupported DLC header shape {tt!r} (got {len(tt)} levels; "
+                    f"expected 3 or 4; names={self.names!r})."
+                )
 
         return out
 
