@@ -878,7 +878,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 self._notify_remap_issue(
                     layer=layer,
                     level="warning",
-                    message=("Annotations were remapped to the current image stack, but the match had diagnostics."),
+                    message=("Annotations were remapped to the current image stack, but the match had issues."),
                     details=[res.message, *res.warnings],
                 )
 
