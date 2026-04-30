@@ -13,38 +13,6 @@ from napari_deeplabcut.core.schemas import DLCHeaderModel, PointsWriteInputModel
 logger = logging.getLogger(__name__)
 
 
-def _is_logical_single_animal_header(
-    header: DLCHeaderModel | None,
-    *,
-    is_ma_project: bool | None = None,
-) -> bool:
-    """
-    Determine whether the target should be written in canonical single-animal format.
-
-    Priority
-    --------
-    1) Explicit project-mode signal from DLC config (is_ma_project)
-    2) Original header shape
-    3) Blank-individuals fallback
-    """
-    if is_ma_project is not None:
-        return not bool(is_ma_project)
-
-    if header is None:
-        return False
-
-    # Canonical/original SA header
-    if header.nlevels == 3:
-        return True
-
-    # Fallback for normalized 4-level headers that still represent SA
-    if header.nlevels == 4:
-        inds = [str(i) for i in header.individuals if str(i) != ""]
-        return len(inds) == 0
-
-    return False
-
-
 def restore_dlc_on_disk_header_shape(
     df: pd.DataFrame, header: DLCHeaderModel, *, is_ma_project: bool | None = None
 ) -> pd.DataFrame:
@@ -65,7 +33,12 @@ def restore_dlc_on_disk_header_shape(
 
     df_out = df.copy()
 
-    if _is_logical_single_animal_header(header, is_ma_project=is_ma_project):
+    # If is_ma_project is not provided, let the header report the format.
+    if is_ma_project is None:
+        is_ma_project = not header.is_single_animal
+
+    # If the logical target is single-animal, collapse an empty 'individuals' level.
+    if not is_ma_project:
         # If the normalized dataframe has an empty individuals level, collapse it.
         if df_out.columns.nlevels == 4 and "individuals" in (df_out.columns.names or []):
             inds = pd.Index(df_out.columns.get_level_values("individuals")).astype(str)

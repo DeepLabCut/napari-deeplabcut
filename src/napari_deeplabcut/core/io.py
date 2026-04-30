@@ -64,6 +64,7 @@ logger = logging.getLogger(__name__)
 _GLOB_MAGIC = set("*?[")
 _SUPPORTED_SUFFIXES = {ext.lower() for ext in SUPPORTED_IMAGES}
 DLC_CANONICAL_H5_KEY = "df_with_missing"  # TODO use this key instead of str literal in all places
+FALLBACK_H5_KEYS = ["keypoints"]
 
 
 def _has_glob_magic(name: str) -> bool:
@@ -124,15 +125,14 @@ def _read_hdf_any_key(file: Path) -> pd.DataFrame:
     try:
         return pd.read_hdf(file, key=DLC_CANONICAL_H5_KEY)
     except (KeyError, ValueError):
-        logger.warning(f"Key '{DLC_CANONICAL_H5_KEY}' not found in {file}. Trying to read without specifying a key.")
-    fallback_keys = ["keypoints"]
-    for k in fallback_keys:
+        logger.warning(f"Key '{DLC_CANONICAL_H5_KEY}' not found in {file}. Trying fallback keys.")
+    for k in FALLBACK_H5_KEYS:
         try:
             return pd.read_hdf(file, key=k)
         except (KeyError, ValueError):
             logger.warning(f"Key '{k}' not found in {file}.")
     logger.warning(
-        f"None of the expected keys {fallback_keys + [DLC_CANONICAL_H5_KEY]} were found in {file}. "
+        f"None of the expected keys {FALLBACK_H5_KEYS + [DLC_CANONICAL_H5_KEY]} were found in {file}. "
         "Falling back to default read_hdf which may raise its own error if no valid key is found."
     )
     return pd.read_hdf(file)  # Let pandas guess instead
@@ -469,6 +469,8 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             out = candidates[0]
         else:
             scorer = target_scorer or pts_meta.header.scorer
+            if scorer is None:
+                raise ValueError("Scorer is required to write DLC keypoints.")
             out = root_path / f"CollectedData_{scorer}.h5"
     else:
         out = Path(out_path)

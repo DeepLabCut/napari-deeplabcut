@@ -196,8 +196,9 @@ class DLCHeaderModel(BaseModel):
     # Core shape helpers (pandas-free)
     # ----------------------------
     @property
-    def nlevels(self) -> int:
-        return len(self.columns[0]) if self.columns else 0
+    def is_single_animal(self) -> bool:
+        canon = self._canonical_4()
+        return bool(canon) and all(t[1] == "" for t in canon)
 
     def _level_index(self, name: str) -> int | None:
         if not self.names:
@@ -249,11 +250,10 @@ class DLCHeaderModel(BaseModel):
                 else:
                     out.append((tt[0], "", tt[1], tt[2]))
             else:
-                # unknown shape: do best-effort padding/truncation
-                scorer = tt[0] if len(tt) > 0 else ""
-                bodypart = tt[1] if len(tt) > 1 else ""
-                coords = tt[-1] if len(tt) > 0 else ""
-                out.append((scorer, "", bodypart, coords))
+                raise ValueError(
+                    f"Unsupported DLC header shape {tt!r} (got {len(tt)} levels; "
+                    f"expected 3 or 4; names={self.names!r})."
+                )
 
         return out
 
