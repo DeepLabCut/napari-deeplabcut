@@ -64,7 +64,11 @@ Documentation = "https://github.com/DeepLabCut/napari-deeplabcut#README.md"
 [tool.setuptools]
 include-package-data = true
 [tool.setuptools.package-data]
-napari_deeplabcut = [ "napari.yaml" ]
+napari_deeplabcut = [
+  "napari.yaml",
+  "assets/black/*.png",
+  "assets/white/*.png",
+]
 [tool.setuptools.package-dir]
 "" = "src"
 [tool.setuptools.packages.find]
