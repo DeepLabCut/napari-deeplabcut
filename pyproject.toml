@@ -47,6 +47,7 @@ napari-deeplabcut = "napari_deeplabcut:napari.yaml"
 [project.optional-dependencies]
 dev = [
   "pillow",
+  "pre-commit",
   "pytest",
   "pytest-cov",
   "pytest-qt",
