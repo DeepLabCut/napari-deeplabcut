@@ -10,9 +10,9 @@ license = "LGPL-3.0-only"
 license-files = [ "LICENSE" ]
 requires-python = ">=3.10"
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 4 - Beta",
   "Framework :: napari",
-  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.10",
@@ -47,6 +47,7 @@ napari-deeplabcut = "napari_deeplabcut:napari.yaml"
 [project.optional-dependencies]
 dev = [
   "pillow",
+  "pre-commit",
   "pytest",
   "pytest-cov",
   "pytest-qt",
@@ -64,7 +65,11 @@ Documentation = "https://github.com/DeepLabCut/napari-deeplabcut#README.md"
 [tool.setuptools]
 include-package-data = true
 [tool.setuptools.package-data]
-napari_deeplabcut = [ "napari.yaml" ]
+napari_deeplabcut = [
+  "napari.yaml",
+  "assets/black/*.png",
+  "assets/white/*.png",
+]
 [tool.setuptools.package-dir]
 "" = "src"
 [tool.setuptools.packages.find]
