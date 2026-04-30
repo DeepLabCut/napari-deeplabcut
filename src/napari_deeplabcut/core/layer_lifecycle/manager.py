@@ -834,30 +834,30 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 return
 
             if res.warnings and res.paths_updated:
-                logger.warning(
-                    "Remap completed with warnings for %s "
-                    "(outcome=%s, reason=%s, depth=%s, mapped=%s): %s | warnings=%s",
-                    getattr(layer, "name", str(layer)),
-                    res.outcome.value,
-                    res.reason.value,
-                    res.depth_used,
-                    res.mapped_count,
-                    res.message,
-                    res.warnings,
-                )
-
-            if res.outcome is RemapOutcome.APPLIED_PARTIAL:
-                logger.warning(
-                    "Partial remap applied for %s "
-                    "(depth=%s, mapped=%s, dropped_rows=%s, dropped_frames=%s): %s | warnings=%s",
-                    getattr(layer, "name", str(layer)),
-                    res.depth_used,
-                    res.mapped_count,
-                    res.dropped_row_count,
-                    res.dropped_frame_indices,
-                    res.message,
-                    res.warnings,
-                )
+                if res.outcome is not RemapOutcome.APPLIED_PARTIAL:
+                    logger.warning(
+                        "Remap completed with warnings for %s "
+                        "(outcome=%s, reason=%s, depth=%s, mapped=%s): %s | warnings=%s",
+                        getattr(layer, "name", str(layer)),
+                        res.outcome.value,
+                        res.reason.value,
+                        res.depth_used,
+                        res.mapped_count,
+                        res.message,
+                        res.warnings,
+                    )
+                else:
+                    logger.warning(
+                        "Partial remap applied for %s "
+                        "(depth=%s, mapped=%s, dropped_rows=%s, dropped_frames=%s): %s | warnings=%s",
+                        getattr(layer, "name", str(layer)),
+                        res.depth_used,
+                        res.mapped_count,
+                        res.dropped_row_count,
+                        res.dropped_frame_indices,
+                        res.message,
+                        res.warnings,
+                    )
 
                 self._notify_remap_issue(
                     layer=layer,

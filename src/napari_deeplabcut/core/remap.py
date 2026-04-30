@@ -164,14 +164,6 @@ def _filter_and_remap_array(
                 "were not found in the new image stack."
             ),
         )
-    if not np.any(keep_mask):
-        return (
-            None,
-            int(drop_mask.sum()),
-            tuple(sorted(set(t))),
-            RemapReason.NO_MAPPABLE_ROWS,
-            ("No rows could be mapped to the new image stack."),
-        )
 
     return kept, 0, (), RemapReason.REMAPPED, "Remapped all rows."
 
@@ -460,7 +452,10 @@ def remap_layer_data_by_paths(
        - no duplicate keys in old paths,
        - no duplicate keys in new paths,
        - no non-bijective old-index -> new-index mapping.
-    3. Every frame index actually used by `data[:, time_col]` has a mapping.
+    3. In strict mode, every frame index actually used by `data[:, time_col]`
+    must have a mapping.
+    In partial mode, rows whose frame index has no mapping may be dropped and
+    reported as APPLIED_PARTIAL.
     4. The data has a valid time column when data remapping is required.
 
     Assumptions
@@ -486,8 +481,8 @@ def remap_layer_data_by_paths(
         All relevant annotation rows were remapped.
     - APPLIED_PARTIAL:
         Some rows were dropped during a permissive/partial remap.
-        This high-level function currently prefers rejection over partial remap
-        when used frame indices are unmapped.
+        Currently rejects unmapped used frame indices in strict mode,
+        and drops/reports them in partial mode.
     - REJECTED:
         A remap was possible in principle, but unsafe due to ambiguity or
         unmapped used frame indices.
@@ -622,11 +617,21 @@ def remap_layer_data_by_paths(
     old_path_coverage = len(matched_old) / max(1, len(old_keys))
     new_path_coverage = len(matched_new) / max(1, len(new_keys))
     if old_path_coverage < _WARN_OLD_PATH_COVERAGE:
-        warnings.append(
-            f"Low old-path coverage at depth={depth}: {old_path_coverage:.2f} "
-            f"({len(matched_old)} of {len(old_keys)} old paths map to the new stack). "
-            "This may be still normal for DLC annotations if all used frame indices are mapped."
-        )
+        if allow_partial and unmapped_used:
+            logger.debug(
+                "Low old-path coverage during partial remap at depth=%s: %.2f "
+                "(%s of %s old paths map). This is expected when dropping unmappable rows.",
+                depth,
+                old_path_coverage,
+                len(idx_map),
+                len(old_keys),
+            )
+        else:
+            warnings.append(
+                f"Low old-path coverage at depth={depth}: {old_path_coverage:.2f} "
+                f"({len(idx_map)} of {len(old_keys)} old paths map to the new stack). "
+                "This may still be normal for DLC annotations if all used frame indices are mapped."
+            )
 
     logger.debug(
         "Remap new-path coverage: %.2f (%s of %s new paths represented by old paths). "
