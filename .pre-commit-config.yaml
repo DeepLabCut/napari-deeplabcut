@@ -7,6 +7,7 @@ repos:
       # These are safe to run in both local & CI (they don't require "fix vs check" split)
       - id: check-added-large-files
         stages: [pre-commit, manual]
+        args: ['--maxkb=1024']
       - id: check-yaml
         stages: [pre-commit, manual]
       - id: check-toml

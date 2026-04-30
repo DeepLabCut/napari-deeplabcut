@@ -37,6 +37,7 @@ dependencies = [
   "qtpy>=2.4",
   "scikit-image",
   "scipy",
+  "shiboken6>=6.4.2",
   "tables",
 ]
 [[project.authors]]
@@ -47,6 +48,7 @@ napari-deeplabcut = "napari_deeplabcut:napari.yaml"
 [project.optional-dependencies]
 dev = [
   "pillow",
+  "pre-commit",
   "pytest",
   "pytest-cov",
   "pytest-qt",
