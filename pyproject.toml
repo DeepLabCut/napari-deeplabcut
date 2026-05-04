@@ -27,7 +27,7 @@ dynamic = [ "version" ]
 dependencies = [
   "dask-image",
   "matplotlib>=3.3",
-  "napari>=0.6.6",
+  "napari==0.6.6",
   "natsort",
   "numpy>=1.18.5,<2",
   "opencv-python-headless",
