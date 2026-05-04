@@ -54,6 +54,12 @@ pip install git+https://github.com/DeepLabCut/napari-deeplabcut.git
 
 ## Usage
 
+### Main documentation
+
+Please see the [official plugin documentation](https://deeplabcut.github.io/DeepLabCut/docs/gui/napari/basic_usage.html) for detailed usage instructions.
+
+### Standalone usage
+
 Start napari:
 
 ```bash
@@ -311,7 +317,7 @@ pip install -e .
 If you need development dependencies as well, use the project’s `dev` extra:
 
 ```bash
-pip install -e .[dev]
+pip install -e .[dev] # includes pre-commit
 ```
 
 ## License
