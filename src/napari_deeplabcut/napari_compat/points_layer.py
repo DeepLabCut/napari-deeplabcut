@@ -361,7 +361,7 @@ def make_paste_data(controls, *, store):
         if not filtered_clipboard:
             return
 
-        npoints = len(layer_self._view_data)
+        len(layer_self._view_data)
         totpoints = len(layer_self.data)
 
         data = _offset_pasted_data(
@@ -382,9 +382,12 @@ def make_paste_data(controls, *, store):
         _paste_colors(layer_self, filtered_clipboard)
 
         n_new = len(filtered_clipboard["data"])
-        layer_self._selected_view = list(range(npoints, npoints + n_new))
-        layer_self._selected_data = set(range(totpoints, totpoints + n_new))
         layer_self.refresh()
+
+        try:
+            layer_self.selected_data = set(range(totpoints, totpoints + n_new))
+        except Exception:
+            logger.debug("Failed to update selected_data after paste", exc_info=True)
 
         try:
             controls._schedule_recolor(_store.layer)
