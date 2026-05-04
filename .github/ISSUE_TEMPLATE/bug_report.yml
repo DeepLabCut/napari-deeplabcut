@@ -1,0 +1,112 @@
+name: Bug report
+description: Report a bug or unexpected behavior in napari-deeplabcut
+type: bug
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report an issue!
+
+        **Before submitting**, please try to generate a debug log using the built-in tool:
+
+        **napari top bar menu → Help → Generate napari-dlc log**
+
+        This produces a copy-pastable log with useful environment and plugin information to help us investigate the issue.
+        If you cannot generate a log, please let us know as well.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I am using the latest released version of napari-deeplabcut. If not, I have provided minimal installation information, e.g. via the debug log.
+          required: true
+        - label: I have searched existing issues to avoid duplicates
+          required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Bug summary
+      description: Briefly describe what went wrong.
+      placeholder: e.g. Saving annotations fails when machine labels are present...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Please provide a minimal, reproducible sequence of steps. The more specific you can be, the better we can help you!
+      placeholder: |
+        1. Open napari
+        2. Load labeled data folder via drag-and-drop
+        3. Modify keypoints
+        4. Click Save
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: false
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened instead?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: data_type
+    attributes:
+      label: Data type
+      description: What kind of DeepLabCut data are you working with?
+      options:
+        - Single-animal
+        - Multi-animal
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: launch_context
+    attributes:
+      label: How are you running napari?
+      description: The plugin can be opened via the DLC GUI, or used directly in napari.
+      options:
+        - Standalone napari (launched directly)
+        - From within the DeepLabCut GUI
+        - Other (please specify below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: other_context
+    attributes:
+      label: Additional context
+      description: Any additional details that might help (project structure, recent changes, etc.).
+
+  - type: textarea
+    id: debug_log
+    attributes:
+      label: Debug log (highly recommended)
+      description: |
+        Please paste the output from:
+
+        **Help → Generate napari-dlc log**
+
+        You can paste it directly here. If it is very long, feel free to attach it as a text file.
+
+  - type: markdown
+    attributes:
+      value: |
+        **Note:** If the issue involves file paths or private data, feel free to redact sensitive information.
+        We may ask to share your `config.yaml` file or a sample of your data if it would help us investigate,
+        but this is never a hard requirement. However, our investigation will be much easier with a reproducible example.
