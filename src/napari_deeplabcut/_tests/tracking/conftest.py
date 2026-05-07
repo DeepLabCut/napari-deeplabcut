@@ -1,8 +1,11 @@
 # src/napari_deeplabcut/_tests/tracking/conftest.py
+from __future__ import annotations
+from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
 
+from napari_deeplabcut.tracking.core import utils as tracking_utils
 from napari_deeplabcut.tracking.core.data import TrackingModelInputs, TrackingWorkerData, TrackingWorkerOutput
 from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS, RawModelOutputs, TrackingModel
 
@@ -217,3 +220,80 @@ def track_worker_inputs():
         keypoint_features=keypoint_features,
         backward_tracking=False,
     )
+
+
+# -----------------------------------------------------------------------------#
+# Pure-unit helpers for tracking.core.utils tests
+# -----------------------------------------------------------------------------#
+
+
+@pytest.fixture
+def fake_points_layer_factory():
+    """
+    Factory for minimal fake Points-like objects used by pure unit tests.
+
+    We intentionally avoid real napari viewer/qtbot setup here.
+    """
+
+    def _make(
+        *,
+        data,
+        features=None,
+        properties=None,
+        name="layer",
+    ):
+        return SimpleNamespace(
+            data=np.asarray(data, dtype=float),
+            features=features,
+            properties=properties or {},
+            name=name,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def dummy_viewer_factory():
+    """
+    Factory for minimal fake Viewer-like objects with only `.layers`.
+    """
+
+    def _make(*, layers):
+        return SimpleNamespace(layers=list(layers))
+
+    return _make
+
+
+@pytest.fixture
+def tracking_manager_factory():
+    """
+    Factory for minimal fake LayerLifecycleManager-like objects used by naming tests.
+    """
+
+    def _make(
+        *,
+        tracking_layers=(),
+        source_name_by_layer_id=None,
+    ):
+        tracking_ids = {id(layer) for layer in tracking_layers}
+        source_name_by_layer_id = dict(source_name_by_layer_id or {})
+
+        return SimpleNamespace(
+            is_tracking_result_layer=lambda layer: id(layer) in tracking_ids,
+            tracking_result_source_layer_name=lambda layer: source_name_by_layer_id.get(id(layer)),
+        )
+
+    return _make
+
+
+@pytest.fixture
+def patch_tracking_manager(monkeypatch):
+    """
+    Patch tracking.core.utils.get_or_create_layer_manager(...) for pure unit tests.
+    """
+
+    def _patch(manager):
+        monkeypatch.setattr(tracking_utils, "get_or_create_layer_manager", lambda _viewer: manager)
+        return manager
+
+    return _patch
