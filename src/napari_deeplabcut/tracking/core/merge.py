@@ -9,8 +9,18 @@ import numpy as np
 import pandas as pd
 from napari.layers import Points
 
+from .utils import (
+    coord_columns_for_data,
+    duplicate_slot_row_indices,
+    extract_layer_data_and_features,
+    format_coords_text,
+    format_frame_label,
+    format_slot_label,
+    normalize_points_layer_for_tracking,
+    sorted_int_tuple,
+)
+
 _COORD_TOL_DEFAULT = 1e-6
-_NAPARI_COORD_COLS = ("frame", "y", "x")
 
 
 class TrackingMergePolicy(str, Enum):
@@ -135,13 +145,13 @@ def preview_tracking_merge(
 
     # Invalid source rows are skipped but do not invalidate the whole preview.
     source_invalid_mask = ~source_df["_is_valid_merge_row"].astype(bool)
-    invalid_source_indices = tuple(_sorted_int_tuple(source_df.loc[source_invalid_mask, "_source_row_index"]))
+    invalid_source_indices = tuple(sorted_int_tuple(source_df.loc[source_invalid_mask, "_source_row_index"]))
 
     source_valid = source_df.loc[~source_invalid_mask].copy()
     target_valid = target_df.loc[target_df["_is_valid_merge_row"].astype(bool)].copy()
 
     # Duplicate semantic slots are integrity issues, not ordinary merge conflicts.
-    src_dup = _duplicate_slot_row_indices(source_valid)
+    src_dup = duplicate_slot_row_indices(source_valid)
     if src_dup:
         return _invalid_preview(
             source_layer=source_layer,
@@ -157,7 +167,7 @@ def preview_tracking_merge(
             has_target_duplicates=False,
         )
 
-    tgt_dup = _duplicate_slot_row_indices(target_valid)
+    tgt_dup = duplicate_slot_row_indices(target_valid)
     if tgt_dup:
         return _invalid_preview(
             source_layer=source_layer,
@@ -197,10 +207,10 @@ def preview_tracking_merge(
         if len(conflicts) < max_conflicts:
             conflicts.append(
                 TrackingMergeConflictEntry(
-                    frame_label=_format_frame_label(row["frame"]),
-                    keypoint_label=_format_slot_label(row["label"], row["id"]),
-                    source_coords_text=_format_coords_text(row),
-                    target_coords_text=_format_coords_text(target_row),
+                    frame_label=format_frame_label(row["frame"]),
+                    keypoint_label=format_slot_label(row["label"], row["id"]),
+                    source_coords_text=format_coords_text(row),
+                    target_coords_text=format_coords_text(target_row),
                 )
             )
 
@@ -272,7 +282,7 @@ def apply_tracking_merge(
     if current_target_fp != preview.target_fingerprint:
         raise ValueError("Target layer changed after preview was built; please refresh the merge preview.")
 
-    target_data, target_features = _extract_layer_data_and_features(target_layer)
+    target_data, target_features = extract_layer_data_and_features(target_layer)
 
     if not preview.append_source_indices:
         return target_data.copy(), target_features.copy()
@@ -287,7 +297,7 @@ def apply_tracking_merge(
     if append_df.empty:
         return target_data.copy(), target_features.copy()
 
-    coord_cols = _coord_columns_for_data(target_data)
+    coord_cols = coord_columns_for_data(target_data)
     missing_coord_cols = [col for col in coord_cols if col not in append_df.columns]
     if missing_coord_cols:
         raise ValueError(
@@ -313,7 +323,7 @@ def apply_tracking_merge(
 
 def fingerprint_points_layer(layer: Points) -> LayerFingerprint:
     """Return a lightweight fingerprint for stale preview detection."""
-    data, features = _extract_layer_data_and_features(layer)
+    data, features = extract_layer_data_and_features(layer)
     return LayerFingerprint(
         layer_name=str(getattr(layer, "name", "")),
         n_rows=int(len(data)),
@@ -364,31 +374,6 @@ def _invalid_preview(
     )
 
 
-def _extract_layer_data_and_features(layer: Points) -> tuple[np.ndarray, pd.DataFrame]:
-    data = np.asarray(getattr(layer, "data", np.empty((0, 3))), dtype=float)
-    if data.ndim != 2:
-        raise ValueError(f"Points layer {getattr(layer, 'name', layer)!r} has invalid data shape: {data.shape!r}")
-
-    features = getattr(layer, "features", None)
-    if isinstance(features, pd.DataFrame):
-        feat_df = features.reset_index(drop=True).copy()
-    elif features is None:
-        feat_df = pd.DataFrame(index=range(len(data)))
-    else:
-        feat_df = pd.DataFrame(features).reset_index(drop=True).copy()
-
-    if len(feat_df) != len(data):
-        props = getattr(layer, "properties", {}) or {}
-        feat_df = pd.DataFrame(props).reset_index(drop=True)
-        if len(feat_df) != len(data):
-            raise ValueError(
-                f"Points layer {getattr(layer, 'name', layer)!r} has mismatched data/features lengths: "
-                f"{len(data)} rows vs {len(feat_df)} features."
-            )
-
-    return data.copy(), feat_df
-
-
 def _normalize_points_layer_for_merge(layer: Points) -> pd.DataFrame:
     """
     Return a normalized dataframe for semantic merge classification.
@@ -404,104 +389,7 @@ def _normalize_points_layer_for_merge(layer: Points) -> pd.DataFrame:
     - _source_row_index
     - _is_valid_merge_row
     """
-    data, feat_df = _extract_layer_data_and_features(layer)
-
-    coord_cols = _coord_columns_for_data(data)
-    coords = pd.DataFrame(data[:, : len(coord_cols)], columns=coord_cols)
-
-    df = pd.concat([coords.reset_index(drop=True), feat_df.reset_index(drop=True)], axis=1)
-    df["_source_row_index"] = np.arange(len(df), dtype=int)
-
-    # Canonical semantic columns used for merge identity
-    df["frame"] = _coerce_frame_series(df.get("frame"))
-    df["y"] = pd.to_numeric(df["y"], errors="coerce")
-    df["x"] = pd.to_numeric(df["x"], errors="coerce")
-    df["label"] = _pick_semantic_series(df, layer, primary="label", fallback_prop="label")
-    df["id"] = _pick_semantic_series(df, layer, primary="id", fallback_prop="id").map(_normalize_slot_id)
-
-    finite_xy = np.isfinite(df[["y", "x"]].to_numpy(dtype=float)).all(axis=1)
-    valid_frame = df["frame"].notna()
-    valid_label = df["label"].astype(str).str.strip().ne("")
-    df["_is_valid_merge_row"] = finite_xy & valid_frame & valid_label
-
-    df["_slot_key"] = [
-        _build_slot_key(frame=f, slot_id=i, label=l) if ok else None
-        for f, i, l, ok in zip(
-            df["frame"].tolist(),
-            df["id"].tolist(),
-            df["label"].tolist(),
-            df["_is_valid_merge_row"].tolist(),
-            strict=False,
-        )
-    ]
-
-    return df
-
-
-def _coord_columns_for_data(data: np.ndarray) -> list[str]:
-    if data.ndim != 2 or data.shape[1] < 3:
-        raise ValueError(f"Expected Points data with at least 3 columns [frame, y, x], got {data.shape!r}.")
-    if data.shape[1] == 3:
-        return list(_NAPARI_COORD_COLS)
-    extra = [f"coord_{i}" for i in range(3, data.shape[1])]
-    return [*_NAPARI_COORD_COLS, *extra]
-
-
-def _pick_semantic_series(
-    df: pd.DataFrame,
-    layer: Points,
-    *,
-    primary: str,
-    fallback_prop: str,
-) -> pd.Series:
-    if primary in df.columns:
-        out = df[primary]
-        if len(out) == len(df):
-            return out.reset_index(drop=True)
-
-    props = getattr(layer, "properties", {}) or {}
-    vals = props.get(fallback_prop, None)
-    if vals is None:
-        return pd.Series([""] * len(df), index=df.index, dtype=object)
-
-    arr = np.asarray(vals, dtype=object).ravel()
-    if len(arr) != len(df):
-        return pd.Series([""] * len(df), index=df.index, dtype=object)
-
-    return pd.Series(arr, index=df.index, dtype=object)
-
-
-def _coerce_frame_series(series: pd.Series | Any) -> pd.Series:
-    if isinstance(series, pd.Series):
-        out = pd.to_numeric(series, errors="coerce")
-    else:
-        out = pd.to_numeric(pd.Series(series), errors="coerce")
-    return out.round().astype("Float64")
-
-
-def _normalize_slot_id(value: Any) -> str:
-    if value in ("", None):
-        return ""
-    try:
-        if np.isnan(value):
-            return ""
-    except Exception:
-        pass
-    text = str(value).strip()
-    return "" if text.lower() == "nan" else text
-
-
-def _build_slot_key(*, frame: Any, slot_id: Any, label: Any) -> tuple[int, str, str]:
-    return (int(frame), _normalize_slot_id(slot_id), str(label).strip())
-
-
-def _duplicate_slot_row_indices(df: pd.DataFrame) -> tuple[int, ...]:
-    if df.empty:
-        return ()
-    dup_mask = df.duplicated(subset=["_slot_key"], keep=False)
-    if not dup_mask.any():
-        return ()
-    return tuple(_sorted_int_tuple(df.loc[dup_mask, "_source_row_index"]))
+    return normalize_points_layer_for_tracking(layer, valid_flag_column="_is_valid_merge_row")
 
 
 def _rows_have_same_coords(source_row: dict[str, Any], target_row: dict[str, Any], *, tol: float) -> bool:
@@ -536,26 +424,3 @@ def _build_append_features_from_source(
         append_features[col] = source_rows[col].reset_index(drop=True)
 
     return append_features
-
-
-def _sorted_int_tuple(values: pd.Series | list[Any] | tuple[Any, ...]) -> tuple[int, ...]:
-    return tuple(sorted(int(v) for v in values))
-
-
-def _format_frame_label(frame: Any) -> str:
-    try:
-        return str(int(frame))
-    except Exception:
-        return str(frame)
-
-
-def _format_slot_label(label: Any, slot_id: Any) -> str:
-    slot_id = _normalize_slot_id(slot_id)
-    label = str(label)
-    return f"{label} (id: {slot_id})" if slot_id else label
-
-
-def _format_coords_text(row: dict[str, Any] | pd.Series) -> str:
-    x = float(row["x"])
-    y = float(row["y"])
-    return f"(x={x:.3f}, y={y:.3f})"

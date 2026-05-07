@@ -16,6 +16,7 @@ from qtpy.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QSlider,
@@ -35,20 +36,24 @@ from napari_deeplabcut.config.keybinds import (
     TRACK_FORWARD,
     TRACK_FORWARD_END,
 )
-
-# Keybinds
 from napari_deeplabcut.config.settings import TRACKING_SHORTCUTS_ENABLED
 from napari_deeplabcut.core.keypoints import KeypointStore
 from napari_deeplabcut.core.layer_lifecycle import get_or_create_layer_manager
-from napari_deeplabcut.tracking.core.data import (
+from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
+
+from .core.data import (
     TrackingWorkerData,
     TrackingWorkerOutput,
     add_query_identity_columns,
     build_tracking_result_metadata,
 )
-from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS
-from napari_deeplabcut.tracking.ui.merger import TrackingMergeWorkflow
-from napari_deeplabcut.tracking.ui.worker import TrackingWorker
+from .core.models import AVAILABLE_TRACKERS
+from .core.refine import apply_delete_tracking_points_in_future, preview_delete_tracking_points_in_future
+from .core.utils import (
+    make_tracking_iteration_name,
+)
+from .ui.merger import TrackingMergeWorkflow
+from .ui.worker import TrackingWorker
 
 logger = logging.getLogger(__name__)
 # TODO @C-Achard: fix the sliders sync not firing (on existing layers ?)
@@ -101,8 +106,10 @@ class TrackingControls(QWidget):
         self._tracking_bothway_button = QPushButton()
         self._tracking_bothway_button.clicked.connect(self.track_bothway)
         self._tracking_progress_bar = QProgressBar()
-        ## Merge results controls
-        self._merge_tracked_button = QPushButton("Merge tracked points…")
+        ## Refine/Merge results controls
+        self._delete_selected_future_button = QPushButton("Delete selected points in future frames")
+        self._delete_selected_future_button.clicked.connect(self._delete_selected_in_future_frames)
+        self._merge_tracked_button = QPushButton("Merge tracked points")
         self._merge_tracked_button.clicked.connect(self._open_merge_workflow)
 
         # Controls
@@ -289,7 +296,10 @@ class TrackingControls(QWidget):
 
         keypoints = np.asarray(layer.data[mask], dtype=float).copy()
         if len(keypoints) == 0:
-            raise ValueError(f"No keypoints found on reference frame {ref_frame_idx}.")
+            raise ValueError(
+                f"No keypoints found on reference frame {ref_frame_idx}. "
+                "Did you select the right layer and frame in the tracking controls?"
+            )
 
         layer_features = layer.features
         if isinstance(layer_features, pd.DataFrame):
@@ -330,17 +340,32 @@ class TrackingControls(QWidget):
         if source is None:
             raise ValueError("No source keypoint layer selected.")
 
+        # Preserve original DLC source provenance even if tracking is launched
+        # from an existing tracking-result layer.
+        source_layer_name = (
+            self.lifecycle_manager.tracking_result_source_layer_name(source)
+            if self.lifecycle_manager.is_tracking_result_layer(source)
+            else None
+        ) or source.name
+
         metadata = build_tracking_result_metadata(
             source.metadata,
             tracker_name=tracker_name,
-            source_layer_name=source.name,
+            source_layer_name=source_layer_name,
             query_frame=ref_frame_idx,
+        )
+
+        layer_name = make_tracking_iteration_name(
+            viewer=self._viewer,
+            tracker_name=tracker_name,
+            ref_frame_idx=ref_frame_idx,
+            source=source,
         )
 
         layer = self._viewer.add_points(
             data=keypoints,
             features=features,
-            name=f"[Tracked] {source.name}",
+            name=layer_name,
             metadata=metadata,
         )
 
@@ -423,9 +448,9 @@ class TrackingControls(QWidget):
                 return
 
             max_frames = self.video_layer.data.shape[0] - 1
-            logger.debug(f"Updating tracking controls for video with {max_frames + 1} frames.")
+            # logger.debug(f"Updating tracking controls for video with {max_frames + 1} frames.")
             current_frame = max(0, min(self._viewer.dims.current_step[0], max_frames))
-            logger.debug(f"Current frame: {current_frame}")
+            # logger.debug(f"Current frame: {current_frame}")
             self._reference_spinbox.setRange(0, max_frames)
             self._reference_spinbox.setValue(current_frame)
 
@@ -566,41 +591,6 @@ class TrackingControls(QWidget):
         self._tracking_progress_bar.setValue(self._tracking_progress_bar.maximum())
         self._tracking_progress_bar.setFormat("%p% Stopped")
 
-    # def add_keypoints_to_layer(self, new_keypoints: np.ndarray, new_features: pd.DataFrame):
-    #     current_keypoints = self.keypoint_layer.data
-    #     current_features: pd.DataFrame = self.keypoint_layer.features
-
-    #     # Extract unique frame indices
-    #     unique_frames = np.sort(np.unique(np.concatenate((current_keypoints[:, 0], new_keypoints[:, 0]))))
-
-    #     merged_keypoints = []
-    #     merged_features = []
-
-    #     for frame in unique_frames:
-    #         # Select keypoints and features for the current frame
-    #         frame_old_keypoints = current_keypoints[current_keypoints[:, 0] == frame]
-    #         frame_old_features = current_features[current_keypoints[:, 0] == frame]
-
-    #         frame_new_keypoints = new_keypoints[new_keypoints[:, 0] == frame]
-    #         frame_new_features = new_features[new_keypoints[:, 0] == frame]
-
-    #         # Here we can add custom logic when merging. Right now we overwrite any previous keypoints.
-    #         if len(frame_new_keypoints) > 0:
-    #             # If there are keypoints in new, take those
-    #             merged_keypoints.append(frame_new_keypoints)
-    #             merged_features.append(frame_new_features)
-    #         else:
-    #             merged_keypoints.append(frame_old_keypoints)
-    #             merged_features.append(frame_old_features)
-
-    #     merged_keypoints = (
-    #         np.vstack(merged_keypoints) if merged_keypoints else np.empty((0, current_keypoints.shape[1]))
-    #     )
-    #     merged_feature_df = pd.concat(merged_features, ignore_index=True)
-
-    #     self.keypoint_layer.data = merged_keypoints
-    #     self.keypoint_layer.features = merged_feature_df
-
     @Slot()
     def track_forward(self):
         ref_frame_idx: int = self._reference_spinbox.value()
@@ -707,6 +697,100 @@ class TrackingControls(QWidget):
             reference_frame_index=int(ref_frame_idx),
         )
         self.trackingRequested.emit(tracking_data)
+
+    def _delete_selected_in_future_frames(self) -> None:
+        active = self._viewer.layers.selection.active
+        if not isinstance(active, Points) or not self.lifecycle_manager.is_tracking_result_layer(active):
+            napari.utils.notifications.show_warning("Select an active tracking-result Points layer first.")
+            return
+
+        selected = getattr(active, "selected_data", None) or set()
+        if not selected:
+            napari.utils.notifications.show_warning("Select one or more tracked points on the current frame first.")
+            return
+
+        anchor_frame = int(self._viewer.dims.current_step[0])
+
+        try:
+            preview = preview_delete_tracking_points_in_future(
+                active,
+                selected_indices=selected,
+                anchor_frame=anchor_frame,
+            )
+        except Exception as e:
+            logger.exception("Failed to build future-delete preview")
+            napari.utils.notifications.show_warning(f"Could not prepare future deletion:\n{e}")
+            return
+
+        if not preview.is_valid:
+            message = preview.invalid_reason or "Cannot delete future tracked points."
+
+            if preview.ambiguous_slot_frames:
+                lines = []
+                for frame, slot_id, label in preview.ambiguous_slot_frames[:8]:
+                    if slot_id:
+                        lines.append(f"frame {frame}: {label} (id: {slot_id})")
+                    else:
+                        lines.append(f"frame {frame}: {label}")
+                if len(preview.ambiguous_slot_frames) > 8:
+                    lines.append(f"… and {len(preview.ambiguous_slot_frames) - 8} more")
+
+                message = f"{message}\n\nAmbiguous future rows:\n" + "\n".join(lines)
+
+            napari.utils.notifications.show_warning(message)
+            return
+
+        if preview.n_rows_to_delete <= 0:
+            napari.utils.notifications.show_info("No matching tracked points were found in future frames.")
+            return
+
+        message = (
+            f"Delete {preview.n_rows_to_delete} tracked point"
+            f"{'s' if preview.n_rows_to_delete != 1 else ''} "
+            f'from future frames in "{preview.layer_name}"?\n\n'
+            f"{preview.n_selected_slot_keys} selected keypoint "
+            f"on frame {preview.anchor_frame} will be used as the reference.\n"
+            f"Only exact matches in future frames (after {preview.anchor_frame}) will be removed.\n"
+            "Selected points on the current frame will be kept so you may correct them and run tracking again."
+        )
+
+        answer = QMessageBox.question(
+            self,
+            "Delete tracked points in future frames",
+            message,
+            QMessageBox.Cancel | QMessageBox.Ok,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Ok:
+            return
+
+        try:
+            new_data, new_features = apply_delete_tracking_points_in_future(
+                active,
+                preview=preview,
+            )
+        except Exception as e:
+            logger.exception("Failed to apply future-delete action")
+            napari.utils.notifications.show_warning(f"Could not delete future tracked points:\n{e}")
+            return
+
+        try:
+            active.data = new_data
+            active.features = new_features
+            self._viewer.layers.selection.active = active
+            mark_layer_presentation_changed(active)
+        except Exception as e:
+            logger.exception("Failed to write refined tracking data back to layer")
+            napari.utils.notifications.show_warning(
+                f"The tracked points were computed for deletion but could not be applied:\n{e}"
+            )
+            return
+
+        self._viewer.status = (
+            f"Removed {preview.n_rows_to_delete} tracked point"
+            f"{'s' if preview.n_rows_to_delete != 1 else ''} "
+            f'from future frames in "{preview.layer_name}"'
+        )
 
     def _open_merge_workflow(self):
         active = self._viewer.layers.selection.active
@@ -865,8 +949,19 @@ class TrackingControls(QWidget):
         self.layout().addLayout(tracking_controls_layout)
         self.layout().addWidget(self._tracking_progress_bar)
 
-        # Merge controls
+        # Refine / merge controls
         self.layout().addSpacing(16)
+        self._delete_selected_future_button.setStyleSheet(
+            """
+            QPushButton {
+                border-radius: 6px;
+                padding: 6px 12px;
+                margin-top: 4px;
+            }
+            """
+        )
+        self.layout().addWidget(self._delete_selected_future_button)
+
         self._merge_tracked_button.setStyleSheet(
             """
             QPushButton {
