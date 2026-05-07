@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+from napari.layers import Points
 
 from napari_deeplabcut.tracking.core import utils as tracking_utils
 from napari_deeplabcut.tracking.core.data import TrackingModelInputs, TrackingWorkerData, TrackingWorkerOutput
@@ -225,27 +226,109 @@ def track_worker_inputs():
 # -----------------------------------------------------------------------------#
 # Pure-unit helpers for tracking.core.utils tests
 # -----------------------------------------------------------------------------#
-
-
 @pytest.fixture
 def fake_points_layer_factory():
     """
-    Factory for minimal fake Points-like objects used by pure unit tests.
+    Flexible factory for tracking core tests.
 
-    We intentionally avoid real napari viewer/qtbot setup here.
+    Behavior
+    --------
+    - Returns a real napari Points layer for "normal" merge/refine-style tests
+      when labels are provided and no explicit `features=` payload is passed.
+    - Returns a lightweight fake Points-like object (SimpleNamespace) when tests
+      need full control over `features` / `properties`, including intentionally
+      invalid or mismatched states used by utils tests.
+    - The behavior can be forced with `real=True` or `real=False`.
+
+    Supported patterns
+    ------------------
+    1) Real Points layer:
+        fake_points_layer_factory(
+            name="target",
+            data=[[0, 10, 20]],
+            labels=["nose"],
+            ids=[""],
+            extra_features={"likelihood": [0.9]},
+        )
+
+    2) Fake Points-like layer:
+        fake_points_layer_factory(
+            data=[[0, 10, 20], [1, 11, 21]],
+            features=pd.DataFrame({"label": ["nose"]}),  # mismatched on purpose
+            properties={"label": np.array(["nose", "tail"], dtype=object)},
+        )
     """
 
     def _make(
         *,
         data,
-        features=None,
-        properties=None,
-        name="layer",
+        name: str = "layer",
+        labels=None,
+        ids=None,
+        extra_features: dict | None = None,
+        features: pd.DataFrame | dict | None = None,
+        properties: dict | None = None,
+        real: bool | None = None,
     ):
+        data_arr = np.asarray(data, dtype=float)
+        props = dict(properties or {})
+
+        # Caller explicitly supplied features payload
+        explicit_features = features is not None
+
+        if explicit_features:
+            if isinstance(features, pd.DataFrame):
+                feat_df = features.copy()
+            else:
+                feat_df = pd.DataFrame(features)
+        elif labels is not None:
+            if ids is None:
+                ids = [""] * len(labels)
+
+            feat_df = pd.DataFrame(
+                {
+                    "label": list(labels),
+                    "id": list(ids),
+                }
+            )
+
+            if extra_features:
+                for key, values in extra_features.items():
+                    feat_df[key] = list(values)
+        else:
+            feat_df = None
+
+        # Auto mode:
+        # - if explicit features are provided, use fake object unless caller forces real=True
+        #   (this supports mismatched/broken states for utils tests)
+        # - if labels are provided normally, use real Points
+        if real is None:
+            real = (labels is not None) and (not explicit_features)
+
+        if real:
+            if feat_df is None:
+                feat_df = pd.DataFrame(index=range(len(data_arr)))
+
+            layer = Points(
+                data=data_arr,
+                features=feat_df,
+                name=name,
+            )
+
+            # Best-effort property override for tests that want explicit properties too
+            if props:
+                try:
+                    layer.properties = props
+                except Exception:
+                    pass
+
+            return layer
+
+        # Fake minimal object for pure-unit tests that need invalid/flexible state
         return SimpleNamespace(
-            data=np.asarray(data, dtype=float),
-            features=features,
-            properties=properties or {},
+            data=data_arr,
+            features=feat_df,
+            properties=props,
             name=name,
         )
 

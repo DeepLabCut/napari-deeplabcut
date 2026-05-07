@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import numpy as np
+from dataclasses import replace
 import pandas as pd
 import pytest
-from napari.layers import Points
 
 from napari_deeplabcut.tracking.core.merge import (
     LayerFingerprint,
@@ -14,48 +14,8 @@ from napari_deeplabcut.tracking.core.merge import (
     preview_tracking_merge,
 )
 
-
-def _make_points_layer(
-    *,
-    name: str,
-    data,
-    labels,
-    ids=None,
-    extra_features: dict | None = None,
-) -> Points:
-    """
-    Build a minimal Points layer suitable for merge tests.
-
-    Notes
-    -----
-    napari Points coordinates are expected in [frame, y, x] order.
-    """
-    data = np.asarray(data, dtype=float)
-
-    if ids is None:
-        ids = [""] * len(labels)
-
-    features = pd.DataFrame(
-        {
-            "label": list(labels),
-            "id": list(ids),
-        }
-    )
-
-    if extra_features:
-        for key, values in extra_features.items():
-            features[key] = list(values)
-
-    layer = Points(
-        data=data,
-        features=features,
-        name=name,
-    )
-    return layer
-
-
-def test_fingerprint_points_layer_uses_name_row_count_and_feature_columns():
-    layer = _make_points_layer(
+def test_fingerprint_points_layer_uses_name_row_count_and_feature_columns(fake_points_layer_factory):
+    layer = fake_points_layer_factory(
         name="tracked",
         data=[
             [0, 10, 20],
@@ -75,8 +35,8 @@ def test_fingerprint_points_layer_uses_name_row_count_and_feature_columns():
     )
 
 
-def test_preview_invalid_when_source_and_target_are_same_layer():
-    layer = _make_points_layer(
+def test_preview_invalid_when_source_and_target_are_same_layer(fake_points_layer_factory):
+    layer = fake_points_layer_factory(
         name="same",
         data=[[0, 10, 20]],
         labels=["nose"],
@@ -90,10 +50,13 @@ def test_preview_invalid_when_source_and_target_are_same_layer():
     assert preview.n_appendable == 0
     assert preview.n_conflicts == 0
     assert preview.n_identical == 0
+    assert preview.n_overwriteable == 0
+    assert preview.conflicts == ()
+    assert preview.overwrites == ()
 
 
-def test_preview_classifies_append_identical_conflict_and_invalid_rows():
-    target = _make_points_layer(
+def test_preview_classifies_append_identical_conflict_and_invalid_rows(fake_points_layer_factory):
+    target = fake_points_layer_factory(
         name="target",
         data=[
             [0, 10, 20],  # nose @ frame 0
@@ -103,7 +66,7 @@ def test_preview_classifies_append_identical_conflict_and_invalid_rows():
         ids=["", ""],
     )
 
-    source = _make_points_layer(
+    source = fake_points_layer_factory(
         name="source",
         data=[
             [0, 10, 20],  # identical to target nose
@@ -124,13 +87,16 @@ def test_preview_classifies_append_identical_conflict_and_invalid_rows():
     assert preview.n_identical == 1
     assert preview.n_conflicts == 1
     assert preview.n_appendable == 1
+    assert preview.n_overwriteable == 0
     assert preview.n_invalid_source == 1
 
     assert preview.identical_source_indices == (0,)
     assert preview.conflict_source_indices == (1,)
+    assert preview.overwrite_source_indices == ()
     assert preview.append_source_indices == (2,)
     assert preview.invalid_source_indices == (3,)
 
+    assert preview.overwrites == ()
     assert len(preview.conflicts) == 1
     conflict = preview.conflicts[0]
     assert conflict.frame_label == "0"
@@ -140,15 +106,15 @@ def test_preview_classifies_append_identical_conflict_and_invalid_rows():
     assert conflict.target_coords_text == "(x=40.000, y=30.000)"
 
 
-def test_preview_invalid_when_source_contains_duplicate_semantic_slots():
-    target = _make_points_layer(
+def test_preview_invalid_when_source_contains_duplicate_semantic_slots(fake_points_layer_factory):
+    target = fake_points_layer_factory(
         name="target",
         data=[[0, 10, 20]],
         labels=["nose"],
         ids=[""],
     )
 
-    source = _make_points_layer(
+    source = fake_points_layer_factory(
         name="source",
         data=[
             [0, 10, 20],
@@ -166,15 +132,15 @@ def test_preview_invalid_when_source_contains_duplicate_semantic_slots():
     assert "duplicate semantic slots" in (preview.invalid_reason or "").lower()
 
 
-def test_preview_invalid_when_target_contains_duplicate_semantic_slots():
-    source = _make_points_layer(
+def test_preview_invalid_when_target_contains_duplicate_semantic_slots(fake_points_layer_factory):
+    source = fake_points_layer_factory(
         name="source",
         data=[[0, 10, 20]],
         labels=["nose"],
         ids=[""],
     )
 
-    target = _make_points_layer(
+    target = fake_points_layer_factory(
         name="target",
         data=[
             [0, 10, 20],
@@ -192,8 +158,8 @@ def test_preview_invalid_when_target_contains_duplicate_semantic_slots():
     assert "duplicate semantic slots" in (preview.invalid_reason or "").lower()
 
 
-def test_apply_tracking_merge_appends_only_missing_rows_and_preserves_target_schema():
-    target = _make_points_layer(
+def test_apply_tracking_merge_appends_only_missing_rows_and_preserves_target_schema(fake_points_layer_factory):
+    target = fake_points_layer_factory(
         name="target",
         data=[
             [0, 10, 20],  # existing identical slot
@@ -206,7 +172,7 @@ def test_apply_tracking_merge_appends_only_missing_rows_and_preserves_target_sch
         },
     )
 
-    source = _make_points_layer(
+    source = fake_points_layer_factory(
         name="source",
         data=[
             [0, 10, 20],  # identical -> skipped
@@ -226,6 +192,8 @@ def test_apply_tracking_merge_appends_only_missing_rows_and_preserves_target_sch
     assert preview.n_identical == 1
     assert preview.n_appendable == 1
     assert preview.append_source_indices == (1,)
+    assert preview.n_overwriteable == 0
+    assert preview.overwrite_source_indices == ()
 
     new_data, new_features = apply_tracking_merge(
         source_layer=source,
@@ -254,8 +222,8 @@ def test_apply_tracking_merge_appends_only_missing_rows_and_preserves_target_sch
     assert pd.isna(new_features.loc[1, "valid"])
 
 
-def test_apply_tracking_merge_returns_target_copy_when_nothing_appendable():
-    target = _make_points_layer(
+def test_apply_tracking_merge_returns_target_copy_when_nothing_appendable(fake_points_layer_factory):
+    target = fake_points_layer_factory(
         name="target",
         data=[[0, 10, 20]],
         labels=["nose"],
@@ -263,7 +231,7 @@ def test_apply_tracking_merge_returns_target_copy_when_nothing_appendable():
         extra_features={"likelihood": [0.9]},
     )
 
-    source = _make_points_layer(
+    source = fake_points_layer_factory(
         name="source",
         data=[[0, 10, 20]],  # identical only
         labels=["nose"],
@@ -274,6 +242,7 @@ def test_apply_tracking_merge_returns_target_copy_when_nothing_appendable():
     preview = preview_tracking_merge(source, target)
     assert preview.is_valid is True
     assert preview.n_appendable == 0
+    assert preview.n_overwriteable == 0
     assert preview.n_identical == 1
 
     new_data, new_features = apply_tracking_merge(
@@ -294,14 +263,14 @@ def test_apply_tracking_merge_returns_target_copy_when_nothing_appendable():
     assert new_features is not target.features
 
 
-def test_apply_tracking_merge_raises_for_invalid_preview():
-    source = _make_points_layer(
+def test_apply_tracking_merge_raises_for_invalid_preview(fake_points_layer_factory):
+    source = fake_points_layer_factory(
         name="source",
         data=[[0, 10, 20]],
         labels=["nose"],
         ids=[""],
     )
-    target = _make_points_layer(
+    target = fake_points_layer_factory(
         name="target",
         data=[[0, 10, 20]],
         labels=["nose"],
@@ -319,15 +288,15 @@ def test_apply_tracking_merge_raises_for_invalid_preview():
         )
 
 
-def test_apply_tracking_merge_detects_stale_source_preview_when_layer_name_changes():
-    source = _make_points_layer(
+def test_apply_tracking_merge_detects_stale_source_preview_when_layer_name_changes(fake_points_layer_factory):
+    source = fake_points_layer_factory(
         name="source",
         data=[[1, 50, 60]],
         labels=["tail"],
         ids=[""],
         extra_features={"likelihood": [0.8]},
     )
-    target = _make_points_layer(
+    target = fake_points_layer_factory(
         name="target",
         data=[[0, 10, 20]],
         labels=["nose"],
@@ -350,15 +319,15 @@ def test_apply_tracking_merge_detects_stale_source_preview_when_layer_name_chang
         )
 
 
-def test_apply_tracking_merge_detects_stale_target_preview_when_feature_columns_change():
-    source = _make_points_layer(
+def test_apply_tracking_merge_detects_stale_target_preview_when_feature_columns_change(fake_points_layer_factory):
+    source = fake_points_layer_factory(
         name="source",
         data=[[1, 50, 60]],
         labels=["tail"],
         ids=[""],
         extra_features={"likelihood": [0.8]},
     )
-    target = _make_points_layer(
+    target = fake_points_layer_factory(
         name="target",
         data=[[0, 10, 20]],
         labels=["nose"],
@@ -388,15 +357,15 @@ def test_apply_tracking_merge_detects_stale_target_preview_when_feature_columns_
         )
 
 
-def test_preview_uses_id_in_semantic_slot_identity():
-    target = _make_points_layer(
+def test_preview_uses_id_in_semantic_slot_identity(fake_points_layer_factory):
+    target = fake_points_layer_factory(
         name="target",
         data=[[0, 10, 20]],
         labels=["nose"],
         ids=["animal-1"],
     )
 
-    source = _make_points_layer(
+    source = fake_points_layer_factory(
         name="source",
         data=[
             [0, 10, 20],  # same frame/label, but different id -> appendable, not identical/conflict
@@ -411,17 +380,18 @@ def test_preview_uses_id_in_semantic_slot_identity():
     assert preview.n_appendable == 1
     assert preview.n_identical == 0
     assert preview.n_conflicts == 0
+    assert preview.n_overwriteable == 0
 
 
-def test_preview_tolerance_controls_identical_vs_conflict():
-    target = _make_points_layer(
+def test_preview_tolerance_controls_identical_vs_conflict(fake_points_layer_factory):
+    target = fake_points_layer_factory(
         name="target",
         data=[[0, 10.0, 20.0]],
         labels=["nose"],
         ids=[""],
     )
 
-    source = _make_points_layer(
+    source = fake_points_layer_factory(
         name="source",
         data=[[0, 10.0000004, 20.0000004]],
         labels=["nose"],
@@ -431,7 +401,243 @@ def test_preview_tolerance_controls_identical_vs_conflict():
     preview_loose = preview_tracking_merge(source, target, coord_tolerance=1e-3)
     assert preview_loose.n_identical == 1
     assert preview_loose.n_conflicts == 0
+    assert preview_loose.n_overwriteable == 0
 
     preview_strict = preview_tracking_merge(source, target, coord_tolerance=1e-9)
     assert preview_strict.n_identical == 0
     assert preview_strict.n_conflicts == 1
+    assert preview_strict.n_overwriteable == 0
+    
+def test_preview_overwrite_policy_classifies_mismatches_as_overwriteable_not_conflicts(fake_points_layer_factory):
+    target = fake_points_layer_factory(
+        name="target",
+        data=[
+            [0, 10, 20],  # identical slot
+            [0, 30, 40],  # differing slot -> overwriteable
+        ],
+        labels=["nose", "tail"],
+        ids=["", ""],
+    )
+
+    source = fake_points_layer_factory(
+        name="source",
+        data=[
+            [0, 10, 20],  # identical
+            [0, 35, 45],  # overwriteable
+            [1, 50, 60],  # appendable
+            [2, 70, 80],  # invalid because label is blank
+        ],
+        labels=["nose", "tail", "nose", ""],
+        ids=["", "", "", ""],
+    )
+
+    preview = preview_tracking_merge(
+        source,
+        target,
+        policy=TrackingMergePolicy.OVERWRITE_EXISTING,
+    )
+
+    assert preview.is_valid is True
+    assert preview.policy is TrackingMergePolicy.OVERWRITE_EXISTING
+
+    assert preview.n_source_rows == 4
+    assert preview.n_identical == 1
+    assert preview.n_conflicts == 0
+    assert preview.n_overwriteable == 1
+    assert preview.n_appendable == 1
+    assert preview.n_invalid_source == 1
+
+    assert preview.identical_source_indices == (0,)
+    assert preview.conflict_source_indices == ()
+    assert preview.overwrite_source_indices == (1,)
+    assert preview.append_source_indices == (2,)
+    assert preview.invalid_source_indices == (3,)
+
+    assert preview.conflicts == ()
+    assert len(preview.overwrites) == 1
+
+    overwrite = preview.overwrites[0]
+    assert overwrite.frame_label == "0"
+    assert "tail" in overwrite.keypoint_label
+    assert overwrite.source_coords_text == "(x=45.000, y=35.000)"
+    assert overwrite.target_coords_text == "(x=40.000, y=30.000)"
+    
+def test_apply_tracking_merge_overwrite_policy_overwrites_existing_and_appends_missing(fake_points_layer_factory):
+    target = fake_points_layer_factory(
+        name="target",
+        data=[
+            [0, 10, 20],  # identical slot
+            [0, 30, 40],  # overwriteable slot
+        ],
+        labels=["nose", "tail"],
+        ids=["", ""],
+        extra_features={
+            "likelihood": [0.95, 0.50],
+            "valid": [True, False],  # target-owned column
+        },
+    )
+
+    source = fake_points_layer_factory(
+        name="source",
+        data=[
+            [0, 10, 20],  # identical -> unchanged
+            [0, 35, 45],  # overwrite existing tail
+            [1, 50, 60],  # append new tail on frame 1
+        ],
+        labels=["nose", "tail", "tail"],
+        ids=["", "", ""],
+        extra_features={
+            "likelihood": [0.95, 0.80, 0.77],
+            "tracking_visible": [True, True, True],  # must not leak
+        },
+    )
+
+    preview = preview_tracking_merge(
+        source,
+        target,
+        policy=TrackingMergePolicy.OVERWRITE_EXISTING,
+    )
+
+    assert preview.is_valid is True
+    assert preview.n_identical == 1
+    assert preview.n_overwriteable == 1
+    assert preview.n_appendable == 1
+    assert preview.n_conflicts == 0
+
+    new_data, new_features = apply_tracking_merge(
+        source_layer=source,
+        target_layer=target,
+        preview=preview,
+    )
+
+    # Same number of target rows, plus one appended row
+    assert new_data.shape == (3, 3)
+
+    # Row 0 unchanged (identical)
+    np.testing.assert_allclose(new_data[0], np.array([0, 10, 20], dtype=float))
+
+    # Row 1 overwritten in place
+    np.testing.assert_allclose(new_data[1], np.array([0, 35, 45], dtype=float))
+
+    # Row 2 appended
+    np.testing.assert_allclose(new_data[2], np.array([1, 50, 60], dtype=float))
+
+    # Target schema remains authoritative
+    assert list(new_features.columns) == ["label", "id", "likelihood", "valid"]
+    assert "tracking_visible" not in new_features.columns
+
+    # Overwritten row should take shared feature values from source
+    assert new_features.loc[1, "label"] == "tail"
+    assert new_features.loc[1, "id"] == ""
+    assert new_features.loc[1, "likelihood"] == pytest.approx(0.80)
+
+    # Target-only column should be preserved on overwritten row
+    assert bool(new_features.loc[1, "valid"]) is False
+
+    # Appended row should copy shared columns only
+    assert new_features.loc[2, "label"] == "tail"
+    assert new_features.loc[2, "id"] == ""
+    assert new_features.loc[2, "likelihood"] == pytest.approx(0.77)
+
+    # Target-only column remains NA/default on appended row
+    assert pd.isna(new_features.loc[2, "valid"])
+    
+def test_apply_tracking_merge_overwrite_policy_can_overwrite_without_appending(fake_points_layer_factory):
+    target = fake_points_layer_factory(
+        name="target",
+        data=[[0, 30, 40]],
+        labels=["tail"],
+        ids=[""],
+        extra_features={"likelihood": [0.50]},
+    )
+
+    source = fake_points_layer_factory(
+        name="source",
+        data=[[0, 35, 45]],
+        labels=["tail"],
+        ids=[""],
+        extra_features={"likelihood": [0.80]},
+    )
+
+    preview = preview_tracking_merge(
+        source,
+        target,
+        policy=TrackingMergePolicy.OVERWRITE_EXISTING,
+    )
+
+    assert preview.is_valid is True
+    assert preview.n_appendable == 0
+    assert preview.n_overwriteable == 1
+    assert preview.n_conflicts == 0
+
+    new_data, new_features = apply_tracking_merge(
+        source_layer=source,
+        target_layer=target,
+        preview=preview,
+    )
+
+    assert new_data.shape == (1, 3)
+    np.testing.assert_allclose(new_data[0], np.array([0, 35, 45], dtype=float))
+    assert new_features.loc[0, "label"] == "tail"
+    assert new_features.loc[0, "likelihood"] == pytest.approx(0.80)
+    
+def test_apply_tracking_merge_rejects_unknown_policy_even_if_preview_object_is_mutated(fake_points_layer_factory):
+    source = fake_points_layer_factory(
+        name="source",
+        data=[[1, 50, 60]],
+        labels=["tail"],
+        ids=[""],
+    )
+    target = fake_points_layer_factory(
+        name="target",
+        data=[[0, 10, 20]],
+        labels=["nose"],
+        ids=[""],
+    )
+
+    preview = preview_tracking_merge(source, target)
+    assert preview.is_valid is True
+
+    bad_preview = replace(preview, policy="bad-policy")
+
+    with pytest.raises(ValueError, match="Unsupported merge policy"):
+        apply_tracking_merge(
+            source_layer=source,
+            target_layer=target,
+            preview=bad_preview,
+        )
+        
+def test_preview_overwrite_policy_respects_tolerance_for_identical_vs_overwriteable(fake_points_layer_factory):
+    target = fake_points_layer_factory(
+        name="target",
+        data=[[0, 10.0, 20.0]],
+        labels=["nose"],
+        ids=[""],
+    )
+
+    source = fake_points_layer_factory(
+        name="source",
+        data=[[0, 10.0000004, 20.0000004]],
+        labels=["nose"],
+        ids=[""],
+    )
+
+    preview_loose = preview_tracking_merge(
+        source,
+        target,
+        policy=TrackingMergePolicy.OVERWRITE_EXISTING,
+        coord_tolerance=1e-3,
+    )
+    assert preview_loose.n_identical == 1
+    assert preview_loose.n_overwriteable == 0
+    assert preview_loose.n_conflicts == 0
+
+    preview_strict = preview_tracking_merge(
+        source,
+        target,
+        policy=TrackingMergePolicy.OVERWRITE_EXISTING,
+        coord_tolerance=1e-9,
+    )
+    assert preview_strict.n_identical == 0
+    assert preview_strict.n_overwriteable == 1
+    assert preview_strict.n_conflicts == 0
