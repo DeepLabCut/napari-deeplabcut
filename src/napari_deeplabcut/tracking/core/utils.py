@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import napari
 import numpy as np
 import pandas as pd
 from napari.layers import Points
+
+from napari_deeplabcut.core.layer_lifecycle import get_or_create_layer_manager
+
+if TYPE_CHECKING:
+    from napari_deeplabcut.core.layer_lifecycle import LayerLifecycleManager
 
 _NAPARI_COORD_COLS = ("frame", "y", "x")
 
@@ -233,35 +238,61 @@ def _strip_tracked_prefix(name: str) -> str:
     return text.strip()
 
 
-def _base_tracking_source_name(self, source: Points) -> str:
+def _base_tracking_source_name(source: Points, layer_manager: LayerLifecycleManager) -> str:
     """
     Return the stable human-facing source name for a new tracking-result layer.
 
     If the current seed source is already a tracking-result layer, prefer the
     original recorded DLC source layer name so names do not become nested.
     """
-    if self.lifecycle_manager.is_tracking_result_layer(source):
-        original = self.lifecycle_manager.tracking_result_source_layer_name(source)
+    if layer_manager.is_tracking_result_layer(source):
+        original = layer_manager.tracking_result_source_layer_name(source)
         if original:
-            return self._strip_tracked_prefix(original)
+            return _strip_tracked_prefix(original)
 
-    return self._strip_tracked_prefix(str(getattr(source, "name", "Unnamed layer")))
+    return _strip_tracked_prefix(str(getattr(source, "name", "Unnamed layer")))
 
 
 def _tracking_name_suffix(
+    layer_manager: LayerLifecycleManager,
     tracker_name: str,
     ref_frame_idx: int,
     source: Points,
 ) -> str:
     """
-    Return the suffix part shared by all iterations of the same tracking run.
+    Return the human-facing suffix shown in the layer list.
 
     Example
     -------
-    "CollectedData_me - t0 - Cotracker3"
+    "CollectedData_me - t5 - Cotracker3"
     """
-    base_source_name = _base_tracking_source_name(source)
+    base_source_name = _base_tracking_source_name(source, layer_manager)
     return f"{base_source_name} - t{ref_frame_idx} - {tracker_name}"
+
+
+def _tracking_version_family_pattern(
+    layer_manager: LayerLifecycleManager,
+    tracker_name: str,
+    source: Points,
+) -> re.Pattern[str]:
+    """
+    Return a regex that matches all tracked-layer names belonging to the same
+    source/tracker family, regardless of frame.
+
+    Examples matched
+    ----------------
+    [Tracked v1] CollectedData_me - t0 - Cotracker3
+    [Tracked v2] CollectedData_me - t5 - Cotracker3
+    [Tracked v3] CollectedData_me - t42 - Cotracker3
+    """
+    base_source_name = _base_tracking_source_name(source, layer_manager)
+
+    # Escape the stable text pieces only.
+    src = re.escape(base_source_name)
+    tracker = re.escape(str(tracker_name))
+
+    # Match any integer frame after "- t"
+    return re.compile(rf"^\[Tracked v(?P<version>\d+)\]\s+{src}\s+-\s+t\d+\s+-\s+{tracker}$")
 
 
 def make_tracking_iteration_name(
@@ -273,22 +304,32 @@ def make_tracking_iteration_name(
     """
     Build a unique tracked-layer name with an incrementing version prefix.
 
+    Versioning policy
+    -----------------
+    - The displayed suffix includes the reference frame.
+    - The version counter is shared across the same (source layer, tracker),
+      regardless of frame.
+
     Examples
     --------
     [Tracked v1] CollectedData_me - t0 - Cotracker3
     [Tracked v2] CollectedData_me - t5 - Cotracker3
+    [Tracked v3] CollectedData_me - t12 - Cotracker3
     """
+    layer_manager = get_or_create_layer_manager(viewer)
+
     suffix = _tracking_name_suffix(
+        layer_manager=layer_manager,
         tracker_name=tracker_name,
         ref_frame_idx=ref_frame_idx,
         source=source,
     )
 
-    # Match names of the exact same tracking run description and collect versions.
-    # Example matched names:
-    #   [Tracked v1] CollectedData_me - t0 - Cotracker3
-    #   [Tracked v2] CollectedData_me - t5 - Cotracker3
-    pattern = re.compile(rf"^\[Tracked v(?P<version>\d+)\]\s+{re.escape(suffix)}$")
+    pattern = _tracking_version_family_pattern(
+        layer_manager=layer_manager,
+        tracker_name=tracker_name,
+        source=source,
+    )
 
     versions: list[int] = []
     for layer in viewer.layers:
