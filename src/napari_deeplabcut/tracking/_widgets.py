@@ -8,7 +8,7 @@ import pandas as pd
 from magicgui.widgets import ComboBox, create_widget
 from napari.layers import Image, Points
 from napari.viewer import Viewer
-from qtpy.QtCore import Qt, Signal, Slot
+from qtpy.QtCore import Qt, QTimer, Signal, Slot
 from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import (
     QApplication,
@@ -577,6 +577,7 @@ class TrackingControls(QWidget):
             )
 
             self._viewer.layers.selection.active = layer
+            self._select_keypoint_combo_layer(layer)
             self._viewer.status = f'Created tracking result layer "{layer.name}"'
         except Exception as e:
             logger.exception("Error creating tracking result layer", exc_info=e)
@@ -697,6 +698,28 @@ class TrackingControls(QWidget):
             reference_frame_index=int(ref_frame_idx),
         )
         self.trackingRequested.emit(tracking_data)
+
+    def _select_keypoint_combo_layer(self, layer: Points) -> None:
+        """
+        Select a Points layer in the keypoint combo, deferring one event-loop turn
+        so the combo choices are fully refreshed after layer insertion.
+        """
+        try:
+            self._keypoint_layer_combo.reset_choices()
+        except Exception:
+            logger.debug("Failed to reset keypoint layer combo choices", exc_info=True)
+
+        def _apply():
+            try:
+                self._keypoint_layer_combo.value = layer
+            except Exception:
+                logger.debug(
+                    "Failed to select tracked result layer in keypoint combo",
+                    exc_info=True,
+                )
+
+        # Layer insertion / choice refresh may still be settling.
+        QTimer.singleShot(0, _apply)  # FIXME @C-Achard no unowned QTimers, rebase and use mixin from base
 
     def _delete_selected_in_future_frames(self) -> None:
         active = self._viewer.layers.selection.active
