@@ -866,4 +866,15 @@ class TrackingControls(QWidget):
         self.layout().addWidget(self._tracking_progress_bar)
 
         # Merge controls
+        self.layout().addSpacing(16)
+        self._merge_tracked_button.setStyleSheet(
+            """
+            QPushButton {
+                border-radius: 6px;
+                font-weight: bold;
+                padding: 6px 12px;
+                margin-top: 8px;
+            }
+            """
+        )
         self.layout().addWidget(self._merge_tracked_button)
