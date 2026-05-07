@@ -288,6 +288,16 @@ def apply_tracking_merge(
         return target_data.copy(), target_features.copy()
 
     coord_cols = _coord_columns_for_data(target_data)
+    missing_coord_cols = [col for col in coord_cols if col not in append_df.columns]
+    if missing_coord_cols:
+        raise ValueError(
+            "Source and target point dimensionality are incompatible for merge: "
+            f"target requires coordinate column(s) {missing_coord_cols!r}, "
+            f"but the source provides only "
+            f"{[c for c in append_df.columns if str(c).startswith('coord_')]!r}. "
+            "Please refresh the preview or merge into a compatible target layer."
+        )
+
     new_append_data = append_df.loc[:, coord_cols].to_numpy(dtype=float, copy=True)
 
     append_features = _build_append_features_from_source(
