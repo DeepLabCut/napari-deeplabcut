@@ -22,6 +22,7 @@ from qtpy.QtWidgets import (
 
 from ...core.layer_versioning import mark_layer_presentation_changed
 from ...tracking.core.merge import (
+    TrackingMergePolicy,
     TrackingMergePreview,
     apply_tracking_merge,
     preview_tracking_merge,
@@ -56,16 +57,25 @@ def _preview_summary_text(preview: TrackingMergePreview | None) -> str:
     if preview.n_appendable > 0:
         lines.append(
             f"{preview.n_appendable} tracked point"
-            f"{'' if preview.n_appendable == 1 else 's'} can be added to "
+            f"{'' if preview.n_appendable == 1 else 's'} "
+            f"will be added to "
             f'"{preview.target_layer_name}".'
         )
     else:
-        lines.append("No new tracked points can be added to the selected target layer.")
+        lines.append("No new tracked points will be added to the selected target layer.")
 
-    if preview.n_conflicts > 0:
-        lines.append(
-            f"{preview.n_conflicts} conflicting point{'' if preview.n_conflicts == 1 else 's'} will be skipped."
-        )
+    if preview.policy is TrackingMergePolicy.FILL_MISSING:
+        if preview.n_conflicts > 0:
+            lines.append(
+                f"{preview.n_conflicts} conflicting point{'' if preview.n_conflicts == 1 else 's'} will be skipped."
+            )
+    elif preview.policy is TrackingMergePolicy.OVERWRITE_EXISTING:
+        if preview.n_overwriteable > 0:
+            lines.append(
+                f"{preview.n_overwriteable} existing target point"
+                f"{'' if preview.n_overwriteable == 1 else 's'} will be overwritten "
+                "by tracked coordinates."
+            )
 
     if preview.n_identical > 0:
         lines.append(
@@ -78,43 +88,65 @@ def _preview_summary_text(preview: TrackingMergePreview | None) -> str:
             f"{'' if preview.n_invalid_source == 1 else 's'} will be ignored."
         )
 
+    if preview.n_appendable == 0 and preview.n_overwriteable == 0 and preview.n_conflicts == 0:
+        lines.append("This merge would not change the target layer.")
+
     return "\n".join(lines)
 
 
-def _preview_conflict_details_text(preview: TrackingMergePreview) -> str:
-    if not preview.conflicts:
-        return "No conflicts."
+def _preview_details_text(preview: TrackingMergePreview) -> str:
+    """
+    Render detailed entries for either:
+    - skipped conflicts (fill-missing policy)
+    - overwritten target rows (overwrite policy)
+    """
+    if preview.policy is TrackingMergePolicy.OVERWRITE_EXISTING:
+        entries = preview.overwrites
+        truncated = preview.truncated_overwrites
+        if not entries:
+            return "No overwritten target points."
+    else:
+        entries = preview.conflicts
+        truncated = preview.truncated_conflicts
+        if not entries:
+            return "No conflicts."
 
     lines: list[str] = []
-    for entry in preview.conflicts:
+    for entry in entries:
         lines.append(
             f"{entry.frame_label} → {entry.keypoint_label}\n"
             f"  source: {entry.source_coords_text}\n"
             f"  target: {entry.target_coords_text}"
         )
 
-    if preview.truncated_conflicts > 0:
+    if truncated > 0:
         lines.append("")
-        lines.append(f"… and {preview.truncated_conflicts} more conflict(s).")
+        if preview.policy is TrackingMergePolicy.OVERWRITE_EXISTING:
+            lines.append(f"… and {truncated} more overwrite(s).")
+        else:
+            lines.append(f"… and {truncated} more conflict(s).")
 
     return "\n".join(lines)
 
 
 # -----------------------------------------------------------------------------#
-# Conflict report dialog
+# Review / confirmation dialog
 # -----------------------------------------------------------------------------#
 
 
-class TrackingMergeConflictsDialog(QDialog):
+class TrackingMergeReviewDialog(QDialog):
     """
-    Conflict report / confirmation dialog for tracking merges.
+    Review / confirmation dialog for tracking merges.
 
     Modes
     -----
     - review_only=True:
-        informational report opened from "Review conflicts…"
+        informational review opened from "Review changes…"
     - review_only=False:
-        confirmation dialog shown immediately before applying a partial merge
+        confirmation dialog shown immediately before applying a merge
+        that either:
+        - skips conflicts (fill-missing)
+        - overwrites existing target points (overwrite-existing)
     """
 
     def __init__(
@@ -128,10 +160,12 @@ class TrackingMergeConflictsDialog(QDialog):
         self.preview = preview
         self.review_only = review_only
 
+        overwrite_mode = preview.policy is TrackingMergePolicy.OVERWRITE_EXISTING
+
         if review_only:
-            self.setWindowTitle("Conflicts in merge preview")
+            self.setWindowTitle("Review merge changes")
         else:
-            self.setWindowTitle("Confirm partial merge")
+            self.setWindowTitle("Confirm merge")
 
         self.setModal(True)
         self.setSizeGripEnabled(True)
@@ -140,16 +174,32 @@ class TrackingMergeConflictsDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        if review_only:
-            summary_text = (
-                "Some tracked points conflict with existing annotations in the target layer.\n\n"
-                "These conflicting points cannot be added and would be skipped if you proceed with the merge."
-            )
+        if overwrite_mode:
+            affected_n = preview.n_overwriteable
+            details_label_text = "Target points to be overwritten (frame → keypoint):"
+            if review_only:
+                summary_text = (
+                    "Some tracked points would overwrite existing annotations in the target layer.\n\n"
+                    "These target points will be replaced by the tracked coordinates if you proceed."
+                )
+            else:
+                summary_text = (
+                    "This merge will overwrite existing annotations in the target layer.\n\n"
+                    "Tracked coordinates will replace the current target coordinates for matching semantic slots."
+                )
         else:
-            summary_text = (
-                "Some tracked points conflict with existing annotations in the target layer.\n\n"
-                "Only non-conflicting tracked points will be merged."
-            )
+            affected_n = preview.n_conflicts
+            details_label_text = "Conflicts (frame → keypoint):"
+            if review_only:
+                summary_text = (
+                    "Some tracked points conflict with existing annotations in the target layer.\n\n"
+                    "These conflicting points cannot be added and would be skipped if you proceed with the merge."
+                )
+            else:
+                summary_text = (
+                    "Some tracked points conflict with existing annotations in the target layer.\n\n"
+                    "Only non-conflicting tracked points will be merged."
+                )
 
         summary = QLabel(summary_text)
         summary.setWordWrap(True)
@@ -167,20 +217,25 @@ class TrackingMergeConflictsDialog(QDialog):
         tgt_label.setWordWrap(True)
         layout.addWidget(tgt_label)
 
-        affected_label = QLabel(
-            f"<b>Affected:</b> {preview.n_conflicts} conflict{'' if preview.n_conflicts == 1 else 's'}."
-        )
+        if overwrite_mode:
+            affected_label = QLabel(
+                f"<b>Affected:</b> {affected_n} target point{'' if affected_n == 1 else 's'} will be overwritten."
+            )
+        else:
+            affected_label = QLabel(
+                f"<b>Affected:</b> {affected_n} conflict{'' if affected_n == 1 else 's'} will be skipped."
+            )
         affected_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         affected_label.setWordWrap(True)
         layout.addWidget(affected_label)
 
-        details_label = QLabel("Conflicts (frame → keypoint):")
+        details_label = QLabel(details_label_text)
         details_label.setWordWrap(True)
         layout.addWidget(details_label)
 
         text = QPlainTextEdit(self)
         text.setReadOnly(True)
-        text.setPlainText(_preview_conflict_details_text(preview))
+        text.setPlainText(_preview_details_text(preview))
         text.setLineWrapMode(QPlainTextEdit.WidgetWidth)
         text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         text.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -205,7 +260,11 @@ class TrackingMergeConflictsDialog(QDialog):
             self.cancel_btn.clicked.connect(self.reject)
             btn_row.addWidget(self.cancel_btn)
 
-            self.merge_btn = QPushButton("Merge non-conflicting points")
+            if overwrite_mode:
+                self.merge_btn = QPushButton("Overwrite and merge")
+            else:
+                self.merge_btn = QPushButton("Merge non-conflicting points")
+
             self.merge_btn.setDefault(True)
             self.merge_btn.setAutoDefault(True)
             self.merge_btn.clicked.connect(self.accept)
@@ -215,12 +274,12 @@ class TrackingMergeConflictsDialog(QDialog):
 
     @staticmethod
     def review(parent: QWidget | None, *, preview: TrackingMergePreview) -> None:
-        dlg = TrackingMergeConflictsDialog(parent, preview=preview, review_only=True)
+        dlg = TrackingMergeReviewDialog(parent, preview=preview, review_only=True)
         dlg.exec_()
 
     @staticmethod
     def confirm(parent: QWidget | None, *, preview: TrackingMergePreview) -> bool:
-        dlg = TrackingMergeConflictsDialog(parent, preview=preview, review_only=False)
+        dlg = TrackingMergeReviewDialog(parent, preview=preview, review_only=False)
         return dlg.exec_() == QDialog.Accepted
 
 
@@ -269,7 +328,7 @@ class TrackingMergeDialog(QDialog):
 
         intro = QLabel(
             "Merge tracked points from a tracking-result layer into a regular DLC Points layer.\n"
-            "Only missing points will be added. Existing conflicting annotations will be left unchanged."
+            "Please choose how to handle potential conflicts using the options below."
         )
         intro.setWordWrap(True)
         root.addWidget(intro)
@@ -297,10 +356,16 @@ class TrackingMergeDialog(QDialog):
             self._target_combo.addItem(_layer_display_name(layer), layer)
         form.addRow("Target DLC points layer", self._target_combo)
 
-        # Policy row (fixed for v1)
-        self._policy_label = QLabel("Fill missing points only (recommended)")
-        self._policy_label.setWordWrap(True)
-        form.addRow("Merge policy", self._policy_label)
+        # Policy row
+        self._policy_combo = QComboBox(self)
+        self._policy_combo.addItem("Fill missing only (recommended)", TrackingMergePolicy.FILL_MISSING)
+        self._policy_combo.addItem("Overwrite existing target points", TrackingMergePolicy.OVERWRITE_EXISTING)
+        self._policy_combo.setToolTip(
+            "Choose how tracked points should be merged into the target layer.\n\n"
+            "- Fill missing only: safe default; conflicting existing target points are left unchanged.\n"
+            "- Overwrite existing target points: matching target points are replaced by tracked coordinates."
+        )
+        form.addRow("Merge policy", self._policy_combo)
 
         root.addLayout(form)
 
@@ -322,9 +387,9 @@ class TrackingMergeDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
 
-        self._review_conflicts_btn = QPushButton("Review conflicts…")
-        self._review_conflicts_btn.clicked.connect(self._review_conflicts)
-        btn_row.addWidget(self._review_conflicts_btn)
+        self._review_btn = QPushButton("Review changes…")
+        self._review_btn.clicked.connect(self._review_changes)
+        btn_row.addWidget(self._review_btn)
 
         self._cancel_btn = QPushButton("Cancel")
         self._cancel_btn.clicked.connect(self.reject)
@@ -341,6 +406,7 @@ class TrackingMergeDialog(QDialog):
         if self._source_combo is not None:
             self._source_combo.currentIndexChanged.connect(self._refresh_preview)
         self._target_combo.currentIndexChanged.connect(self._refresh_preview)
+        self._policy_combo.currentIndexChanged.connect(self._refresh_preview)
 
         self._apply_initial_selection(
             initial_source=initial_source,
@@ -370,6 +436,15 @@ class TrackingMergeDialog(QDialog):
         data = self._target_combo.currentData()
         return data if isinstance(data, Points) else None
 
+    def selected_policy(self) -> TrackingMergePolicy:
+        data = self._policy_combo.currentData()
+        if isinstance(data, TrackingMergePolicy):
+            return data
+        try:
+            return TrackingMergePolicy(str(data))
+        except Exception:
+            return TrackingMergePolicy.FILL_MISSING
+
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
@@ -390,6 +465,9 @@ class TrackingMergeDialog(QDialog):
             if idx >= 0:
                 self._target_combo.setCurrentIndex(idx)
 
+        # Safe default
+        self._policy_combo.setCurrentIndex(0)
+
     @staticmethod
     def _find_combo_layer_index(combo: QComboBox, layer: Points) -> int:
         for i in range(combo.count()):
@@ -400,16 +478,21 @@ class TrackingMergeDialog(QDialog):
     def _refresh_preview(self) -> None:
         source_layer = self.selected_source_layer()
         target_layer = self.selected_target_layer()
+        policy = self.selected_policy()
 
         preview: TrackingMergePreview | None = None
         try:
             if source_layer is not None and target_layer is not None:
-                preview = preview_tracking_merge(source_layer, target_layer)
+                preview = preview_tracking_merge(
+                    source_layer,
+                    target_layer,
+                    policy=policy,
+                )
         except Exception as e:
             logger.exception("Failed to build tracking merge preview")
             self._summary_label.setText(f"Could not preview merge:\n{e}")
             self._merge_btn.setEnabled(False)
-            self._review_conflicts_btn.setEnabled(False)
+            self._review_btn.setEnabled(False)
             self._latest_preview = None
             return
 
@@ -418,20 +501,30 @@ class TrackingMergeDialog(QDialog):
 
         if preview is None:
             self._merge_btn.setEnabled(False)
-            self._review_conflicts_btn.setEnabled(False)
+            self._review_btn.setEnabled(False)
             return
 
-        self._review_conflicts_btn.setEnabled(preview.n_conflicts > 0)
+        if preview.policy is TrackingMergePolicy.OVERWRITE_EXISTING:
+            self._review_btn.setEnabled(preview.n_overwriteable > 0)
+        else:
+            self._review_btn.setEnabled(preview.n_conflicts > 0)
 
-        can_merge = bool(preview.is_valid and preview.n_appendable > 0)
+        can_merge = bool(preview.is_valid and (preview.n_appendable > 0 or preview.n_overwriteable > 0))
         self._merge_btn.setEnabled(can_merge)
 
-    def _review_conflicts(self) -> None:
+    def _review_changes(self) -> None:
         preview = self._latest_preview
-        if preview is None or preview.n_conflicts <= 0:
+        if preview is None:
             return
 
-        TrackingMergeConflictsDialog.review(parent=self, preview=preview)
+        if preview.policy is TrackingMergePolicy.OVERWRITE_EXISTING:
+            if preview.n_overwriteable <= 0:
+                return
+        else:
+            if preview.n_conflicts <= 0:
+                return
+
+        TrackingMergeReviewDialog.review(parent=self, preview=preview)
 
 
 # -----------------------------------------------------------------------------#
@@ -448,7 +541,7 @@ class TrackingMergeWorkflow:
     - ask the lifecycle manager for valid source/target candidates
     - choose sensible defaults
     - present a transactional merge dialog
-    - present a conflict confirmation dialog if needed
+    - present a review/confirmation dialog if needed
     - apply a validated preview back into the target layer
 
     Non-responsibilities
@@ -466,17 +559,6 @@ class TrackingMergeWorkflow:
     def run(self, *, source_layer: Points | None = None) -> bool:
         """
         Run the tracking merge workflow.
-
-        Parameters
-        ----------
-        source_layer
-            Optional source hint. If this is a valid tracking-result layer according
-            to the lifecycle manager, it is fixed as the source in the dialog.
-
-        Returns
-        -------
-        bool
-            True if a merge was successfully applied, False otherwise.
         """
         source_candidates = tuple(self.layer_manager.iter_tracking_result_layers())
         if not source_candidates:
@@ -557,13 +639,23 @@ class TrackingMergeWorkflow:
             )
             return False
 
-        if preview.n_conflicts > 0:
-            confirmed = TrackingMergeConflictsDialog.confirm(
-                self.parent,
-                preview=preview,
-            )
-            if not confirmed:
-                return False
+        # Explicit confirmation for non-default / non-trivial paths
+        if preview.policy is TrackingMergePolicy.FILL_MISSING:
+            if preview.n_conflicts > 0:
+                confirmed = TrackingMergeReviewDialog.confirm(
+                    self.parent,
+                    preview=preview,
+                )
+                if not confirmed:
+                    return False
+        elif preview.policy is TrackingMergePolicy.OVERWRITE_EXISTING:
+            if preview.n_overwriteable > 0:
+                confirmed = TrackingMergeReviewDialog.confirm(
+                    self.parent,
+                    preview=preview,
+                )
+                if not confirmed:
+                    return False
 
         try:
             new_data, new_features = apply_tracking_merge(
@@ -596,9 +688,16 @@ class TrackingMergeWorkflow:
             )
             return False
 
-        self.viewer.status = (
-            f"Merged {preview.n_appendable} tracked point"
-            f"{'' if preview.n_appendable == 1 else 's'} into "
-            f'"{preview.target_layer_name}"'
-        )
+        if preview.policy is TrackingMergePolicy.OVERWRITE_EXISTING:
+            self.viewer.status = (
+                f'Merged tracked points into "{preview.target_layer_name}" '
+                f"({preview.n_appendable} added, {preview.n_overwriteable} overwritten)"
+            )
+        else:
+            self.viewer.status = (
+                f"Merged {preview.n_appendable} tracked point"
+                f"{'' if preview.n_appendable == 1 else 's'} into "
+                f'"{preview.target_layer_name}"'
+            )
+
         return True

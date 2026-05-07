@@ -27,6 +27,7 @@ class TrackingMergePolicy(str, Enum):
     """Supported merge policies for tracking-result -> DLC points merges."""
 
     FILL_MISSING = "fill_missing"
+    OVERWRITE_EXISTING = "overwrite_existing"
 
 
 @dataclass(frozen=True)
@@ -57,7 +58,8 @@ class TrackingMergePreview:
     -----
     - `append_source_indices` etc. refer to original source-layer row indices.
     - `is_valid=False` means merge must not proceed.
-    - Under FILL_MISSING, conflicts are reported and skipped.
+    - Under FILL_MISSING, mismatching occupied slots are reported as conflicts and skipped.
+    - Under OVERWRITE_EXISTING, mismatching occupied slots are reported as overwrites.
     """
 
     source_layer_name: str
@@ -71,6 +73,7 @@ class TrackingMergePreview:
     n_appendable: int
     n_identical: int
     n_conflicts: int
+    n_overwriteable: int
     n_invalid_source: int
 
     has_source_duplicates: bool
@@ -81,10 +84,13 @@ class TrackingMergePreview:
     append_source_indices: tuple[int, ...]
     identical_source_indices: tuple[int, ...]
     conflict_source_indices: tuple[int, ...]
+    overwrite_source_indices: tuple[int, ...]
     invalid_source_indices: tuple[int, ...]
 
     conflicts: tuple[TrackingMergeConflictEntry, ...]
+    overwrites: tuple[TrackingMergeConflictEntry, ...]
     truncated_conflicts: int = 0
+    truncated_overwrites: int = 0
 
 
 # -----------------------------------------------------------------------------#
@@ -102,32 +108,6 @@ def preview_tracking_merge(
 ) -> TrackingMergePreview:
     """
     Build an immutable merge preview from a tracking-result layer into a DLC points layer.
-
-    Parameters
-    ----------
-    source_layer
-        Source points layer. The caller is responsible for selecting a valid
-        tracking-result layer using the lifecycle manager.
-    target_layer
-        Target points layer. The caller is responsible for selecting a valid
-        mergeable DLC points layer using the lifecycle manager.
-    policy
-        Merge policy. Only FILL_MISSING is supported in v1.
-    coord_tolerance
-        Absolute tolerance used to classify a slot as identical vs conflicting.
-    max_conflicts
-        Maximum number of conflict entries to materialize for UI display.
-
-    Returns
-    -------
-    TrackingMergePreview
-        Complete preview and apply plan.
-
-    Invariants
-    ----------
-    - Merge identity is semantic: (frame, normalized id, label)
-    - Source/target duplicate semantic slots invalidate the preview
-    - Tracking-only feature columns must not become authoritative target schema
     """
     if source_layer is target_layer:
         return _invalid_preview(
@@ -143,14 +123,12 @@ def preview_tracking_merge(
     source_fp = fingerprint_points_layer(source_layer)
     target_fp = fingerprint_points_layer(target_layer)
 
-    # Invalid source rows are skipped but do not invalidate the whole preview.
     source_invalid_mask = ~source_df["_is_valid_merge_row"].astype(bool)
     invalid_source_indices = tuple(sorted_int_tuple(source_df.loc[source_invalid_mask, "_source_row_index"]))
 
     source_valid = source_df.loc[~source_invalid_mask].copy()
     target_valid = target_df.loc[target_df["_is_valid_merge_row"].astype(bool)].copy()
 
-    # Duplicate semantic slots are integrity issues, not ordinary merge conflicts.
     src_dup = duplicate_slot_row_indices(source_valid)
     if src_dup:
         return _invalid_preview(
@@ -188,7 +166,10 @@ def preview_tracking_merge(
     append_source_indices: list[int] = []
     identical_source_indices: list[int] = []
     conflict_source_indices: list[int] = []
-    conflicts: list[TrackingMergeConflictEntry] = []
+    overwrite_source_indices: list[int] = []
+
+    conflict_entries: list[TrackingMergeConflictEntry] = []
+    overwrite_entries: list[TrackingMergeConflictEntry] = []
 
     for row in source_valid.to_dict(orient="records"):
         src_idx = int(row["_source_row_index"])
@@ -203,18 +184,36 @@ def preview_tracking_merge(
             identical_source_indices.append(src_idx)
             continue
 
-        conflict_source_indices.append(src_idx)
-        if len(conflicts) < max_conflicts:
-            conflicts.append(
-                TrackingMergeConflictEntry(
-                    frame_label=format_frame_label(row["frame"]),
-                    keypoint_label=format_slot_label(row["label"], row["id"]),
-                    source_coords_text=format_coords_text(row),
-                    target_coords_text=format_coords_text(target_row),
-                )
+        entry = TrackingMergeConflictEntry(
+            frame_label=format_frame_label(row["frame"]),
+            keypoint_label=format_slot_label(row["label"], row["id"]),
+            source_coords_text=format_coords_text(row),
+            target_coords_text=format_coords_text(target_row),
+        )
+
+        if policy is TrackingMergePolicy.FILL_MISSING:
+            conflict_source_indices.append(src_idx)
+            if len(conflict_entries) < max_conflicts:
+                conflict_entries.append(entry)
+        elif policy is TrackingMergePolicy.OVERWRITE_EXISTING:
+            overwrite_source_indices.append(src_idx)
+            if len(overwrite_entries) < max_conflicts:
+                overwrite_entries.append(entry)
+        else:
+            return _invalid_preview(
+                source_layer=source_layer,
+                target_layer=target_layer,
+                policy=policy,
+                reason=f"Unsupported merge policy: {policy!r}",
+                source_fingerprint=source_fp,
+                target_fingerprint=target_fp,
+                n_source_rows=len(source_df),
+                n_invalid_source=len(invalid_source_indices),
+                invalid_source_indices=invalid_source_indices,
             )
 
-    truncated = max(0, len(conflict_source_indices) - len(conflicts))
+    truncated_conflicts = max(0, len(conflict_source_indices) - len(conflict_entries))
+    truncated_overwrites = max(0, len(overwrite_source_indices) - len(overwrite_entries))
 
     return TrackingMergePreview(
         source_layer_name=str(getattr(source_layer, "name", "Source layer")),
@@ -226,6 +225,7 @@ def preview_tracking_merge(
         n_appendable=int(len(append_source_indices)),
         n_identical=int(len(identical_source_indices)),
         n_conflicts=int(len(conflict_source_indices)),
+        n_overwriteable=int(len(overwrite_source_indices)),
         n_invalid_source=int(len(invalid_source_indices)),
         has_source_duplicates=False,
         has_target_duplicates=False,
@@ -234,9 +234,12 @@ def preview_tracking_merge(
         append_source_indices=tuple(sorted(append_source_indices)),
         identical_source_indices=tuple(sorted(identical_source_indices)),
         conflict_source_indices=tuple(sorted(conflict_source_indices)),
+        overwrite_source_indices=tuple(sorted(overwrite_source_indices)),
         invalid_source_indices=tuple(sorted(invalid_source_indices)),
-        conflicts=tuple(conflicts),
-        truncated_conflicts=truncated,
+        conflicts=tuple(conflict_entries),
+        overwrites=tuple(overwrite_entries),
+        truncated_conflicts=truncated_conflicts,
+        truncated_overwrites=truncated_overwrites,
     )
 
 
@@ -248,31 +251,15 @@ def apply_tracking_merge(
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """
     Apply a previously computed merge preview.
-
-    Parameters
-    ----------
-    source_layer
-        Source tracking-result layer.
-    target_layer
-        Target DLC points layer.
-    preview
-        Preview produced by `preview_tracking_merge(...)`.
-
-    Returns
-    -------
-    (new_data, new_features)
-        Data and features to assign back to `target_layer`.
-
-    Raises
-    ------
-    ValueError
-        If the preview is invalid, stale, or incompatible with the current layer state.
     """
     if not preview.is_valid:
         reason = preview.invalid_reason or "Unknown reason."
         raise ValueError(f"Cannot apply an invalid tracking merge preview: {reason}")
 
-    if preview.policy is not TrackingMergePolicy.FILL_MISSING:
+    if preview.policy not in {
+        TrackingMergePolicy.FILL_MISSING,
+        TrackingMergePolicy.OVERWRITE_EXISTING,
+    }:
         raise ValueError(f"Unsupported merge policy: {preview.policy!r}")
 
     current_source_fp = fingerprint_points_layer(source_layer)
@@ -284,39 +271,88 @@ def apply_tracking_merge(
 
     target_data, target_features = extract_layer_data_and_features(target_layer)
 
-    if not preview.append_source_indices:
+    if not preview.append_source_indices and not preview.overwrite_source_indices:
         return target_data.copy(), target_features.copy()
 
     source_norm = _normalize_points_layer_for_merge(source_layer)
-    append_df = (
-        source_norm.loc[source_norm["_source_row_index"].isin(preview.append_source_indices)]
-        .sort_values("_source_row_index")
-        .reset_index(drop=True)
-    )
-
-    if append_df.empty:
-        return target_data.copy(), target_features.copy()
+    target_norm = _normalize_points_layer_for_merge(target_layer)
 
     coord_cols = coord_columns_for_data(target_data)
-    missing_coord_cols = [col for col in coord_cols if col not in append_df.columns]
-    if missing_coord_cols:
-        raise ValueError(
-            "Source and target point dimensionality are incompatible for merge: "
-            f"target requires coordinate column(s) {missing_coord_cols!r}, "
-            f"but the source provides only "
-            f"{[c for c in append_df.columns if str(c).startswith('coord_')]!r}. "
-            "Please refresh the preview or merge into a compatible target layer."
+
+    merged_data = target_data.copy()
+    merged_features = target_features.reset_index(drop=True).copy()
+
+    # Overwrite existing rows (only for relevant policies)
+    if preview.policy is TrackingMergePolicy.OVERWRITE_EXISTING and preview.overwrite_source_indices:
+        overwrite_df = (
+            source_norm.loc[source_norm["_source_row_index"].isin(preview.overwrite_source_indices)]
+            .sort_values("_source_row_index")
+            .reset_index(drop=True)
         )
 
-    new_append_data = append_df.loc[:, coord_cols].to_numpy(dtype=float, copy=True)
+        if not overwrite_df.empty:
+            missing_coord_cols = [col for col in coord_cols if col not in overwrite_df.columns]
+            if missing_coord_cols:
+                raise ValueError(
+                    "Source and target point dimensionality are incompatible for merge: "
+                    f"target requires coordinate column(s) {missing_coord_cols!r}, "
+                    f"but the source provides only "
+                    f"{[c for c in overwrite_df.columns if str(c).startswith('coord_')]!r}. "
+                    "Please refresh the preview or merge into a compatible target layer."
+                )
 
-    append_features = _build_append_features_from_source(
-        source_rows=append_df,
-        target_features=target_features,
-    )
+            target_valid = target_norm.loc[target_norm["_is_valid_merge_row"].astype(bool)].copy()
+            target_row_by_key = {
+                row["_slot_key"]: int(row["_source_row_index"]) for row in target_valid.to_dict(orient="records")
+            }
 
-    merged_data = np.vstack([target_data, new_append_data]) if len(target_data) else new_append_data
-    merged_features = pd.concat([target_features.reset_index(drop=True), append_features], ignore_index=True)
+            overwrite_target_indices: list[int] = []
+            for row in overwrite_df.to_dict(orient="records"):
+                tgt_idx = target_row_by_key.get(row["_slot_key"])
+                if tgt_idx is None:
+                    raise ValueError(
+                        "Target layer no longer matches the overwrite preview; please refresh the merge preview."
+                    )
+                overwrite_target_indices.append(tgt_idx)
+
+            overwrite_coords = overwrite_df.loc[:, coord_cols].to_numpy(dtype=float, copy=True)
+            merged_data[np.asarray(overwrite_target_indices, dtype=int)] = overwrite_coords
+
+            shared_cols = [c for c in merged_features.columns if c in overwrite_df.columns]
+            for col in shared_cols:
+                merged_features.loc[overwrite_target_indices, col] = (
+                    overwrite_df[col].reset_index(drop=True).to_numpy(copy=True)
+                )
+
+    if preview.append_source_indices:
+        append_df = (
+            source_norm.loc[source_norm["_source_row_index"].isin(preview.append_source_indices)]
+            .sort_values("_source_row_index")
+            .reset_index(drop=True)
+        )
+
+        if not append_df.empty:
+            missing_coord_cols = [col for col in coord_cols if col not in append_df.columns]
+            if missing_coord_cols:
+                raise ValueError(
+                    "Source and target point dimensionality are incompatible for merge: "
+                    f"target requires coordinate column(s) {missing_coord_cols!r}, "
+                    f"but the source provides only "
+                    f"{[c for c in append_df.columns if str(c).startswith('coord_')]!r}. "
+                    "Please refresh the preview or merge into a compatible target layer."
+                )
+
+            new_append_data = append_df.loc[:, coord_cols].to_numpy(dtype=float, copy=True)
+            append_features = _build_append_features_from_source(
+                source_rows=append_df,
+                target_features=merged_features,
+            )
+
+            merged_data = np.vstack([merged_data, new_append_data]) if len(merged_data) else new_append_data
+            merged_features = pd.concat(
+                [merged_features.reset_index(drop=True), append_features],
+                ignore_index=True,
+            )
 
     return merged_data, merged_features
 
@@ -360,6 +396,7 @@ def _invalid_preview(
         n_appendable=0,
         n_identical=0,
         n_conflicts=0,
+        n_overwriteable=0,
         n_invalid_source=int(n_invalid_source),
         has_source_duplicates=bool(has_source_duplicates),
         has_target_duplicates=bool(has_target_duplicates),
@@ -368,9 +405,12 @@ def _invalid_preview(
         append_source_indices=(),
         identical_source_indices=(),
         conflict_source_indices=(),
+        overwrite_source_indices=(),
         invalid_source_indices=tuple(invalid_source_indices),
         conflicts=(),
+        overwrites=(),
         truncated_conflicts=0,
+        truncated_overwrites=0,
     )
 
 
