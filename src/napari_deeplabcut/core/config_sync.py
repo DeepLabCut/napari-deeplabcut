@@ -12,7 +12,7 @@ from napari_deeplabcut.core.project_paths import (
     infer_dlc_project_from_points_meta,
 )
 
-logger = logging.getLogger("napari-deeplabcut.core.config_sync")
+logger = logging.getLogger("napari_deeplabcut.core.config_sync")
 
 _POINT_SIZE_KEY = "dotsize"
 

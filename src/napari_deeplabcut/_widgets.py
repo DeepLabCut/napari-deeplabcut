@@ -113,7 +113,7 @@ from .ui.ui_dialogs.save import PointsLayerSaveWorkflow
 from .utils.debug import get_debug_recorder, install_debug_recorder, log_timing
 from .utils.deprecations import deprecated
 
-logger = logging.getLogger("napari-deeplabcut._widgets")
+logger = logging.getLogger(__name__)
 # logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
 
 

@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
     from ..keypoints import KeypointStore
 
-logger = logging.getLogger("napari-deeplabcut.lifecycle")
+logger = logging.getLogger(__name__)
 
 
 class LayerLifecycleManager(QObject, OwnedTimersMixin):

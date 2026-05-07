@@ -50,7 +50,7 @@ def log_timing(
 
 def install_debug_recorder(
     *,
-    logger_name: str = "napari-deeplabcut",
+    logger_name: str = "napari_deeplabcut",
     capacity: int = LOG_QUEUE_MAXLEN,
 ) -> InMemoryDebugRecorder:
     """
