@@ -107,17 +107,32 @@ def _preview_conflict_details_text(preview: TrackingMergePreview) -> str:
 
 class TrackingMergeConflictsDialog(QDialog):
     """
-    Confirmation dialog shown when merge conflicts exist.
+    Conflict report / confirmation dialog for tracking merges.
 
-    This dialog is intentionally merge-specific rather than reusing the save
-    overwrite report contract. Merge conflicts are live-layer conflicts, not
-    persisted-file overwrite conflicts.
+    Modes
+    -----
+    - review_only=True:
+        informational report opened from "Review conflicts…"
+    - review_only=False:
+        confirmation dialog shown immediately before applying a partial merge
     """
 
-    def __init__(self, parent: QWidget | None, *, preview: TrackingMergePreview):
+    def __init__(
+        self,
+        parent: QWidget | None,
+        *,
+        preview: TrackingMergePreview,
+        review_only: bool = False,
+    ):
         super().__init__(parent)
         self.preview = preview
-        self.setWindowTitle("Merge conflicts detected")
+        self.review_only = review_only
+
+        if review_only:
+            self.setWindowTitle("Conflicts in merge preview")
+        else:
+            self.setWindowTitle("Confirm partial merge")
+
         self.setModal(True)
         self.setSizeGripEnabled(True)
 
@@ -125,25 +140,29 @@ class TrackingMergeConflictsDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        summary = QLabel(
-            "Some tracked points conflict with existing annotations in the target layer.\n\n"
-            "Only non-conflicting tracked points will be merged."
-        )
+        if review_only:
+            summary_text = (
+                "Some tracked points conflict with existing annotations in the target layer.\n\n"
+                "These conflicting points cannot be added and would be skipped if you proceed with the merge."
+            )
+        else:
+            summary_text = (
+                "Some tracked points conflict with existing annotations in the target layer.\n\n"
+                "Only non-conflicting tracked points will be merged."
+            )
+
+        summary = QLabel(summary_text)
         summary.setWordWrap(True)
         summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
         summary.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         layout.addWidget(summary)
 
-        src_label = QLabel(
-            f"<b>Source:</b> {escape(_layer_display_name(None) if preview is None else preview.source_layer_name)}"
-        )
+        src_label = QLabel(f"<b>Source:</b> {escape(preview.source_layer_name)}")
         src_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         src_label.setWordWrap(True)
         layout.addWidget(src_label)
 
-        tgt_label = QLabel(
-            f"<b>Target:</b> {escape(_layer_display_name(None) if preview is None else preview.target_layer_name)}"
-        )
+        tgt_label = QLabel(f"<b>Target:</b> {escape(preview.target_layer_name)}")
         tgt_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         tgt_label.setWordWrap(True)
         layout.addWidget(tgt_label)
@@ -175,21 +194,33 @@ class TrackingMergeConflictsDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
 
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(self.cancel_btn)
+        if review_only:
+            self.close_btn = QPushButton("Close")
+            self.close_btn.setDefault(True)
+            self.close_btn.setAutoDefault(True)
+            self.close_btn.clicked.connect(self.accept)
+            btn_row.addWidget(self.close_btn)
+        else:
+            self.cancel_btn = QPushButton("Cancel")
+            self.cancel_btn.clicked.connect(self.reject)
+            btn_row.addWidget(self.cancel_btn)
 
-        self.merge_btn = QPushButton("Merge non-conflicting points")
-        self.merge_btn.setDefault(True)
-        self.merge_btn.setAutoDefault(True)
-        self.merge_btn.clicked.connect(self.accept)
-        btn_row.addWidget(self.merge_btn)
+            self.merge_btn = QPushButton("Merge non-conflicting points")
+            self.merge_btn.setDefault(True)
+            self.merge_btn.setAutoDefault(True)
+            self.merge_btn.clicked.connect(self.accept)
+            btn_row.addWidget(self.merge_btn)
 
         layout.addLayout(btn_row)
 
     @staticmethod
+    def review(parent: QWidget | None, *, preview: TrackingMergePreview) -> None:
+        dlg = TrackingMergeConflictsDialog(parent, preview=preview, review_only=True)
+        dlg.exec_()
+
+    @staticmethod
     def confirm(parent: QWidget | None, *, preview: TrackingMergePreview) -> bool:
-        dlg = TrackingMergeConflictsDialog(parent, preview=preview)
+        dlg = TrackingMergeConflictsDialog(parent, preview=preview, review_only=False)
         return dlg.exec_() == QDialog.Accepted
 
 
@@ -400,7 +431,7 @@ class TrackingMergeDialog(QDialog):
         if preview is None or preview.n_conflicts <= 0:
             return
 
-        TrackingMergeConflictsDialog(parent=self, preview=preview).exec_()
+        TrackingMergeConflictsDialog.review(parent=self, preview=preview)
 
 
 # -----------------------------------------------------------------------------#
