@@ -47,7 +47,7 @@ def _layer_display_name(layer: Points | None) -> str:
 
 def _preview_summary_text(preview: TrackingMergePreview | None) -> str:
     if preview is None:
-        return "Choose a tracking-result source layer and a DLC target layer to preview the merge."
+        return "Choose a tracking-result source layer and a target Points layer to preview the merge."
 
     if not preview.is_valid:
         return f"Merge unavailable: {preview.invalid_reason or 'invalid merge preview'}"
@@ -327,7 +327,7 @@ class TrackingMergeDialog(QDialog):
         root.setSpacing(10)
 
         intro = QLabel(
-            "Merge tracked points from a tracking-result layer into a regular DLC Points layer.\n"
+            "Merge tracked points from a tracking-result layer into another Points layer.\n"
             "Please choose how to handle potential conflicts using the options below."
         )
         intro.setWordWrap(True)
@@ -354,7 +354,7 @@ class TrackingMergeDialog(QDialog):
         self._target_combo = QComboBox(self)
         for layer in self._target_candidates:
             self._target_combo.addItem(_layer_display_name(layer), layer)
-        form.addRow("Target DLC points layer", self._target_combo)
+        form.addRow("Target Points layer", self._target_combo)
 
         # Policy row
         self._policy_combo = QComboBox(self)
@@ -570,16 +570,6 @@ class TrackingMergeWorkflow:
             )
             return False
 
-        target_candidates = tuple(self.layer_manager.iter_mergeable_dlc_points_layers(prefer_managed=True))
-        if not target_candidates:
-            QMessageBox.warning(
-                self.parent,
-                "No DLC target layer",
-                "No regular DLC Points layer is currently available as a merge target.",
-                QMessageBox.Ok,
-            )
-            return False
-
         fixed_source_layer = None
         initial_source = None
 
@@ -601,6 +591,22 @@ class TrackingMergeWorkflow:
                 initial_source = active
             else:
                 initial_source = source_candidates[0]
+
+        source_identity = fixed_source_layer or initial_source
+        target_candidates = tuple(
+            layer
+            for layer in self.layer_manager.iter_mergeable_dlc_points_layers(prefer_managed=True)
+            if layer is not source_identity
+        )
+
+        if not target_candidates:
+            QMessageBox.warning(
+                self.parent,
+                "No DLC target layer",
+                "No Points layer is currently available as a merge target.",
+                QMessageBox.Ok,
+            )
+            return False
 
         initial_target = self.layer_manager.suggest_merge_target(initial_source)
 

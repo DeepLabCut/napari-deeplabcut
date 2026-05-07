@@ -1122,24 +1122,34 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
     def is_mergeable_dlc_points_layer(self, layer: Any, *, require_managed: bool = False) -> bool:
         """
-        Return True if a Points layer is a valid merge target for tracking results.
+        Return True if a Points layer is a valid target for tracking merges.
 
         Rules
         -----
         - must be a Points layer
-        - must not be a tracking-result layer
         - must not be a temporary config placeholder
-        - must have a valid DLC header
-        - optionally must already be managed by the lifecycle manager
+        - regular DLC points layers must have a valid DLC header
+        - tracking-result layers are allowed as non-managed targets
+        - if require_managed=True, only managed regular DLC points layers qualify
         """
         if layer is None or not isinstance(layer, Points):
             return False
 
-        if self.is_tracking_result_layer(layer):
-            return False
-
         if self.is_config_placeholder_points_layer(layer):
             return False
+
+        try:
+            data = np.asarray(layer.data) if layer.data is not None else np.empty((0, 3))
+        except Exception:
+            return False
+
+        if data.ndim != 2 or len(data) == 0:
+            return False
+
+        # Tracking-result targets are allowed, but they are never "managed DLC"
+        # for the managed-only pass.
+        if self.is_tracking_result_layer(layer):
+            return not require_managed
 
         if not self.validate_header(layer):
             return False
@@ -1162,16 +1172,20 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         managed_only: bool = False,
     ) -> Iterator[Points]:
         """
-        Iterate Points layers that are valid tracking-merge targets.
+        Iterate Points layers that are valid targets for tracking merges.
 
-        Parameters
-        ----------
-        prefer_managed
-            If True, yield managed mergeable layers first, then any additional live
-            mergeable layers in viewer order.
-        managed_only
-            If True, only yield managed mergeable layers.
+        Notes
+        -----
+        This method keeps its historical name for compatibility, but may yield:
+        - regular DLC points layers
+        - tracking-result points layers
+
+        Ordering
+        --------
+        - if prefer_managed=True, managed regular DLC points layers are yielded first
+        - then remaining mergeable Points layers in viewer order
         """
+
         seen: set[int] = set()
 
         if prefer_managed or managed_only:
