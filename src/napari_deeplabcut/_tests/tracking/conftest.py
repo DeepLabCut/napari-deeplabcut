@@ -1,6 +1,8 @@
 # src/napari_deeplabcut/_tests/tracking/conftest.py
 from __future__ import annotations
+
 from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -32,7 +34,7 @@ class DummyTracker(TrackingModel):
 
         return _NoOpModel()
 
-    def prepare_inputs(self, cfg: "TrackingWorkerData", **kwargs) -> TrackingModelInputs:
+    def prepare_inputs(self, cfg: TrackingWorkerData, **kwargs) -> TrackingModelInputs:
         # Ensure video is (T, H, W, C) and keypoints is (K, 3) where columns: [frame_idx, x, y] or [id, x, y]
         video = np.asarray(cfg.video)
         queries = np.asarray(cfg.keypoints).copy()
@@ -64,8 +66,8 @@ class DummyTracker(TrackingModel):
         return RawModelOutputs(keypoints=tracks, keypoint_features={"visibility": vis})
 
     def prepare_outputs(
-        self, model_outputs: RawModelOutputs, worker_inputs: "TrackingWorkerData" = None, **kwargs
-    ) -> "TrackingWorkerOutput":
+        self, model_outputs: RawModelOutputs, worker_inputs: TrackingWorkerData = None, **kwargs
+    ) -> TrackingWorkerOutput:
         # Flatten (T, K, 2) -> (N, 3) with [frame_idx, x, y]
         tracks = model_outputs.keypoints
         T = tracks.shape[0]
@@ -87,7 +89,7 @@ class DummyTracker(TrackingModel):
             keypoint_features=keypoints_features,
         )
 
-    def validate_outputs(self, inputs: TrackingModelInputs, outputs: "TrackingWorkerOutput") -> tuple[bool, str]:
+    def validate_outputs(self, inputs: TrackingModelInputs, outputs: TrackingWorkerOutput) -> tuple[bool, str]:
         """
         Validate DummyTracker outputs.
 

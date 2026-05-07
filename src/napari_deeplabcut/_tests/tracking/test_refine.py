@@ -12,6 +12,7 @@ from napari_deeplabcut.tracking.core.refine import (
     preview_delete_tracking_points_in_future,
 )
 
+
 def test_preview_delete_invalid_when_no_selection(fake_points_layer_factory):
     layer = fake_points_layer_factory(
         name="tracked",
@@ -33,7 +34,8 @@ def test_preview_delete_invalid_when_no_selection(fake_points_layer_factory):
     assert "select one or more" in (preview.invalid_reason or "").lower()
     assert preview.n_rows_to_delete == 0
     assert preview.delete_row_indices == ()
-    
+
+
 def test_preview_delete_invalid_when_selected_index_out_of_bounds(fake_points_layer_factory):
     layer = fake_points_layer_factory(
         name="tracked",
@@ -50,7 +52,8 @@ def test_preview_delete_invalid_when_selected_index_out_of_bounds(fake_points_la
 
     assert preview.is_valid is False
     assert "no longer valid" in (preview.invalid_reason or "").lower()
-    
+
+
 def test_preview_delete_invalid_when_selected_row_is_not_semantically_valid(fake_points_layer_factory):
     layer = fake_points_layer_factory(
         name="tracked",
@@ -70,7 +73,8 @@ def test_preview_delete_invalid_when_selected_row_is_not_semantically_valid(fake
 
     assert preview.is_valid is False
     assert "valid label/id identity" in (preview.invalid_reason or "").lower()
-    
+
+
 def test_preview_delete_invalid_when_selected_rows_are_not_on_anchor_frame(fake_points_layer_factory):
     layer = fake_points_layer_factory(
         name="tracked",
@@ -90,7 +94,7 @@ def test_preview_delete_invalid_when_selected_rows_are_not_on_anchor_frame(fake_
 
     assert preview.is_valid is False
     assert "current frame" in (preview.invalid_reason or "").lower()
-    
+
 
 def test_preview_delete_invalid_when_selected_identity_is_not_unique_on_anchor_frame(fake_points_layer_factory):
     layer = fake_points_layer_factory(
@@ -112,7 +116,7 @@ def test_preview_delete_invalid_when_selected_identity_is_not_unique_on_anchor_f
 
     assert preview.is_valid is False
     assert "not semantically unique" in (preview.invalid_reason or "").lower()
-    
+
 
 def test_preview_delete_valid_with_no_future_matches(fake_points_layer_factory):
     layer = fake_points_layer_factory(
@@ -137,7 +141,8 @@ def test_preview_delete_valid_with_no_future_matches(fake_points_layer_factory):
     assert preview.n_rows_to_delete == 0
     assert preview.delete_row_indices == ()
     assert preview.ambiguous_slot_frames == ()
-    
+
+
 def test_preview_delete_matches_same_identity_across_future_frames(fake_points_layer_factory):
     layer = fake_points_layer_factory(
         name="tracked",
@@ -164,7 +169,8 @@ def test_preview_delete_matches_same_identity_across_future_frames(fake_points_l
     assert preview.n_rows_to_delete == 2
     assert preview.delete_row_indices == (1, 2)
     assert preview.ambiguous_slot_frames == ()
-    
+
+
 def test_preview_delete_invalid_when_future_identity_is_ambiguous(fake_points_layer_factory):
     layer = fake_points_layer_factory(
         name="tracked",
@@ -189,8 +195,8 @@ def test_preview_delete_invalid_when_future_identity_is_ambiguous(fake_points_la
     assert preview.n_rows_to_delete == 0
     assert preview.delete_row_indices == ()
     assert preview.ambiguous_slot_frames == ((1, "animal-a", "nose"),)
-    
-    
+
+
 def test_apply_delete_tracking_points_in_future_removes_rows_and_preserves_order(fake_points_layer_factory):
     layer = fake_points_layer_factory(
         name="tracked",
@@ -235,7 +241,8 @@ def test_apply_delete_tracking_points_in_future_removes_rows_and_preserves_order
     assert new_features["label"].tolist() == ["nose", "tail"]
     assert new_features["id"].tolist() == ["animal-a", "animal-a"]
     assert new_features["likelihood"].tolist() == [0.9, 0.6]
-    
+
+
 def test_apply_delete_tracking_points_in_future_returns_copies_when_nothing_to_delete(fake_points_layer_factory):
     layer = fake_points_layer_factory(
         name="tracked",
@@ -271,7 +278,7 @@ def test_apply_delete_tracking_points_in_future_returns_copies_when_nothing_to_d
 
     assert new_data is not layer.data
     assert new_features is not layer.features
-    
+
 
 def test_apply_delete_tracking_points_in_future_raises_for_invalid_preview(fake_points_layer_factory):
     layer = fake_points_layer_factory(
@@ -294,8 +301,8 @@ def test_apply_delete_tracking_points_in_future_raises_for_invalid_preview(fake_
             layer,
             preview=preview,
         )
-        
-    
+
+
 def test_apply_delete_tracking_points_in_future_raises_when_delete_indices_are_out_of_bounds(fake_points_layer_factory):
     layer = fake_points_layer_factory(
         name="tracked",

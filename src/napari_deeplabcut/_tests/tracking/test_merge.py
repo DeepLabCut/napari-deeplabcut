@@ -1,8 +1,9 @@
 # src/napari_deeplabcut/_tests/tracking/test_merge.py
 from __future__ import annotations
 
-import numpy as np
 from dataclasses import replace
+
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -13,6 +14,7 @@ from napari_deeplabcut.tracking.core.merge import (
     fingerprint_points_layer,
     preview_tracking_merge,
 )
+
 
 def test_fingerprint_points_layer_uses_name_row_count_and_feature_columns(fake_points_layer_factory):
     layer = fake_points_layer_factory(
@@ -407,7 +409,8 @@ def test_preview_tolerance_controls_identical_vs_conflict(fake_points_layer_fact
     assert preview_strict.n_identical == 0
     assert preview_strict.n_conflicts == 1
     assert preview_strict.n_overwriteable == 0
-    
+
+
 def test_preview_overwrite_policy_classifies_mismatches_as_overwriteable_not_conflicts(fake_points_layer_factory):
     target = fake_points_layer_factory(
         name="target",
@@ -461,7 +464,8 @@ def test_preview_overwrite_policy_classifies_mismatches_as_overwriteable_not_con
     assert "tail" in overwrite.keypoint_label
     assert overwrite.source_coords_text == "(x=45.000, y=35.000)"
     assert overwrite.target_coords_text == "(x=40.000, y=30.000)"
-    
+
+
 def test_apply_tracking_merge_overwrite_policy_overwrites_existing_and_appends_missing(fake_points_layer_factory):
     target = fake_points_layer_factory(
         name="target",
@@ -541,7 +545,8 @@ def test_apply_tracking_merge_overwrite_policy_overwrites_existing_and_appends_m
 
     # Target-only column remains NA/default on appended row
     assert pd.isna(new_features.loc[2, "valid"])
-    
+
+
 def test_apply_tracking_merge_overwrite_policy_can_overwrite_without_appending(fake_points_layer_factory):
     target = fake_points_layer_factory(
         name="target",
@@ -580,7 +585,8 @@ def test_apply_tracking_merge_overwrite_policy_can_overwrite_without_appending(f
     np.testing.assert_allclose(new_data[0], np.array([0, 35, 45], dtype=float))
     assert new_features.loc[0, "label"] == "tail"
     assert new_features.loc[0, "likelihood"] == pytest.approx(0.80)
-    
+
+
 def test_apply_tracking_merge_rejects_unknown_policy_even_if_preview_object_is_mutated(fake_points_layer_factory):
     source = fake_points_layer_factory(
         name="source",
@@ -606,7 +612,8 @@ def test_apply_tracking_merge_rejects_unknown_policy_even_if_preview_object_is_m
             target_layer=target,
             preview=bad_preview,
         )
-        
+
+
 def test_preview_overwrite_policy_respects_tolerance_for_identical_vs_overwriteable(fake_points_layer_factory):
     target = fake_points_layer_factory(
         name="target",

@@ -206,7 +206,10 @@ def normalize_points_layer_for_tracking(
 
     finite_xy = np.isfinite(df[["y", "x"]].to_numpy(dtype=float)).all(axis=1)
     valid_frame = df["frame"].notna()
-    valid_label = df["label"].astype(str).str.strip().ne("")
+    norm_label = df["label"].where(df["label"].notna(), "").astype(str).str.strip()
+    valid_label = (
+        df["label"].notna() & norm_label.ne("") & norm_label.str.lower().ne("nan") & norm_label.str.lower().ne("none")
+    )
     df[valid_flag_column] = finite_xy & valid_frame & valid_label
 
     df["_slot_key"] = [
