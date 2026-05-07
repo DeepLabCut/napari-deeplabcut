@@ -7,8 +7,7 @@ import numpy as np
 import pandas as pd
 from magicgui.widgets import ComboBox, create_widget
 from napari.layers import Image, Points
-from napari.viewer import Viewer
-from qtpy.QtCore import Qt, QTimer, Signal, Slot
+from qtpy.QtCore import Qt, Signal, Slot
 from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import (
     QApplication,
@@ -24,7 +23,6 @@ from qtpy.QtWidgets import (
     QStyle,
     QToolButton,
     QVBoxLayout,
-    QWidget,
 )
 
 from napari_deeplabcut._widgets import KeypointControls
@@ -40,6 +38,7 @@ from napari_deeplabcut.config.settings import TRACKING_SHORTCUTS_ENABLED
 from napari_deeplabcut.core.keypoints import KeypointStore
 from napari_deeplabcut.core.layer_lifecycle import get_or_create_layer_manager
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
+from napari_deeplabcut.ui.base_widget.singleton_widget import ViewerSingletonWidget
 
 from .core.data import (
     TrackingWorkerData,
@@ -59,13 +58,16 @@ logger = logging.getLogger(__name__)
 # TODO @C-Achard: fix the sliders sync not firing (on existing layers ?)
 
 
-class TrackingControls(QWidget):
+class TrackingControls(ViewerSingletonWidget):
     trackingRequested = Signal(object)
     trackedKeypointsAdded = Signal()
 
     def __init__(self, viewer: "napari.viewer.Viewer"):
+        if not self._singleton_prepare_init(napari_viewer=viewer):
+            return
         super().__init__()
-        self._viewer: Viewer = viewer
+        self._singleton_finalize_init()
+        self._viewer = self.canonical_viewer(viewer)
         self.lifecycle_manager = get_or_create_layer_manager(viewer)
         # self.setObjectName("napari-deeplabcut-tracking-controls")
         self.setProperty("ndlc_tracking_controls", True)
@@ -719,7 +721,7 @@ class TrackingControls(QWidget):
                 )
 
         # Layer insertion / choice refresh may still be settling.
-        QTimer.singleShot(0, _apply)  # FIXME @C-Achard no unowned QTimers, rebase and use mixin from base
+        self._schedule_once("update_tracking_layer_combobox", 0, _apply)
 
     def _delete_selected_in_future_frames(self) -> None:
         active = self._viewer.layers.selection.active
