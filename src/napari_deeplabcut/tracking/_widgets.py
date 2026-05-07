@@ -38,6 +38,7 @@ from napari_deeplabcut.config.settings import TRACKING_SHORTCUTS_ENABLED
 from napari_deeplabcut.core.keypoints import KeypointStore
 from napari_deeplabcut.core.layer_lifecycle import get_or_create_layer_manager
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
+from napari_deeplabcut.core.layers import get_uniform_point_size
 from napari_deeplabcut.ui.base_widget.singleton_widget import ViewerSingletonWidget
 
 from .core.data import (
@@ -383,9 +384,12 @@ class TrackingControls(ViewerSingletonWidget):
             pass
 
         try:
-            layer.size = deepcopy(source.size)
+            layer.size = get_uniform_point_size(source)
         except Exception:
-            pass
+            try:
+                layer.size = deepcopy(source.size)
+            except Exception:
+                pass
 
         try:
             # Optional: keep source colors if useful, but still visually distinct
