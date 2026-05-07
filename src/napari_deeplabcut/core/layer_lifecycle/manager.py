@@ -225,6 +225,78 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         return role in {"image", "video"} and isinstance(ctx, dict) and bool(ctx)
 
+    def is_plottable_traj_layer(self, layer: Any) -> bool:
+        """
+        Return True if a Points layer should be offered to the trajectory plot.
+
+        Included
+        --------
+        - managed DLC points layers
+        - tracking-result points layers
+
+        Excluded
+        --------
+        - config placeholder layers
+        - generic/unmanaged non-tracking Points layers
+        - empty Points layers
+        """
+        if layer is None or not isinstance(layer, Points):
+            return False
+
+        if self.is_config_placeholder_points_layer(layer):
+            return False
+
+        try:
+            data = np.asarray(layer.data) if layer.data is not None else np.empty((0, 3))
+        except Exception:
+            return False
+
+        if data.ndim != 2 or len(data) == 0:
+            return False
+
+        if self.is_tracking_result_layer(layer):
+            return True
+
+        return self.is_managed(layer) and self.validate_header(layer)
+
+    def iter_plottable_traj_layers(self) -> Iterator[Points]:
+        """
+        Iterate Points layers that are eligible for the trajectory plot.
+
+        Viewer order is preserved.
+        """
+        for layer in self.viewer.layers:
+            if isinstance(layer, Points) and self.is_plottable_traj_layer(layer):
+                yield layer
+
+    def suggest_plottable_traj_layer(self) -> Points | None:
+        """
+        Suggest the best Points layer to display in the trajectory plot.
+
+        Priority
+        --------
+        1. currently active plottable layer
+        2. first managed non-tracking DLC points layer
+        3. first tracking-result layer
+        4. first remaining plottable layer in viewer order
+        """
+        active = getattr(self.viewer.layers.selection, "active", None)
+        if self.is_plottable_traj_layer(active):
+            return active
+
+        for layer, _store in self.iter_managed_points():
+            if self.is_plottable_traj_layer(layer) and not self.is_tracking_result_layer(layer):
+                return layer
+
+        for layer in self.iter_tracking_result_layers():
+            if self.is_plottable_traj_layer(layer):
+                return layer
+
+        for layer in self.iter_plottable_traj_layers():
+            return layer
+
+        return None
+
     def active_dlc_image_layer(self) -> Image | None:
         if self._active_dlc_image_layer_id is None:
             return None

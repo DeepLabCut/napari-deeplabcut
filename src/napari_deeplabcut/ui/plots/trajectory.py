@@ -15,6 +15,7 @@ from pathlib import Path
 import matplotlib.style as mplstyle
 import napari
 import numpy as np
+import pandas as pd
 from matplotlib.backends.backend_qtagg import FigureCanvas, NavigationToolbar2QT
 from napari.layers import Points
 from napari.utils.events import Event
@@ -28,7 +29,7 @@ from napari_deeplabcut.config.settings import (
     DEFAULT_SINGLE_ANIMAL_CMAP,
 )
 from napari_deeplabcut.core.keypoints import build_color_cycles
-from napari_deeplabcut.core.layer_lifecycle import LayerLifecycleManager
+from napari_deeplabcut.core.layer_lifecycle import LayerLifecycleManager, get_or_create_layer_manager
 from napari_deeplabcut.core.layers import (
     get_first_image_layer,
     get_first_video_image_layer,
@@ -87,11 +88,19 @@ class NapariNavigationToolbar(NavigationToolbar2QT):
 class TrajectoryMatplotlibCanvas(QWidget):
     """Trajectory plot using matplotlib for keypoints (t-y plot)."""
 
-    def __init__(self, napari_viewer, parent=None, get_color_mode: callable = None):
+    def __init__(
+        self,
+        napari_viewer,
+        parent=None,
+        *,
+        layer_manager: LayerLifecycleManager = None,
+        get_color_mode: callable = None,
+    ):
         super().__init__(parent=parent)
 
         self.viewer = napari_viewer
         self._get_color_mode = get_color_mode or (lambda: "bodypart")
+        self.layer_manager = layer_manager or get_or_create_layer_manager(napari_viewer)
 
         with mplstyle.context(self.mpl_style_sheet_path):
             self.canvas = FigureCanvas()
@@ -155,7 +164,9 @@ class TrajectoryMatplotlibCanvas(QWidget):
         )
         self._apply_axis_theme()
 
-        self.viewer.layers.events.inserted.connect(self._load_dataframe)
+        self.viewer.layers.events.inserted.connect(lambda event=None: self.refresh_from_viewer_layers())
+        self.viewer.layers.events.removed.connect(lambda event=None: self.refresh_from_viewer_layers())
+        self.viewer.layers.selection.events.active.connect(lambda event=None: self.refresh_from_viewer_layers())
         self.viewer.dims.events.range.connect(self._update_slider_max)
         self._lines: dict[tuple[str, str], list] = {}
 
@@ -252,38 +263,11 @@ class TrajectoryMatplotlibCanvas(QWidget):
         except Exception:
             logger.debug("Trajectory plot: failed to sync visible lines to point selection", exc_info=True)
 
-    def _get_plot_points_layer(self):
+    def _get_plot_points_layer(self) -> Points | None:
         """
-        Return the active plottable Points layer for DLC trajectories when possible.
-
-        A generic napari Points layer may not have the DLC header required by io.form_df.
-        If the active layer is not a suitable DLC Points layer, fall back to the first
-        plottable Points layer in the viewer.
+        Return the manager-selected Points layer for the trajectory plot.
         """
-
-        def _is_plottable_points_layer(layer) -> bool:
-            if not isinstance(layer, Points):
-                return False
-
-            md = getattr(layer, "metadata", None) or {}
-            data = getattr(layer, "data", None)
-
-            if md.get("header") is None:
-                return False
-            if data is None or len(data) == 0:
-                return False
-
-            return True
-
-        active_layer = getattr(getattr(self.viewer.layers, "selection", None), "active", None)
-        if _is_plottable_points_layer(active_layer):
-            return active_layer
-
-        for layer in self.viewer.layers:
-            if _is_plottable_points_layer(layer):
-                return layer
-
-        return None
+        return self.layer_manager.suggest_plottable_traj_layer()
 
     def _clear_plot(self) -> None:
         """Clear plotted trajectories and reset axes."""
@@ -307,6 +291,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
         try:
             len(self.df)
         except Exception:
+            logger.debug("Trajectory plot: DataFrame is not refreshable", exc_info=True)
             return False
         return True
 
@@ -355,9 +340,57 @@ class TrajectoryMatplotlibCanvas(QWidget):
                 else:
                     logger.debug(f"Failed to set toolbar icon from {icon_path}: file does not exist")
 
+    def _tracking_result_plot_properties(self, layer: Points) -> dict[str, object]:
+        """
+        Build a napari-style properties mapping for a tracking-result layer.
+
+        For regular managed DLC layers, trajectory plotting should keep using
+        `layer.properties` unchanged. This helper is only for tracking-result
+        layers, whose semantic columns may primarily live in `layer.features`.
+        """
+        out: dict[str, object] = {}
+
+        n_rows = 0
+        try:
+            data = getattr(layer, "data", None)
+            n_rows = len(data) if data is not None else 0
+        except Exception:
+            n_rows = 0
+
+        features = getattr(layer, "features", None)
+        if features is not None:
+            try:
+                if isinstance(features, pd.DataFrame):
+                    feat_df = features.reset_index(drop=True)
+                else:
+                    feat_df = pd.DataFrame(features).reset_index(drop=True)
+
+                if len(feat_df) == n_rows:
+                    for col in feat_df.columns:
+                        out[str(col)] = feat_df[col].to_numpy(copy=False)
+            except Exception:
+                logger.debug("Trajectory plot: failed to read tracking layer.features", exc_info=True)
+
+        props = getattr(layer, "properties", {}) or {}
+        if isinstance(props, dict):
+            for key, value in props.items():
+                key_str = str(key)
+                if key_str not in out:
+                    out[key_str] = value
+
+        return out
+
+    def _plot_properties_for_layer(self, layer: Points) -> dict[str, object]:
+        if self.layer_manager.is_tracking_result_layer(layer):
+            return self._tracking_result_plot_properties(layer)
+
+        props = getattr(layer, "properties", {}) or {}
+        return props if isinstance(props, dict) else {}
+
     def _load_dataframe(self, event=None) -> None:
         with mplstyle.context(self.mpl_style_sheet_path):
             points_layer = self._get_plot_points_layer()
+            logger.debug(f"Loading trajectory plot DataFrame from layer: {points_layer!r}")
             if points_layer is None:
                 # No plottable DLC points layer present -> clear the plot quietly.
                 self._clear_plot()
@@ -369,14 +402,14 @@ class TrajectoryMatplotlibCanvas(QWidget):
             if not was_visible:
                 self.hide()
 
+            effective_props = self._plot_properties_for_layer(points_layer)
             try:
                 self.df = io.form_df(
                     points_layer.data,
                     layer_metadata=points_layer.metadata,
-                    layer_properties=points_layer.properties,
+                    layer_properties=effective_props,
                 )
             except KeyError as e:
-                # Generic / incomplete points layer: not an error for the UI, just skip plotting.
                 logger.debug("Trajectory plot skipped for non-DLC/incomplete points layer: %r", e)
                 self._clear_plot()
                 return
@@ -519,6 +552,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
     def _selected_line_keys_from_points_layer(self) -> set:
         points_layer = self._get_plot_points_layer()
+        logger.debug(f"Determining visible trajectory lines from points layer: {points_layer!r}")
         if points_layer is None:
             return set()
 
@@ -526,7 +560,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
         if not selected:
             return set()
 
-        props = getattr(points_layer, "properties", {}) or {}
+        props = self._plot_properties_for_layer(points_layer)
         labels = props.get("label", None)
         ids = props.get("id", None)
 

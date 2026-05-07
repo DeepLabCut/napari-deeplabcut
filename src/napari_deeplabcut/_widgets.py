@@ -231,6 +231,7 @@ class KeypointControls(ViewerSingletonWidget):
 
         self._traj_mpl_canvas = TrajectoryMatplotlibCanvas(
             self.viewer,
+            layer_manager=self.layer_manager,
             get_color_mode=lambda: self.color_mode,
         )
         self._show_traj_plot_cb = QCheckBox("Show trajectories", parent=self)
@@ -721,6 +722,7 @@ class KeypointControls(ViewerSingletonWidget):
         if Qt.CheckState(state) == Qt.CheckState.Checked:
             self._ensure_traj_canvas_docked()
             if self._mpl_docked:
+                self._traj_mpl_canvas.refresh_from_viewer_layers()
                 self._traj_mpl_canvas._apply_napari_theme()
                 self._traj_mpl_canvas.update_plot_range(
                     Event(type_name="", value=[self.viewer.dims.current_step[0]]),
