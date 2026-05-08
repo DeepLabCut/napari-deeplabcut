@@ -225,26 +225,6 @@ class PointsLayerSaveWorkflow:
     # ------------------------------------------------------------------ #
 
     def _save_single_points_layer(self, layer: Points) -> SaveOutcome:
-        if self._is_tracking_result_points_layer(layer):
-            self.logger.debug(
-                "Blocked direct save of tracking-result layer=%r",
-                getattr(layer, "name", layer),
-            )
-            self._warn_tracking_result_layer_not_saveable(layer)
-            return SaveOutcome(
-                saved=False,
-                status_message="Tracking result layers must be merged before saving.",
-            )
-
-        if not self._is_saveable_dlc_points_layer(layer):
-            QMessageBox.warning(
-                self.parent,
-                "Cannot save keypoints",
-                "The selected Points layer is not a saveable DeepLabCut keypoints layer.",
-                QMessageBox.Ok,
-            )
-            return SaveOutcome(saved=False)
-
         ok = self._ensure_promotion_save_target(layer)
         if not ok:
             return SaveOutcome(saved=False)
@@ -375,7 +355,8 @@ class PointsLayerSaveWorkflow:
                 saved=True,
                 status_message=(
                     "Data successfully saved. "
-                    "Tracking-result layers were saved generically and not as DeepLabCut project data."
+                    "Tracking result layers are not saved as DeepLabCut project data "
+                    "and will not be loaded back as proper annotations."
                 ),
             )
 
