@@ -170,8 +170,11 @@ class PointsLayerSaveWorkflow:
 
         if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
             layer = selected_layers[0]
-            return self._save_single_points_layer(layer)
+            if self._is_saveable_dlc_points_layer(layer):
+                return self._save_single_points_layer(layer)
 
+        # Tracking-result or foreign/generic Points layer:
+        # do not force DLC save routing; use generic napari save instead.
         return self._save_multiple_layers(selected=selected, selected_layers=selected_layers)
 
     # ------------------------------------------------------------------ #
