@@ -333,32 +333,13 @@ class PointsLayerSaveWorkflow:
         # Generic napari save: allow tracking-result layers and foreign points layers.
         self.viewer.layers.save(filename, selected=selected)
 
-        # DLC-specific post-save persistence should only apply to true DLC project-saveable layers.
         if selected:
-            candidate_layers = [ly for ly in selected_layers if self._is_saveable_dlc_points_layer(ly)]
+            candidate_layers = [ly for ly in selected_layers if isinstance(ly, Points)]
         else:
-            candidate_layers = [
-                ly for ly in self.layer_manager.managed_points_layers() if self._is_saveable_dlc_points_layer(ly)
-            ]
+            candidate_layers = list(self.layer_manager.managed_points_layers())
 
         if candidate_layers:
             self._persist_folder_ui_state_for_layers(candidate_layers)
-
-        tracking_layers = (
-            [ly for ly in selected_layers if self._is_tracking_result_points_layer(ly)]
-            if selected
-            else list(self.layer_manager.iter_tracking_result_layers())
-        )
-
-        if tracking_layers:
-            return SaveOutcome(
-                saved=True,
-                status_message=(
-                    "Data successfully saved. "
-                    "Tracking result layers are not saved as DeepLabCut project data "
-                    "and will not be loaded back as proper annotations."
-                ),
-            )
 
         return SaveOutcome(saved=True, status_message="Data successfully saved")
 
