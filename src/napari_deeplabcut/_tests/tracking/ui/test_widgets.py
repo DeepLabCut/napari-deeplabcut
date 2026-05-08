@@ -147,6 +147,14 @@ def test_tracking_frame_controls_layer_selection_and_ranges(setup_tracking_widge
 
 
 @pytest.mark.usefixtures("qtbot")
+def test_track_does_nothing_without_video_layer(setup_tracking_widget, qtbot):
+    tc = setup_tracking_widget(add_data=False)
+
+    with qtbot.assertNotEmitted(tc.trackingRequested):
+        tc.track_forward()
+
+
+@pytest.mark.usefixtures("qtbot")
 def test_forward_track(setup_tracking_widget, qtbot, viewer):
     tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
 
@@ -259,3 +267,195 @@ def test_bothway_track(setup_tracking_widget, qtbot, viewer):
     assert len(captured) == 1
     assert captured[0].backward_tracking is True
     assert captured[0].reference_frame_index == 3
+
+
+@pytest.mark.usefixtures("qtbot")
+@pytest.mark.parametrize(
+    "method_name, ref_frame, target_value",
+    [
+        ("track_forward", 3, 3),  # invalid forward
+        ("track_backward", 3, 3),  # invalid backward
+    ],
+)
+def test_invalid_target_does_not_emit_request(
+    setup_tracking_widget, qtbot, viewer, method_name, ref_frame, target_value
+):
+    tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
+    _put_all_points_on_frame(points_layer, ref_frame)
+    _set_current_tracking_frame(tc, viewer, ref_frame)
+
+    if method_name == "track_forward":
+        tc._forward_spinbox_absolute.setValue(target_value)
+    else:
+        tc._backward_spinbox_absolute.setValue(target_value)
+
+    captured = []
+    tc.trackingRequested.connect(captured.append)
+
+    getattr(tc, method_name)()
+    qtbot.wait(50)
+
+    assert captured == []
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_track_is_ignored_while_already_tracking(setup_tracking_widget, qtbot, viewer):
+    tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
+
+    _put_all_points_on_frame(points_layer, 0)
+    _set_current_tracking_frame(tc, viewer, 0)
+    tc._forward_spinbox_absolute.setValue(3)
+
+    tc.worker_started = True
+    tc.is_tracking = True
+
+    captured = []
+    tc.trackingRequested.connect(captured.append)
+
+    tc.track_forward()
+    qtbot.wait(50)
+
+    assert captured == []
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_bothway_backward_is_connected_single_shot(setup_tracking_widget, qtbot, viewer):
+    tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
+
+    from types import MethodType
+
+    tc._start_worker = MethodType(lambda self: setattr(self, "worker_started", True), tc)
+
+    _put_all_points_on_frame(points_layer, 3)
+    _set_current_tracking_frame(tc, viewer, 3)
+
+    tc._forward_spinbox_absolute.setValue(6)
+    tc._backward_spinbox_absolute.setValue(0)
+
+    captured = []
+    tc.trackingRequested.connect(captured.append)
+    tc.keypoint_widget = object()
+
+    tc.track_bothway()
+    assert len(captured) == 1
+    assert captured[0].backward_tracking is False
+
+    tc.trackedKeypointsAdded.emit()
+    qtbot.waitUntil(lambda: len(captured) == 2, timeout=1000)
+    assert captured[1].backward_tracking is True
+
+    # Should NOT trigger backward a second time
+    tc.trackedKeypointsAdded.emit()
+    qtbot.wait(50)
+    assert len(captured) == 2
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_tracking_finished_creates_and_selects_result_layer(setup_tracking_widget, qtbot, viewer):
+    tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
+
+    tc._keypoint_layer_combo.value = points_layer
+
+    out = type("Out", (), {})()
+    out.keypoints = np.array(
+        [
+            [0, 1.0, 2.0],
+            [1, 1.1, 2.1],
+        ]
+    )
+    out.keypoint_features = pd.DataFrame(
+        {
+            "id": [0, 0],
+            "name": ["kp0", "kp0"],
+            "tracking_query_frame": [0, 0],
+        }
+    )
+
+    before = len(viewer.layers)
+
+    with qtbot.waitSignal(tc.trackedKeypointsAdded, timeout=1000):
+        tc.tracking_finished(out)
+
+    qtbot.wait(100)
+
+    assert len(viewer.layers) == before + 1
+    new_layer = viewer.layers[-1]
+    assert viewer.layers.selection.active is new_layer
+    assert new_layer is tc.keypoint_layer
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_forward_controls_stay_in_sync(setup_tracking_widget, viewer):
+    tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
+
+    _set_current_tracking_frame(tc, viewer, 3)
+
+    # absolute -> relative + slider
+    tc._forward_spinbox_absolute.setValue(7)
+    assert tc._forward_spinbox_relative.value() == 4
+    assert tc._forward_slider.value() == 4
+
+    # slider -> absolute + relative
+    tc._forward_slider.setValue(2)
+    assert tc._forward_spinbox_relative.value() == 2
+    assert tc._forward_spinbox_absolute.value() == 5
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_backward_controls_stay_in_sync(setup_tracking_widget, viewer):
+    tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
+
+    _set_current_tracking_frame(tc, viewer, 6)
+
+    # absolute -> relative + slider
+    tc._backward_spinbox_absolute.setValue(2)
+    assert tc._backward_spinbox_relative.value() == -4
+    assert tc._backward_slider.value() == -4
+
+    # slider -> absolute + relative
+    tc._backward_slider.setValue(-1)
+    assert tc._backward_spinbox_relative.value() == -1
+    assert tc._backward_spinbox_absolute.value() == 5
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_seed_query_points_and_features_extracts_ref_frame_only(setup_tracking_widget):
+    tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
+
+    points_layer.data = np.array(
+        [
+            [2, 1.0, 2.0],
+            [2, 3.0, 4.0],
+            [4, 5.0, 6.0],
+        ]
+    )
+    points_layer.features = pd.DataFrame(
+        {
+            "id": [0, 1, 2],
+            "name": ["kp0", "kp1", "kp2"],
+        }
+    )
+
+    keypoints, features = tc._seed_query_points_and_features(ref_frame_idx=2)
+
+    assert keypoints.shape == (2, 3)
+    assert np.all(keypoints[:, 0] == 0)  # rebased to local frame zero
+    assert list(features["id"]) == [0, 1]
+    assert "tracking_query_index" in features.columns
+    assert "tracking_query_frame" in features.columns
+    assert set(features["tracking_query_frame"]) == {2}
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_seed_query_points_and_features_raises_when_no_points_on_ref_frame(setup_tracking_widget):
+    tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
+
+    points_layer.data = np.array(
+        [
+            [1, 1.0, 2.0],
+            [1, 3.0, 4.0],
+        ]
+    )
+
+    with pytest.raises(ValueError, match="No keypoints found on reference frame"):
+        tc._seed_query_points_and_features(ref_frame_idx=3)
