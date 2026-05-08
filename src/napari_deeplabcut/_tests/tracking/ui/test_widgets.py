@@ -104,6 +104,7 @@ def test_tracking_controls_initial_state(setup_tracking_widget):
     assert tc._model_info_button.toolTip() == info
 
 
+@pytest.mark.usefixtures("qtbot")
 def test_tracking_frame_controls_layer_selection_and_ranges(setup_tracking_widget, viewer):
     tc, video_layer, points_layer = setup_tracking_widget(add_data=True)
     viewer.dims.current_step = (2,) + (0,) * (viewer.dims.ndim - 1)
