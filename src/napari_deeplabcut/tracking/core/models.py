@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 # Automatically populated via the @register_backbone decorator.
 AVAILABLE_TRACKERS: dict[str, dict[str, Any]] = {}
 
-# TODO @C-Achard: consider splitting into base.py (TrackingModel) and putting models in core/models/
+# TODO @C-Achard: consider splitting into base.py (TrackingModel) and putting models in core/models/ or models/
 
 logger = logging.getLogger(__name__)
 
