@@ -174,10 +174,73 @@ class PointsLayerSaveWorkflow:
         return self._save_multiple_layers(selected=selected, selected_layers=selected_layers)
 
     # ------------------------------------------------------------------ #
+    # Pre-save checks of layer identity                                  #
+    # ------------------------------------------------------------------ #
+    def _is_tracking_result_points_layer(self, layer) -> bool:
+        return isinstance(layer, Points) and self.layer_manager.is_tracking_result_layer(layer)
+
+    def _is_saveable_dlc_points_layer(self, layer) -> bool:
+        """
+        Return True only for real DLC points layers that may be saved back
+        to a DeepLabCut project (.h5 / .csv workflow).
+
+        Excludes:
+        - tracking-result layers
+        - config placeholder layers
+        - invalid/non-DLC Points layers
+        """
+        if not isinstance(layer, Points):
+            return False
+
+        if self.layer_manager.is_tracking_result_layer(layer):
+            return False
+
+        if self.layer_manager.is_config_placeholder_points_layer(layer):
+            return False
+
+        if not self.layer_manager.validate_header(layer):
+            return False
+
+        return True
+
+    def _warn_tracking_result_layer_not_saveable(self, layer: Points | None = None) -> None:
+        layer_name = getattr(layer, "name", "Selected layer") if layer is not None else "Selected layer"
+        QMessageBox.information(
+            self.parent,
+            "Cannot save tracking result layer",
+            (
+                f'"{layer_name}" is a tracking-result layer and cannot be saved directly '
+                "to a DeepLabCut project (.h5 / .csv).\n\n"
+                "Please use 'Merge tracked points' first, then save the merged DLC layer."
+            ),
+            QMessageBox.Ok,
+        )
+
+    # ------------------------------------------------------------------ #
     # Single-layer points save                                           #
     # ------------------------------------------------------------------ #
 
     def _save_single_points_layer(self, layer: Points) -> SaveOutcome:
+        if self._is_tracking_result_points_layer(layer):
+            self.logger.debug(
+                "Blocked direct save of tracking-result layer=%r",
+                getattr(layer, "name", layer),
+            )
+            self._warn_tracking_result_layer_not_saveable(layer)
+            return SaveOutcome(
+                saved=False,
+                status_message="Tracking result layers must be merged before saving.",
+            )
+
+        if not self._is_saveable_dlc_points_layer(layer):
+            QMessageBox.warning(
+                self.parent,
+                "Cannot save keypoints",
+                "The selected Points layer is not a saveable DeepLabCut keypoints layer.",
+                QMessageBox.Ok,
+            )
+            return SaveOutcome(saved=False)
+
         ok = self._ensure_promotion_save_target(layer)
         if not ok:
             return SaveOutcome(saved=False)
@@ -265,7 +328,6 @@ class PointsLayerSaveWorkflow:
     # ------------------------------------------------------------------ #
     # Multi-layer / generic save                                         #
     # ------------------------------------------------------------------ #
-
     def _save_multiple_layers(self, *, selected: bool, selected_layers: list) -> SaveOutcome:
         dlg = QFileDialog()
         hist = get_save_history()
@@ -283,14 +345,34 @@ class PointsLayerSaveWorkflow:
         if not filename:
             return SaveOutcome(saved=False)
 
-        self.viewer.layers.save(filename, selected=selected)
-
         if selected:
             candidate_layers = [ly for ly in selected_layers if isinstance(ly, Points)]
         else:
             candidate_layers = list(self.layer_manager.managed_points_layers())
+        tracking_layers = [ly for ly in candidate_layers if self._is_tracking_result_points_layer(ly)]
+        saveable_layers = [ly for ly in candidate_layers if self._is_saveable_dlc_points_layer(ly)]
 
-        self._persist_folder_ui_state_for_layers(candidate_layers)
+        if selected and candidate_layers and not saveable_layers:
+            active_tracking = tracking_layers[0] if tracking_layers else None
+            self._warn_tracking_result_layer_not_saveable(active_tracking)
+            return SaveOutcome(
+                saved=False,
+                status_message="Tracking result layers must be merged before saving.",
+            )
+        self.viewer.layers.save(filename, selected=selected)
+        if saveable_layers:
+            self._persist_folder_ui_state_for_layers(saveable_layers)
+
+        if tracking_layers:
+            return SaveOutcome(
+                saved=True,
+                status_message=(
+                    "Data successfully saved. "
+                    f"Skipped {len(tracking_layers)} tracking-result layer"
+                    f"{'s' if len(tracking_layers) != 1 else ''} for DLC project persistence; "
+                    "merge them before saving to a DeepLabCut project."
+                ),
+            )
 
         return SaveOutcome(saved=True, status_message="Data successfully saved")
 
