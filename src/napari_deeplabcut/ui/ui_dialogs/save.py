@@ -169,8 +169,12 @@ class PointsLayerSaveWorkflow:
             return SaveOutcome(saved=False)
 
         if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
-            return self._save_single_points_layer(selected_layers[0])
+            layer = selected_layers[0]
+            if self._is_saveable_dlc_points_layer(layer):
+                return self._save_single_points_layer(layer)
 
+        # Tracking-result or foreign/generic Points layer:
+        # do not force DLC save routing; use generic napari save instead.
         return self._save_multiple_layers(selected=selected, selected_layers=selected_layers)
 
     # ------------------------------------------------------------------ #
@@ -337,6 +341,7 @@ class PointsLayerSaveWorkflow:
             dir_hint = hist[0]
         else:
             dir_hint = str(Path.home())
+
         filename, _ = dlg.getSaveFileName(
             caption=f"Save {'selected' if selected else 'all'} layers",
             dir=dir_hint,  # home dir by default
@@ -345,32 +350,32 @@ class PointsLayerSaveWorkflow:
         if not filename:
             return SaveOutcome(saved=False)
 
-        if selected:
-            candidate_layers = [ly for ly in selected_layers if isinstance(ly, Points)]
-        else:
-            candidate_layers = list(self.layer_manager.managed_points_layers())
-        tracking_layers = [ly for ly in candidate_layers if self._is_tracking_result_points_layer(ly)]
-        saveable_layers = [ly for ly in candidate_layers if self._is_saveable_dlc_points_layer(ly)]
-
-        if selected and candidate_layers and not saveable_layers:
-            active_tracking = tracking_layers[0] if tracking_layers else None
-            self._warn_tracking_result_layer_not_saveable(active_tracking)
-            return SaveOutcome(
-                saved=False,
-                status_message="Tracking result layers must be merged before saving.",
-            )
+        # Generic napari save: allow tracking-result layers and foreign points layers.
         self.viewer.layers.save(filename, selected=selected)
-        if saveable_layers:
-            self._persist_folder_ui_state_for_layers(saveable_layers)
+
+        # DLC-specific post-save persistence should only apply to true DLC project-saveable layers.
+        if selected:
+            candidate_layers = [ly for ly in selected_layers if self._is_saveable_dlc_points_layer(ly)]
+        else:
+            candidate_layers = [
+                ly for ly in self.layer_manager.managed_points_layers() if self._is_saveable_dlc_points_layer(ly)
+            ]
+
+        if candidate_layers:
+            self._persist_folder_ui_state_for_layers(candidate_layers)
+
+        tracking_layers = (
+            [ly for ly in selected_layers if self._is_tracking_result_points_layer(ly)]
+            if selected
+            else list(self.layer_manager.iter_tracking_result_layers())
+        )
 
         if tracking_layers:
             return SaveOutcome(
                 saved=True,
                 status_message=(
                     "Data successfully saved. "
-                    f"Skipped {len(tracking_layers)} tracking-result layer"
-                    f"{'s' if len(tracking_layers) != 1 else ''} for DLC project persistence; "
-                    "merge them before saving to a DeepLabCut project."
+                    "Tracking-result layers were saved generically and not as DeepLabCut project data."
                 ),
             )
 
