@@ -330,9 +330,6 @@ def form_df(
 
 def _drop_likelihood_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Remove DLC likelihood columns from a dataframe if present."""
-    if df.empty:
-        return df
-
     # DLC-style wide dataframe: MultiIndex columns with a coords level
     if isinstance(df.columns, pd.MultiIndex):
         col_names = list(df.columns.names)
@@ -348,14 +345,21 @@ def _drop_likelihood_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _drop_likelihood_from_header(header: DLCHeaderModel) -> DLCHeaderModel:
-    """Return a header model with likelihood removed from the coords level."""
-    cols = header.as_multiindex()
+    """
+    Return, "names": names})    Return a header model with likelihood removed from the coords level,
+    while preserving the original header arity (3-level SA vs 4-level MA)
+    and original header.names.
+    """
+    raw_cols = header.columns
+    names = list(getattr(header, "names", []) or [])
 
-    if isinstance(cols, pd.MultiIndex) and "coords" in cols.names:
-        mask = cols.get_level_values("coords").astype(str) != "likelihood"
-        cols = cols[mask]
+    if not raw_cols or "coords" not in names:
+        return header
 
-    return DLCHeaderModel(columns=cols)
+    coords_idx = names.index("coords")
+    filtered_cols = [col for col in raw_cols if len(col) > coords_idx and str(col[coords_idx]) != "likelihood"]
+
+    return header.model_copy(update={"columns": filtered_cols, "names": names})
 
 
 def _resolve_multianimalproject_for_write(

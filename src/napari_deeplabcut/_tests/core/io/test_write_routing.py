@@ -6,9 +6,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from napari_deeplabcut.config.models import AnnotationKind
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
-from napari_deeplabcut.core.io import _drop_likelihood_columns, resolve_output_path_from_metadata, write_hdf
+from napari_deeplabcut.core.io import (
+    _drop_likelihood_columns,
+    _drop_likelihood_from_header,
+    resolve_output_path_from_metadata,
+    write_hdf,
+)
 
 
 def test_resolve_output_path_returns_none_for_machine_without_save_target():
@@ -170,3 +175,61 @@ def test_drop_likelihood_cleans_existing_gt_columns_too():
 
     coords = df_out.columns.get_level_values("coords")
     assert list(coords) == ["x", "y"]
+
+
+def test_drop_likelihood_columns_removes_likelihood_from_empty_dataframe():
+    """
+    Regression guard: likelihood coords must be removed even when the dataframe
+    has 0 rows, e.g. an empty machine layer promoted to GT.
+    """
+    cols = pd.MultiIndex.from_product(
+        [["John"], ["bp1"], ["x", "y", "likelihood"]],
+        names=["scorer", "bodyparts", "coords"],
+    )
+    df = pd.DataFrame([], columns=cols, index=pd.Index([], name="image"))
+
+    out = _drop_likelihood_columns(df)
+
+    assert out.empty
+    assert "likelihood" not in out.columns.get_level_values("coords")
+    assert list(out.columns.get_level_values("coords")) == ["x", "y"]
+
+
+def test_drop_likelihood_from_header_preserves_single_animal_3level_shape():
+    header = DLCHeaderModel(
+        columns=[
+            ("John", "bp1", "x"),
+            ("John", "bp1", "y"),
+            ("John", "bp1", "likelihood"),
+        ],
+        names=["scorer", "bodyparts", "coords"],
+    )
+
+    out = _drop_likelihood_from_header(header)
+
+    assert out.names == ["scorer", "bodyparts", "coords"]
+    assert out.columns == [
+        ("John", "bp1", "x"),
+        ("John", "bp1", "y"),
+    ]
+    assert all(len(col) == 3 for col in out.columns)
+
+
+def test_drop_likelihood_from_header_preserves_multi_animal_4level_shape():
+    header = DLCHeaderModel(
+        columns=[
+            ("John", "mouse1", "bp1", "x"),
+            ("John", "mouse1", "bp1", "y"),
+            ("John", "mouse1", "bp1", "likelihood"),
+        ],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
+
+    out = _drop_likelihood_from_header(header)
+
+    assert out.names == ["scorer", "individuals", "bodyparts", "coords"]
+    assert out.columns == [
+        ("John", "mouse1", "bp1", "x"),
+        ("John", "mouse1", "bp1", "y"),
+    ]
+    assert all(len(col) == 4 for col in out.columns)
