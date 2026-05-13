@@ -225,6 +225,8 @@ class LabelPair(QWidget):
     def color(self, color: str) -> None:
         self._color = color
         self.color_label.setStyleSheet(f"background-color: {color};")
+        self.part_label.color = color
+        self.part_label.setStyleSheet(f"color: {color};")
 
     @property
     def part_name(self) -> str:
