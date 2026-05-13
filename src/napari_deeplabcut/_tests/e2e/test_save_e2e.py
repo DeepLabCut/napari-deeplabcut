@@ -8,6 +8,7 @@ from napari.layers import Points
 
 from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.core.io import _read_hdf_any_key
+from napari_deeplabcut.core.layer_lifecycle.merge import PlaceholderConfigAction
 
 from .utils import (
     _make_project_config_and_frames_no_gt,
@@ -171,6 +172,7 @@ def test_single_animal_gt_then_config_merge_preserves_sa_format(
     gt_store = keypoint_controls.get_layer_store(gt_layer)
     assert gt_store is not None
 
+    keypoint_controls.resolve_placeholder_config_action = lambda **kwargs: PlaceholderConfigAction.APPLY_TO_CURRENT
     # Then open config -> should merge and settle back to one Points layer
     viewer.open(str(config_path), plugin="napari-deeplabcut")
     qtbot.waitUntil(
