@@ -66,12 +66,10 @@ from .core.config_sync import (
     save_point_size_to_config,
 )
 from .core.layer_lifecycle import (
-    MergeDecisionRequest,
-    MergeDecisionResult,
-    MergeDisposition,
     PointsLayerSetupRequest,
     get_or_create_layer_manager,
 )
+from .core.layer_lifecycle.merge import PlaceholderConfigAction
 from .core.layer_versioning import mark_layer_presentation_changed
 from .core.layers import (
     PointsInteractionEvent,
@@ -132,7 +130,7 @@ class KeypointControls(ViewerSingletonWidget):
 
         # Layer lifecycle manager
         self.layer_manager = get_or_create_layer_manager(self.viewer)
-        self.layer_manager.set_merge_decision_provider(self)
+        self.layer_manager.set_placeholder_config_decision_provider(self)
         ## Hook up signals for layer lifecycle events as needed, e.g.:
         self.layer_manager.session_conflict_rejected.connect(self._on_session_conflict_detected)
         self.layer_manager.refresh_video_panel_requested.connect(self._refresh_video_panel_context)
@@ -472,23 +470,57 @@ class KeypointControls(ViewerSingletonWidget):
     # ######################## #
     # Layer setup core methods #
     # ######################## #
-    def resolve_merge(self, request: MergeDecisionRequest) -> MergeDecisionResult:
-        if not request.added_keypoints:
-            return MergeDecisionResult(disposition=MergeDisposition.KEEP_BOTH)
+    def resolve_placeholder_config_action(
+        self,
+        *,
+        placeholder_layer,
+        managed_layers,
+        added_keypoints,
+        message,
+    ) -> PlaceholderConfigAction:
+        """Ask the user how to handle insertion of a config placeholder layer."""
 
-        shared = "Do you want to hide the existing keypoints and add the new ones as a separate layer?"
-        text = f"{request.message}\n\n{shared}" if request.message else shared
-        answer = QMessageBox.question(
-            self,
-            "",
-            text,
-            QMessageBox.Yes | QMessageBox.No,
+        # If there are no actually new keypoints, apply silently to current.
+        if not added_keypoints:
+            return PlaceholderConfigAction.APPLY_TO_CURRENT
+
+        title = "New keypoints found in config"
+
+        keypoints_text = ", ".join(added_keypoints)
+        intro = f"The loaded config adds new keypoint{'s' if len(added_keypoints) > 1 else ''}: {keypoints_text}."
+
+        body = (
+            "\n\nChoose how to handle this:\n\n"
+            "• Apply to current\n"
+            "  Update the current keypoints layer with the config,\n"
+            "  keep the current layer visible,\n"
+            "  and remove the temporary placeholder layer.\n\n"
+            "• Keep both\n"
+            "  Keep the current layer unchanged\n"
+            "  and keep the new layer as a separate layer.\n\n"
+            "• Cancel\n"
+            "  Discard the temporary placeholder layer and make no changes.\n"
         )
 
-        if answer == QMessageBox.Yes:
-            return MergeDecisionResult(disposition=MergeDisposition.HIDE_EXISTING)
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Question)
+        msg.setWindowTitle(title)
+        msg.setText(intro + body)
 
-        return MergeDecisionResult(disposition=MergeDisposition.KEEP_BOTH)
+        apply_btn = msg.addButton("Apply to current", QMessageBox.AcceptRole)
+        keep_both_btn = msg.addButton("Keep both", QMessageBox.ActionRole)
+        msg.addButton("Cancel", QMessageBox.RejectRole)
+
+        msg.setDefaultButton(apply_btn)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked is apply_btn:
+            return PlaceholderConfigAction.APPLY_TO_CURRENT
+        if clicked is keep_both_btn:
+            return PlaceholderConfigAction.KEEP_AS_SEPARATE_LAYER
+
+        return PlaceholderConfigAction.CANCEL
 
     def _on_points_layers_merged_requested(self, layers: tuple[Points, ...]) -> None:
         """Refresh widget-owned UI after manager merged placeholder config into managed layers."""
@@ -1214,7 +1246,7 @@ class KeypointControls(ViewerSingletonWidget):
             logger.warning("Layer manager audit on close reported issues:\n%s", report.issues)
 
         if self.layer_manager is not None:
-            self.layer_manager.set_merge_decision_provider(None)
+            self.layer_manager.set_placeholder_config_decision_provider(None)
 
     def on_active_layer_change(self, event) -> None:
         """Updates the GUI when the active layer changes
