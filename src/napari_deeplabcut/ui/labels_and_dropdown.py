@@ -170,19 +170,19 @@ class ClickableLabel(QLabel):
 
     def __init__(self, text: str = "", color: str = "turquoise", parent=None):
         super().__init__(text, parent)
-        self._default_style = self.styleSheet()
-        self.color = color
+        self._idle_style = "font-weight: normal;"
+        self._hover_style = "font-weight: bold;"
 
     def mousePressEvent(self, event):  # type: ignore[override]
         self.clicked.emit(self.text())
 
     def enterEvent(self, event):  # type: ignore[override]
         self.setCursor(QCursor(Qt.PointingHandCursor))
-        self.setStyleSheet(f"color: {self.color}")
+        self.setStyleSheet(self._hover_style)
 
     def leaveEvent(self, event):  # type: ignore[override]
         self.unsetCursor()
-        self.setStyleSheet(self._default_style)
+        self.setStyleSheet(self._idle_style)
 
 
 class LabelPair(QWidget):
@@ -225,8 +225,6 @@ class LabelPair(QWidget):
     def color(self, color: str) -> None:
         self._color = color
         self.color_label.setStyleSheet(f"background-color: {color};")
-        self.part_label.color = color
-        self.part_label.setStyleSheet(f"color: {color};")
 
     @property
     def part_name(self) -> str:
