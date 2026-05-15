@@ -136,7 +136,7 @@ class TrackingControls(ViewerSingletonWidget):
         )
 
         # when the range of viewer dims changes (e.g. on opening a new video), update the reference spinbox max
-        self._viewer.dims.events.current_step.connect(lambda e: self._reference_spinbox.setValue(int(e.value[0])))
+        self._viewer.dims.events.current_step.connect(self._on_current_step_changed)
         self._viewer.dims.events.current_step.connect(self._set_frame_controls_range)
         self._reference_spinbox.valueChanged.connect(self._set_frame_controls_range)
 
@@ -152,6 +152,7 @@ class TrackingControls(ViewerSingletonWidget):
         self._setup_keybindings(viewer=viewer)
 
         self._build_layout()
+        self._schedule_once("tracking_controls_initial_sync", 0, self._sync_from_viewer_dims)
 
     def _set_model_info_tooltip(self, current_model_name: str = None):
         """Retrieves the display info for the selected model and sets it as tooltip for the model info button."""
@@ -179,6 +180,23 @@ class TrackingControls(ViewerSingletonWidget):
         except Exception:
             return None
         return None
+
+    def _sync_from_viewer_dims(self) -> None:
+        """Initialize/sync tracking controls from the current viewer dims."""
+        try:
+            current_step = tuple(self._viewer.dims.current_step)
+            if len(current_step) > 0:
+                self._reference_spinbox.setValue(int(current_step[0]))
+            self._set_frame_controls_range()
+        except Exception:
+            logger.debug("Failed to sync tracking controls from viewer dims", exc_info=True)
+
+    @Slot(object)
+    def _on_current_step_changed(self, event):
+        try:
+            self._reference_spinbox.setValue(int(event.value[0]))
+        except Exception:
+            logger.debug("Failed to update reference frame from dims", exc_info=True)
 
     def _tracking_shortcuts_active(self) -> bool:
         if not TRACKING_SHORTCUTS_ENABLED:
@@ -563,6 +581,8 @@ class TrackingControls(ViewerSingletonWidget):
     def tracking_finished(self, out: TrackingWorkerOutput):
         self.is_tracking = False
         try:
+            viewer_step = tuple(self._viewer.dims.current_step)
+
             new_features_df = (
                 out.keypoint_features
                 if isinstance(out.keypoint_features, pd.DataFrame)
@@ -583,7 +603,8 @@ class TrackingControls(ViewerSingletonWidget):
             )
 
             self._viewer.layers.selection.active = layer
-            self._select_keypoint_combo_layer(layer)
+            self._viewer.dims.current_step = viewer_step
+            self._select_keypoint_combo_layer(layer, restore_step=viewer_step)
             self._viewer.status = f'Created tracking result layer "{layer.name}"'
         except Exception as e:
             logger.exception("Error creating tracking result layer", exc_info=e)
@@ -705,7 +726,7 @@ class TrackingControls(ViewerSingletonWidget):
         )
         self.trackingRequested.emit(tracking_data)
 
-    def _select_keypoint_combo_layer(self, layer: Points) -> None:
+    def _select_keypoint_combo_layer(self, layer: Points, *, restore_step: tuple[int, ...] | None = None) -> None:
         """
         Select a Points layer in the keypoint combo, deferring one event-loop turn
         so the combo choices are fully refreshed after layer insertion.
@@ -718,6 +739,8 @@ class TrackingControls(ViewerSingletonWidget):
         def _apply():
             try:
                 self._keypoint_layer_combo.value = layer
+                if restore_step is not None:
+                    self._viewer.dims.current_step = restore_step
             except Exception:
                 logger.debug(
                     "Failed to select tracked result layer in keypoint combo",
