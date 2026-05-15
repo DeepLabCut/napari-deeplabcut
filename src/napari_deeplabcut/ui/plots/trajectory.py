@@ -36,6 +36,8 @@ from napari_deeplabcut.core.layers import (
 )
 from napari_deeplabcut.utils.deprecations import deprecated
 
+from .plot_models import TrajectoryPlotState, TrajectorySeries
+
 logger = logging.getLogger(__name__)
 
 _PACKAGE = "napari_deeplabcut"
@@ -107,9 +109,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
             # self.canvas.figure.set_size_inches(4, 2, forward=True)
             self.canvas.figure.set_layout_engine("constrained")
             self.ax = self.canvas.figure.subplots()
-            self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
-            self.ax.set_xlabel("Frame")
-            self.ax.set_ylabel("Y position")
+            self._reset_axes()
 
         # self.toolbar = NapariNavigationToolbar(self.canvas, parent=self)
         self.toolbar = NavigationToolbar2QT(self.canvas, parent=self)
@@ -153,7 +153,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
         self.frames = []
         self.keypoints = []
-        self.df = None
+        self._plot_state: TrajectoryPlotState | None = None
         self.setMinimumSize(280, 350)
 
         self.viewer.dims.events.current_step.connect(self.update_plot_range)
@@ -197,24 +197,21 @@ class TrajectoryMatplotlibCanvas(QWidget):
         return QSize(280, 340)
 
     def _get_config_colormap(self, layer: Points) -> str:
-        """Return the colormap for the given layer based on its metadata.
-        TODO: Check codebase for duplicate logic and centralize if needed.
-        """
-        md = getattr(layer, "metadata", None) or {}
-        cmap = md.get("config_colormap")
-        if isinstance(cmap, str) and cmap:
-            return cmap
-        return DEFAULT_SINGLE_ANIMAL_CMAP
+        cmap = (getattr(layer, "metadata", None) or {}).get("config_colormap")
+        return cmap if isinstance(cmap, str) and cmap else DEFAULT_SINGLE_ANIMAL_CMAP
 
     def _plot_mode(self) -> str:
         try:
-            mode = str(self._get_color_mode()).lower()
+            return "individual" if "individual" in str(self._get_color_mode()).lower() else "bodypart"
         except Exception:
-            mode = "bodypart"
+            return "bodypart"
 
-        if "individual" in mode:
-            return "individual"
-        return "bodypart"
+    def _reset_axes(self) -> None:
+        """Reset axes, labels, and current-frame marker."""
+        self.ax.clear()
+        self.ax.set_xlabel("Frame")
+        self.ax.set_ylabel("Y position")
+        self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
 
     @staticmethod
     def _normalized_cycle(mapping) -> dict[str, object]:
@@ -271,29 +268,11 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
     def _clear_plot(self) -> None:
         """Clear plotted trajectories and reset axes."""
-        self.df = None
+        self._plot_state = None
         self._lines = {}
 
-        self.ax.clear()
-        self.ax.set_xlabel("Frame")
-        self.ax.set_ylabel("Y position")
-        self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
+        self._reset_axes()
         self._apply_napari_theme()
-
-    def _has_refreshable_df(self) -> bool:
-        """
-        Return True if self.df looks like something we can safely use with len(...).
-
-        This keeps selection-only tests and partial UI states from crashing.
-        """
-        if self.df is None:
-            return False
-        try:
-            len(self.df)
-        except Exception:
-            logger.debug("Trajectory plot: DataFrame is not refreshable", exc_info=True)
-            return False
-        return True
 
     def _apply_axis_theme(self) -> None:
         """Force axis/text colors to match napari theme."""
@@ -340,6 +319,13 @@ class TrajectoryMatplotlibCanvas(QWidget):
                 else:
                     logger.debug(f"Failed to set toolbar icon from {icon_path}: file does not exist")
 
+    def _plot_properties_for_layer(self, layer: Points) -> dict[str, object]:
+        if self.layer_manager.is_tracking_result_layer(layer):
+            return self._tracking_result_plot_properties(layer)
+
+        props = getattr(layer, "properties", {}) or {}
+        return props if isinstance(props, dict) else {}
+
     def _tracking_result_plot_properties(self, layer: Points) -> dict[str, object]:
         """
         Build a napari-style properties mapping for a tracking-result layer.
@@ -380,12 +366,155 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
         return out
 
-    def _plot_properties_for_layer(self, layer: Points) -> dict[str, object]:
-        if self.layer_manager.is_tracking_result_layer(layer):
-            return self._tracking_result_plot_properties(layer)
+    def _frame_values_from_layer_data(self, points_layer: Points, df: pd.DataFrame) -> np.ndarray:
+        """
+        Return x-axis frame values from the napari Points layer data.
 
-        props = getattr(layer, "properties", {}) or {}
-        return props if isinstance(props, dict) else {}
+        Fallbacks
+        ---------
+        - if unique frames from layer.data match len(df), use them
+        - else try a simple numeric DataFrame index
+        - else fall back to row positions
+        """
+        if df is None or points_layer is None:
+            return np.empty((0,), dtype=float)
+
+        # Preferred path: derive frame values from raw napari points data
+        try:
+            data = np.asarray(points_layer.data)
+            if data.ndim == 2 and data.shape[1] >= 1:
+                frames = np.asarray(data[:, 0], dtype=float).ravel()
+                if frames.size:
+                    x = np.unique(frames)
+                    x.sort()
+                    if x.size == len(df):
+                        return x
+        except Exception:
+            logger.debug("Trajectory plot: failed to derive frame values from points layer data", exc_info=True)
+
+        # Conservative fallback: only use a flat numeric DataFrame index
+        try:
+            idx = df.index
+            if not isinstance(idx, pd.MultiIndex):
+                x = pd.to_numeric(pd.Index(idx), errors="raise").to_numpy(dtype=float, copy=False)
+                if x.size == len(df):
+                    return x
+        except Exception:
+            logger.debug("Trajectory plot: failed to use flat DataFrame index as frame values", exc_info=True)
+
+        # Final fallback: row positions
+        logger.debug("Trajectory plot: falling back to row-position x-axis")
+        return np.arange(len(df), dtype=float)
+
+    def _image_height_from_viewer(self) -> float | None:
+        """Return image height for y-axis inversion, if available."""
+        image_layer = get_first_video_image_layer(self.viewer)
+        if image_layer is None:
+            image_layer = get_first_image_layer(self.viewer)
+
+        if image_layer is None:
+            return None
+
+        try:
+            img_data = image_layer.data
+            if getattr(image_layer, "rgb", False):
+                return float(img_data.shape[-3])
+            return float(img_data.shape[-2])
+        except Exception:
+            logger.debug("Trajectory plot: failed to determine image height", exc_info=True)
+            return None
+
+    def _frame_bounds_from_x(self, x: np.ndarray) -> tuple[float, float]:
+        """
+        Return the frame-space bounds for the x-axis window.
+
+        Prefer the actual video frame extent when available. This keeps the
+        navigation window in viewer-frame space instead of DataFrame-row space.
+        """
+        img = get_first_video_image_layer(self.viewer)
+        if img is not None:
+            try:
+                n_frames = int(img.data.shape[0])
+                if n_frames > 0:
+                    return 0.0, float(n_frames - 1)
+            except Exception:
+                logger.debug("Trajectory plot: failed to derive frame bounds from video layer", exc_info=True)
+
+        if x.size == 0:
+            return 0.0, 1.0
+
+        try:
+            return float(np.nanmin(x)), float(np.nanmax(x))
+        except Exception:
+            logger.debug("Trajectory plot: failed to derive frame bounds from x values", exc_info=True)
+            return 0.0, float(max(len(x) - 1, 1))
+
+    def _build_plot_state(self, points_layer: Points) -> tuple[pd.DataFrame, TrajectoryPlotState]:
+        """
+        Build the DataFrame and explicit render state for the selected Points layer.
+
+        The DataFrame remains a widget-local intermediate representation for now.
+        The dataclass should model render state only.
+        """
+        effective_props = self._plot_properties_for_layer(points_layer)
+        df = io.form_df(
+            points_layer.data,
+            layer_metadata=points_layer.metadata,
+            layer_properties=effective_props,
+        )
+
+        x = self._frame_values_from_layer_data(points_layer, df)
+        image_height = self._image_height_from_viewer()
+        frame_min, frame_max = self._frame_bounds_from_x(x)
+
+        series: list[TrajectorySeries] = []
+
+        for individual, bodypart, y in self._iter_series(df):
+            if len(y) != len(x):
+                logger.debug(
+                    "Trajectory plot: skipping series with mismatched x/y lengths (%s != %s)",
+                    len(x),
+                    len(y),
+                )
+                continue
+
+            series.append(
+                TrajectorySeries(
+                    individual=individual,
+                    bodypart=bodypart,
+                    x=x,
+                    y=y,
+                    color=self._line_color_for(points_layer, individual, bodypart),
+                    label=self._legend_text_for(individual, bodypart),
+                )
+            )
+
+        state = TrajectoryPlotState(
+            df=df,
+            series=tuple(series),
+            frame_min=frame_min,
+            frame_max=frame_max,
+            image_height=image_height,
+        )
+
+        return df, state
+
+    def _render_plot_state(self, state: TrajectoryPlotState) -> None:
+        """Render a previously built trajectory plot state."""
+        self._lines = {}
+        self._reset_axes()
+
+        for s in state.series:
+            artists = self.ax.plot(s.x, s.y, color=s.color, label=s.label)
+            self._lines[(s.individual, s.bodypart)] = artists
+
+        # Match napari image coordinates: y increases downward
+        if state.image_height is not None:
+            self.ax.set_ylim(state.image_height, 0)
+        else:
+            self.ax.invert_yaxis()
+
+        self._apply_napari_theme()
 
     def _load_dataframe(self, event=None) -> None:
         with mplstyle.context(self.mpl_style_sheet_path):
@@ -402,59 +531,35 @@ class TrajectoryMatplotlibCanvas(QWidget):
             if not was_visible:
                 self.hide()
 
-            effective_props = self._plot_properties_for_layer(points_layer)
             try:
-                self.df = io.form_df(
-                    points_layer.data,
-                    layer_metadata=points_layer.metadata,
-                    layer_properties=effective_props,
-                )
+                df, state = self._build_plot_state(points_layer)
             except KeyError as e:
                 logger.debug("Trajectory plot skipped for non-DLC/incomplete points layer: %r", e)
                 self._clear_plot()
                 return
             except Exception as e:
-                logger.error("Failed to form DataFrame from points layer: %r", e, exc_info=True)
+                logger.error(
+                    "Failed to build trajectory plot state from points layer %r: %r",
+                    getattr(points_layer, "name", points_layer),
+                    e,
+                    exc_info=True,
+                )
+                self.viewer.status = f"Trajectory plot failed for {getattr(points_layer, 'name', 'layer')} (see logs)"
                 self._clear_plot()
                 return
 
-            image_layer = get_first_video_image_layer(self.viewer)
-            if image_layer is None:
-                image_layer = get_first_image_layer(self.viewer)
+            self._plot_state = state
 
-            self._lines = {}
-            self.ax.clear()
-            self.ax.set_xlabel("Frame")
-            self.ax.set_ylabel("Y position")
-            self.vline = self.ax.axvline(0, 0, 1, color="k", linestyle="--")
-            self._apply_napari_theme()
+            logger.debug(
+                "Trajectory plot built: layer=%r df_shape=%s n_series=%d frame_bounds=(%s, %s)",
+                getattr(points_layer, "name", points_layer),
+                getattr(df, "shape", None),
+                len(state.series),
+                state.frame_min,
+                state.frame_max,
+            )
 
-            height = None
-            if image_layer is not None:
-                try:
-                    img_data = image_layer.data
-                    if getattr(image_layer, "rgb", False):
-                        height = img_data.shape[-3]
-                    else:
-                        height = img_data.shape[-2]
-                except Exception:
-                    height = None
-
-            self._lines = {}
-
-            for individual, bodypart, y in self._iter_series():
-                x = np.arange(y.shape[0])
-                color = self._line_color_for(points_layer, individual, bodypart)
-                label = self._legend_text_for(individual, bodypart)
-                artists = self.ax.plot(x, y, color=color, label=label)
-                self._lines[(individual, bodypart)] = artists
-
-            # Match napari image coordinates: y increases downward
-            if height is not None:
-                self.ax.set_ylim(height, 0)
-            else:
-                self.ax.invert_yaxis()
-
+            self._render_plot_state(state)
             self._refresh_canvas(value=self._n)
 
     @deprecated(
@@ -477,16 +582,23 @@ class TrajectoryMatplotlibCanvas(QWidget):
         self._set_visible_keypoints(matches)
 
     def _refresh_canvas(self, value: int) -> None:
-        if not self._has_refreshable_df():
+        state = self._plot_state
+        if state is None:
             self.canvas.draw_idle()
             return
 
         with mplstyle.context(self.mpl_style_sheet_path):
-            start = max(0, value - self._window // 2)
-            end = min(value + self._window // 2, len(self.df))
+            half = self._window / 2.0
+
+            start = max(state.frame_min, value - half)
+            end = min(state.frame_max, value + half)
+
+            if end <= start:
+                end = start + 1.0
+
             self.ax.set_xlim(start, end)
             self.vline.set_xdata([value])
-            self.canvas.draw()
+            self.canvas.draw_idle()
 
     def set_window(self, value: int) -> None:
         self._window = value
@@ -500,7 +612,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
         value = event.value[0]
         self._n = value
 
-        if self.df is None:
+        if self._plot_state is None:
             return
 
         self._refresh_canvas(value)
@@ -637,10 +749,10 @@ class TrajectoryMatplotlibCanvas(QWidget):
                 action.setToolTip("Zoom to rectangle; Click once to activate; Click again to deactivate")
 
     def _df_has_individuals(self) -> bool:
-        if self.df is None:
+        if self._plot_state.df is None:
             return False
         try:
-            cols = self.df.columns
+            cols = self._plot_state.df.columns
             if "individuals" not in cols.names:
                 return False
             vals = [str(v) for v in cols.get_level_values("individuals").unique()]
@@ -719,11 +831,11 @@ class TrajectoryMatplotlibCanvas(QWidget):
             return f"{individual} • {bodypart}"
         return bodypart
 
-    def _iter_series(self):
-        if self.df is None:
+    def _iter_series(self, df: pd.DataFrame):
+        if df is None:
             return
 
-        cols = self.df.columns
+        cols = df.columns
         names = list(cols.names)
 
         has_inds = "individuals" in names
@@ -743,7 +855,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
                 if has_inds:
                     mask &= cols.get_level_values("individuals") == individual
 
-                y_df = self.df.loc[:, mask]
+                y_df = df.loc[:, mask]
                 if y_df.shape[1] == 0:
                     continue
 

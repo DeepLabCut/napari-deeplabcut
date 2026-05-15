@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/core/layer_lifecycle/manager.py
 from __future__ import annotations
 
 import logging
