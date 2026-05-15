@@ -910,16 +910,28 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             )
             return None
 
-        current_keypoint_set = set(reference_header.bodyparts)
-        new_keypoint_set = set(new_header.bodyparts)
-        diff = tuple(sorted(new_keypoint_set.difference(current_keypoint_set)))
+        # current_keypoint_set = set(reference_header.bodyparts)
+        # new_keypoint_set = set(new_header.bodyparts)
+        # diff = tuple(sorted(new_keypoint_set.difference(current_keypoint_set)))
+        headers_equal = reference_header.model_dump() == new_header.model_dump()
+        current_kpt_set = set(reference_header.bodyparts)
+        new_kpt_set = set(new_header.bodyparts)
+        diff = tuple(sorted(new_kpt_set.difference(current_kpt_set)))
 
-        message = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found from config." if diff else ""
+        # message = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found from config." if diff else ""
+
+        if diff:
+            message = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found from config."
+        elif not headers_equal:
+            message = "Config keypoints differ from the current layer layout."
+        else:
+            message = ""
 
         action = self._resolve_placeholder_config_action(
             placeholder_layer=layer,
             managed_layers=tuple(ly for ly, _ in managed if ly is not layer),
             added_keypoints=diff,
+            headers_match=headers_equal,
             message=message,
         )
 
@@ -996,15 +1008,14 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         placeholder_layer: Any,
         managed_layers: tuple[Any, ...],
         added_keypoints: tuple[str, ...],
+        headers_match: bool,
         message: str,
     ) -> PlaceholderConfigAction:
 
         def _default_action() -> PlaceholderConfigAction:
-            return (
-                PlaceholderConfigAction.KEEP_AS_SEPARATE_LAYER
-                if added_keypoints
-                else PlaceholderConfigAction.APPLY_TO_CURRENT
-            )
+            if headers_match:
+                return PlaceholderConfigAction.APPLY_TO_CURRENT
+            return PlaceholderConfigAction.KEEP_AS_SEPARATE_LAYER
 
         provider = self._placeholder_config_decision_provider
         if provider is None:
