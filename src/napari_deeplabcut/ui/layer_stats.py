@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from qtpy.QtCore import QSignalBlocker, Qt, Signal
-from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import (
     QApplication,
     QFormLayout,
@@ -17,6 +16,8 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from napari_deeplabcut.ui.icons import apply_help_info_icon
 
 if TYPE_CHECKING:
     from napari_deeplabcut.core.layers import LabelProgress
@@ -33,8 +34,9 @@ class LayerStatusPanel(QGroupBox):
     point_size_changed = Signal(int)
     point_size_commit_requested = Signal(int)
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, viewer: QWidget | None = None) -> None:
         super().__init__("Layer status", parent=parent)
+        self.viewer = viewer
 
         self._folder_value = QLabel("—")
         self._folder_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -46,11 +48,10 @@ class LayerStatusPanel(QGroupBox):
 
         # self._progress_info = QLabel("ℹ")
         self._progress_info = QToolButton(self)
-        self._progress_info.setText("ℹ")
-        self._progress_info.setAutoRaise(True)
-        self._progress_info.setIcon(QIcon.fromTheme("help-about"))
-        self._progress_info.setCursor(Qt.WhatsThisCursor)
-        self._progress_info.setToolTip("Hover for more details")
+        theme = None
+        if self.viewer is not None:
+            theme = getattr(self.viewer, "theme", None)
+        apply_help_info_icon(self._progress_info, theme=theme)
 
         self._progress_details_text = ""
 

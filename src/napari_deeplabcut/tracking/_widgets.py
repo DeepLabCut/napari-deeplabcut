@@ -40,6 +40,7 @@ from napari_deeplabcut.core.layer_lifecycle import get_or_create_layer_manager
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
 from napari_deeplabcut.core.layers import get_uniform_point_size
 from napari_deeplabcut.ui.base_widget.singleton_widget import ViewerSingletonWidget
+from napari_deeplabcut.ui.icons import apply_help_info_icon
 
 from .core.data import (
     TrackingWorkerData,
@@ -77,8 +78,7 @@ class TrackingControls(ViewerSingletonWidget):
         ## Data and model selection
         self._tracking_method_combo = QComboBox()
         self._model_info_button = QToolButton()
-        self._model_info_button.setIcon(QIcon.fromTheme("help-about"))
-        self._model_info_button.setIconSize(self._model_info_button.iconSize() * 1.2)
+        apply_help_info_icon(self._model_info_button, theme=getattr(self._viewer, "theme", None))
         self._keypoint_layer_combo: ComboBox = create_widget(annotation=Points)
         self._video_layer_combo: ComboBox = create_widget(annotation=Image)
         self._video_layer_combo.changed.connect(self._video_layer_changed)
