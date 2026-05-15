@@ -20,8 +20,7 @@ def test_sync_visible_lines_to_points_selection_shows_all_when_no_points_selecte
     # Force the visibility sync to use this test layer directly.
     canvas._get_plot_points_layer = lambda: layer
 
-    # Avoid relying on df creation for this focused visibility test
-    canvas.df = object()
+    # canvas._plot_state.df = object()
     (line_nose,) = canvas.ax.plot([0, 1], [0, 1])
     (line_tail,) = canvas.ax.plot([0, 1], [1, 0])
     qtbot.wait(0)  # ensure lines are fully initialized
@@ -51,7 +50,7 @@ def test_sync_visible_lines_to_points_selection_filters_by_selected_labels_in_bo
     # Force the visibility sync to use this test layer directly.
     canvas._get_plot_points_layer = lambda: layer
 
-    canvas.df = object()
+    # canvas._plot_state.df = object()
     (line_nose,) = canvas.ax.plot([0, 1], [0, 1])
     (line_tail,) = canvas.ax.plot([0, 1], [1, 0])
     qtbot.wait(0)  # ensure lines are fully initialized
@@ -85,7 +84,7 @@ def test_sync_visible_lines_to_points_selection_shows_label_if_any_selected_poin
     # Force the visibility sync to use this test layer directly.
     canvas._get_plot_points_layer = lambda: layer
 
-    canvas.df = object()
+    # canvas._plot_state.df = object()
     (line_nose,) = canvas.ax.plot([0, 1], [0, 1])
     (line_tail,) = canvas.ax.plot([0, 1], [1, 0])
     qtbot.wait(0)  # ensure lines are fully initialized

@@ -177,6 +177,11 @@ class TrajectoryMatplotlibCanvas(QWidget):
         # the plot from the current viewer state on the next event-loop turn.
         QTimer.singleShot(0, self.refresh_from_viewer_layers)
 
+    @property
+    def df(self) -> pd.DataFrame | None:
+        """The DataFrame currently being plotted, if available."""
+        return self._plot_state.df if self._plot_state is not None else None
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.canvas.draw_idle()
@@ -749,6 +754,8 @@ class TrajectoryMatplotlibCanvas(QWidget):
                 action.setToolTip("Zoom to rectangle; Click once to activate; Click again to deactivate")
 
     def _df_has_individuals(self) -> bool:
+        if self._plot_state is None:
+            return False
         if self._plot_state.df is None:
             return False
         try:
