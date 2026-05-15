@@ -76,8 +76,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
     - changing merge/remap policies
     """
 
-    _PLACEHOLDER_LAYER_NAME = "__dlc_config_placeholder__"
-
     # UI signals for widget hooks
     refresh_video_panel_requested = Signal()
     refresh_layer_status_requested = Signal()
