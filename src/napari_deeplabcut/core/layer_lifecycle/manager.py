@@ -50,6 +50,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+LAYER_REMOVAL_DELAY_MS = 300
+
 
 class PointsInsertResult(str, Enum):
     ADDED = "added"
@@ -936,7 +938,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 getattr(layer, "name", layer),
             )
             self._single_shot_owned(
-                300,
+                LAYER_REMOVAL_DELAY_MS,
                 lambda ly=layer: self._remove_layer_if_present(ly),
             )
             return action
@@ -987,7 +989,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             self.points_layers_merged_requested.emit(affected)
             self.refresh_layer_status_requested.emit()
 
-        self._single_shot_owned(300, _finalize_placeholder_apply)
+        self._single_shot_owned(LAYER_REMOVAL_DELAY_MS, _finalize_placeholder_apply)
         return action
 
     def _resolve_placeholder_config_action(
@@ -998,11 +1000,17 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         added_keypoints: tuple[str, ...],
         message: str,
     ) -> PlaceholderConfigAction:
+
+        def _default_action() -> PlaceholderConfigAction:
+            return (
+                PlaceholderConfigAction.KEEP_AS_SEPARATE_LAYER
+                if added_keypoints
+                else PlaceholderConfigAction.APPLY_TO_CURRENT
+            )
+
         provider = self._placeholder_config_decision_provider
         if provider is None:
-            if not added_keypoints:
-                return PlaceholderConfigAction.APPLY_TO_CURRENT
-            return PlaceholderConfigAction.KEEP_AS_SEPARATE_LAYER
+            return _default_action()
 
         try:
             result = provider.resolve_placeholder_config_action(
@@ -1012,13 +1020,23 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 message=message,
             )
         except Exception:
+            mode = _default_action()
             logger.debug(
-                "Placeholder config decision provider failed; defaulting to KEEP_AS_SEPARATE_LAYER",
+                "Placeholder config decision provider failed; defaulting to %s",
+                mode,
                 exc_info=True,
             )
-            if not added_keypoints:
-                return PlaceholderConfigAction.APPLY_TO_CURRENT
-            return PlaceholderConfigAction.KEEP_AS_SEPARATE_LAYER
+            return mode
+
+        if not isinstance(result, PlaceholderConfigAction):
+            mode = _default_action()
+            logger.warning(
+                "Placeholder config decision provider returned invalid result %r; "
+                "expected PlaceholderConfigAction. Defaulting to %s",
+                result,
+                mode,
+            )
+            return mode
 
         return result
 
