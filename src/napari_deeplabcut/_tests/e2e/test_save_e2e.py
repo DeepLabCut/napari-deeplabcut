@@ -8,7 +8,7 @@ from napari.layers import Points
 
 from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.core.io import _read_hdf_any_key
-from napari_deeplabcut.core.layer_lifecycle.merge import PlaceholderConfigAction
+from napari_deeplabcut.core.layer_lifecycle import PlaceholderConfigAction
 
 from .utils import (
     _make_project_config_and_frames_no_gt,

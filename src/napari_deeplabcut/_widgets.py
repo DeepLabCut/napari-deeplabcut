@@ -66,10 +66,10 @@ from .core.config_sync import (
     save_point_size_to_config,
 )
 from .core.layer_lifecycle import (
+    PlaceholderConfigAction,
     PointsLayerSetupRequest,
     get_or_create_layer_manager,
 )
-from .core.layer_lifecycle.merge import PlaceholderConfigAction
 from .core.layer_versioning import mark_layer_presentation_changed
 from .core.layers import (
     PointsInteractionEvent,
@@ -473,10 +473,10 @@ class KeypointControls(ViewerSingletonWidget):
     def resolve_placeholder_config_action(
         self,
         *,
-        placeholder_layer,
-        managed_layers,
-        added_keypoints,
-        message,
+        placeholder_layer: Points,
+        managed_layers: tuple[Points, ...],
+        added_keypoints: tuple[str, ...],
+        message: str,
     ) -> PlaceholderConfigAction:
         """Ask the user how to handle insertion of a config placeholder layer."""
 
