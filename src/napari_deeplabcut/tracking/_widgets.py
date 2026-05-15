@@ -575,7 +575,8 @@ class TrackingControls(ViewerSingletonWidget):
     @Slot()
     def tracking_started(self):
         self.is_tracking = True
-        self._tracking_progress_bar.setValue(0)
+        # self._tracking_progress_bar.setValue(0) # let model handle this
+        self._tracking_progress_bar.setMaximum(0)  # indeterminate progress until model sends an update
 
     @Slot(object)
     def tracking_finished(self, out: TrackingWorkerOutput):
