@@ -160,7 +160,9 @@ class Cotracker3(TrackingModel):
         queries = torch.from_numpy(inputs.keypoints).to(self.device).float()[None]  # -> (1, K, 3)
 
         total_frames = int(inputs.video.shape[0])
-        progress_callback(0, total_frames)
+        # does not support intermediate progress updates,
+        # so we just set to unknown state at the start and 100% at the end.
+        progress_callback(0, 0)
 
         with torch.inference_mode():
             pred_tracks, pred_visibility = self.model(

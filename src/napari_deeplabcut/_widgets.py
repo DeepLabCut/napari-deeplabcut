@@ -247,7 +247,7 @@ class KeypointControls(ViewerSingletonWidget):
         grid.addWidget(self._view_scheme_cb, 3, 0)
 
         # UX / status panel (folder, progress, point size)
-        self._layer_status_panel = LayerStatusPanel(self)
+        self._layer_status_panel = LayerStatusPanel(self, viewer=self.viewer)
         self._layer_status_panel.point_size_changed.connect(self._on_active_points_size_changed)
         self._layer_status_panel.point_size_commit_requested.connect(self._commit_active_points_size_to_config)
         self._layout.addWidget(self._layer_status_panel)

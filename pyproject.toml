@@ -73,6 +73,7 @@ napari_deeplabcut = [
   "napari.yaml",
   "assets/black/*.png",
   "assets/white/*.png",
+  "assets/*.svg",
 ]
 [tool.setuptools.package-dir]
 "" = "src"
