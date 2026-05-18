@@ -169,9 +169,56 @@ class PointsLayerSaveWorkflow:
             return SaveOutcome(saved=False)
 
         if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
-            return self._save_single_points_layer(selected_layers[0])
+            layer = selected_layers[0]
+            if self._is_saveable_dlc_points_layer(layer):
+                return self._save_single_points_layer(layer)
 
+        # Tracking-result or foreign/generic Points layer:
+        # do not force DLC save routing; use generic napari save instead.
         return self._save_multiple_layers(selected=selected, selected_layers=selected_layers)
+
+    # ------------------------------------------------------------------ #
+    # Pre-save checks of layer identity                                  #
+    # ------------------------------------------------------------------ #
+    def _is_tracking_result_points_layer(self, layer) -> bool:
+        return isinstance(layer, Points) and self.layer_manager.is_tracking_result_layer(layer)
+
+    def _is_saveable_dlc_points_layer(self, layer) -> bool:
+        """
+        Return True only for real DLC points layers that may be saved back
+        to a DeepLabCut project (.h5 / .csv workflow).
+
+        Excludes:
+        - tracking-result layers
+        - config placeholder layers
+        - invalid/non-DLC Points layers
+        """
+        if not isinstance(layer, Points):
+            return False
+
+        if self.layer_manager.is_tracking_result_layer(layer):
+            return False
+
+        if self.layer_manager.is_config_placeholder_points_layer(layer):
+            return False
+
+        if not self.layer_manager.validate_header(layer):
+            return False
+
+        return True
+
+    def _warn_tracking_result_layer_not_saveable(self, layer: Points | None = None) -> None:
+        layer_name = getattr(layer, "name", "Selected layer") if layer is not None else "Selected layer"
+        QMessageBox.information(
+            self.parent,
+            "Cannot save tracking result layer",
+            (
+                f'"{layer_name}" is a tracking-result layer and cannot be saved directly '
+                "to a DeepLabCut project (.h5 / .csv).\n\n"
+                "Please use 'Merge tracked points' first, then save the merged DLC layer."
+            ),
+            QMessageBox.Ok,
+        )
 
     # ------------------------------------------------------------------ #
     # Single-layer points save                                           #
@@ -265,7 +312,6 @@ class PointsLayerSaveWorkflow:
     # ------------------------------------------------------------------ #
     # Multi-layer / generic save                                         #
     # ------------------------------------------------------------------ #
-
     def _save_multiple_layers(self, *, selected: bool, selected_layers: list) -> SaveOutcome:
         dlg = QFileDialog()
         hist = get_save_history()
@@ -275,6 +321,7 @@ class PointsLayerSaveWorkflow:
             dir_hint = hist[0]
         else:
             dir_hint = str(Path.home())
+
         filename, _ = dlg.getSaveFileName(
             caption=f"Save {'selected' if selected else 'all'} layers",
             dir=dir_hint,  # home dir by default
@@ -283,6 +330,7 @@ class PointsLayerSaveWorkflow:
         if not filename:
             return SaveOutcome(saved=False)
 
+        # Generic napari save: allow tracking-result layers and foreign points layers.
         self.viewer.layers.save(filename, selected=selected)
 
         if selected:
@@ -290,7 +338,8 @@ class PointsLayerSaveWorkflow:
         else:
             candidate_layers = list(self.layer_manager.managed_points_layers())
 
-        self._persist_folder_ui_state_for_layers(candidate_layers)
+        if candidate_layers:
+            self._persist_folder_ui_state_for_layers(candidate_layers)
 
         return SaveOutcome(saved=True, status_message="Data successfully saved")
 

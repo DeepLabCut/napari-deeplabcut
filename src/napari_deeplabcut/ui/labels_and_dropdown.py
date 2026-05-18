@@ -170,19 +170,42 @@ class ClickableLabel(QLabel):
 
     def __init__(self, text: str = "", color: str = "turquoise", parent=None):
         super().__init__(text, parent)
-        self._default_style = self.styleSheet()
-        self.color = color
+        self._color = color
+        self._hovered = False
+        self._pre_hover_style = ""
+
+    @property
+    def color(self) -> str:
+        return self._color
+
+    @color.setter
+    def color(self, color: str) -> None:
+        self._color = color
+        if self._hovered:
+            self._apply_hover_style()
+
+    def _apply_hover_style(self) -> None:
+        base = self._pre_hover_style.strip()
+        if base and not base.endswith(";"):
+            base += ";"
+        self.setStyleSheet(f"{base} color: {self._color};")
 
     def mousePressEvent(self, event):  # type: ignore[override]
         self.clicked.emit(self.text())
+        super().mousePressEvent(event)
 
     def enterEvent(self, event):  # type: ignore[override]
+        self._hovered = True
         self.setCursor(QCursor(Qt.PointingHandCursor))
-        self.setStyleSheet(f"color: {self.color}")
+        self._pre_hover_style = self.styleSheet()
+        self._apply_hover_style()
+        super().enterEvent(event)
 
     def leaveEvent(self, event):  # type: ignore[override]
+        self._hovered = False
         self.unsetCursor()
-        self.setStyleSheet(self._default_style)
+        self.setStyleSheet(self._pre_hover_style)
+        super().leaveEvent(event)
 
 
 class LabelPair(QWidget):
@@ -203,6 +226,16 @@ class LabelPair(QWidget):
         self.color_label.setStyleSheet(f"background-color: {color};")
         self._build()
 
+    @property
+    def color(self) -> str:
+        return self._color
+
+    @color.setter
+    def color(self, color: str) -> None:
+        self._color = color
+        self.color_label.setStyleSheet(f"background-color: {color};")
+        self.part_label.color = color
+
     @staticmethod
     def _format_label(label: QLabel, height: int | None = None, width: int | None = None) -> None:
         label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -216,15 +249,6 @@ class LabelPair(QWidget):
         layout.addWidget(self.color_label, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.part_label, alignment=Qt.AlignmentFlag.AlignLeft)
         self.setLayout(layout)
-
-    @property
-    def color(self) -> str:
-        return self._color
-
-    @color.setter
-    def color(self, color: str) -> None:
-        self._color = color
-        self.color_label.setStyleSheet(f"background-color: {color};")
 
     @property
     def part_name(self) -> str:

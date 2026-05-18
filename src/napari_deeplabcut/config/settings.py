@@ -1,10 +1,17 @@
+import os
+
 from qtpy.QtCore import QSettings
 
+# Colormap settings
 DEFAULT_SINGLE_ANIMAL_CMAP = "rainbow"
 DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP = "Set3"
 
+# UI settings
 _OVERWRITE_CONFIRM_ENABLED_KEY = "napari_deeplabcut/overwrite/confirm_enabled"
 AUTO_OPEN_KEYPOINT_CONTROLS_KEY = "napari_deeplabcut/ui/auto_open_keypoint_controls"
+
+# Tracking settings
+TRACKING_SHORTCUTS_ENABLED = os.environ.get("NAPARI_DLC_TRACKING_SHORTCUTS_ENABLED", "1") == "1"
 
 
 def get_overwrite_confirmation_enabled() -> bool:

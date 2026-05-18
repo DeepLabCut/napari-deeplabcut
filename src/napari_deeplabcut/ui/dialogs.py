@@ -72,6 +72,8 @@ def _scope_label(scope: str) -> str:
         return "Points layer"
     if scope == "global-points":
         return "All Points layers"
+    if scope == "tracking-points-layer":
+        return "Points layer + tracking widget"
     return scope
 
 
@@ -236,6 +238,33 @@ class Shortcuts(QDialog):
 
         super().closeEvent(event)
 
+    def _find_tracking_dock(self):
+        if self.viewer is None:
+            return None
+
+        window = getattr(self.viewer, "window", None)
+        if window is None:
+            return None
+
+        try:
+            for dock in window._dock_widgets.values():
+                widget = dock.widget()
+                if widget is None:
+                    continue
+
+                if widget.objectName() == "napari-deeplabcut-tracking-controls" or bool(
+                    widget.property("ndlc_tracking_controls")
+                ):
+                    return dock
+        except Exception:
+            return None
+
+        return None
+
+    def _tracking_widget_is_open(self) -> bool:
+        dock = self._find_tracking_dock()
+        return dock is not None and dock.isVisible()
+
     def _build_rows(self) -> None:
         grouped = defaultdict(list)
         for spec in iter_shortcuts():
@@ -270,11 +299,19 @@ class Shortcuts(QDialog):
         """
         if self.viewer is None:
             return False, "No viewer available."
+
         active = self._active_layer()
         active_is_points = isinstance(active, Points)
 
         if spec.scope == "points-layer" and not active_is_points:
             return False, "No active Points layer."
+
+        if spec.scope == "tracking-points-layer":
+            if not self._tracking_widget_is_open():
+                return False, "Tracking widget is not open."
+            if not active_is_points:
+                return False, "No active Points layer."
+            return True, None
 
         # Optional: support extra conditions later, e.g. multi-animal-only
         # if getattr(spec, "requires_multianimal", False):

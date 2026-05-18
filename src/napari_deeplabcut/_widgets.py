@@ -66,9 +66,7 @@ from .core.config_sync import (
     save_point_size_to_config,
 )
 from .core.layer_lifecycle import (
-    MergeDecisionRequest,
-    MergeDecisionResult,
-    MergeDisposition,
+    PlaceholderConfigAction,
     PointsLayerSetupRequest,
     get_or_create_layer_manager,
 )
@@ -113,7 +111,7 @@ from .ui.ui_dialogs.save import PointsLayerSaveWorkflow
 from .utils.debug import get_debug_recorder, install_debug_recorder, log_timing
 from .utils.deprecations import deprecated
 
-logger = logging.getLogger("napari-deeplabcut._widgets")
+logger = logging.getLogger(__name__)
 # logger.setLevel(logging.DEBUG)  # FIXME @C-Achard temp remove before merging
 
 
@@ -132,7 +130,7 @@ class KeypointControls(ViewerSingletonWidget):
 
         # Layer lifecycle manager
         self.layer_manager = get_or_create_layer_manager(self.viewer)
-        self.layer_manager.set_merge_decision_provider(self)
+        self.layer_manager.set_placeholder_config_decision_provider(self)
         ## Hook up signals for layer lifecycle events as needed, e.g.:
         self.layer_manager.session_conflict_rejected.connect(self._on_session_conflict_detected)
         self.layer_manager.refresh_video_panel_requested.connect(self._refresh_video_panel_context)
@@ -231,6 +229,7 @@ class KeypointControls(ViewerSingletonWidget):
 
         self._traj_mpl_canvas = TrajectoryMatplotlibCanvas(
             self.viewer,
+            layer_manager=self.layer_manager,
             get_color_mode=lambda: self.color_mode,
         )
         self._show_traj_plot_cb = QCheckBox("Show trajectories", parent=self)
@@ -246,7 +245,7 @@ class KeypointControls(ViewerSingletonWidget):
         grid.addWidget(self._view_scheme_cb, 3, 0)
 
         # UX / status panel (folder, progress, point size)
-        self._layer_status_panel = LayerStatusPanel(self)
+        self._layer_status_panel = LayerStatusPanel(self, viewer=self.viewer)
         self._layer_status_panel.point_size_changed.connect(self._on_active_points_size_changed)
         self._layer_status_panel.point_size_commit_requested.connect(self._commit_active_points_size_to_config)
         self._layout.addWidget(self._layer_status_panel)
@@ -471,23 +470,57 @@ class KeypointControls(ViewerSingletonWidget):
     # ######################## #
     # Layer setup core methods #
     # ######################## #
-    def resolve_merge(self, request: MergeDecisionRequest) -> MergeDecisionResult:
-        if not request.added_keypoints:
-            return MergeDecisionResult(disposition=MergeDisposition.KEEP_BOTH)
+    def resolve_placeholder_config_action(
+        self,
+        *,
+        placeholder_layer: Points,
+        managed_layers: tuple[Points, ...],
+        added_keypoints: tuple[str, ...],
+        message: str,
+    ) -> PlaceholderConfigAction:
+        """Ask the user how to handle insertion of a config placeholder layer."""
 
-        shared = "Do you want to hide the existing keypoints and add the new ones as a separate layer?"
-        text = f"{request.message}\n\n{shared}" if request.message else shared
-        answer = QMessageBox.question(
-            self,
-            "",
-            text,
-            QMessageBox.Yes | QMessageBox.No,
+        # If there are no actually new keypoints, apply silently to current.
+        if not added_keypoints:
+            return PlaceholderConfigAction.APPLY_TO_CURRENT
+
+        title = "New keypoints found in config"
+
+        keypoints_text = ", ".join(added_keypoints)
+        intro = f"The loaded config adds new keypoint{'s' if len(added_keypoints) > 1 else ''}: {keypoints_text}."
+
+        body = (
+            "\n\nChoose how to handle this:\n\n"
+            "• Apply to current\n"
+            "  Update the current keypoints layer with the config,\n"
+            "  keep the current layer visible,\n"
+            "  and remove the temporary placeholder layer.\n\n"
+            "• Keep both\n"
+            "  Keep the current layer unchanged\n"
+            "  and keep the new layer as a separate layer.\n\n"
+            "• Cancel\n"
+            "  Discard the temporary placeholder layer and make no changes.\n"
         )
 
-        if answer == QMessageBox.Yes:
-            return MergeDecisionResult(disposition=MergeDisposition.HIDE_EXISTING)
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Question)
+        msg.setWindowTitle(title)
+        msg.setText(intro + body)
 
-        return MergeDecisionResult(disposition=MergeDisposition.KEEP_BOTH)
+        apply_btn = msg.addButton("Apply to current", QMessageBox.AcceptRole)
+        keep_both_btn = msg.addButton("Keep both", QMessageBox.ActionRole)
+        msg.addButton("Cancel", QMessageBox.RejectRole)
+
+        msg.setDefaultButton(apply_btn)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked is apply_btn:
+            return PlaceholderConfigAction.APPLY_TO_CURRENT
+        if clicked is keep_both_btn:
+            return PlaceholderConfigAction.KEEP_AS_SEPARATE_LAYER
+
+        return PlaceholderConfigAction.CANCEL
 
     def _on_points_layers_merged_requested(self, layers: tuple[Points, ...]) -> None:
         """Refresh widget-owned UI after manager merged placeholder config into managed layers."""
@@ -721,6 +754,7 @@ class KeypointControls(ViewerSingletonWidget):
         if Qt.CheckState(state) == Qt.CheckState.Checked:
             self._ensure_traj_canvas_docked()
             if self._mpl_docked:
+                self._traj_mpl_canvas.refresh_from_viewer_layers()
                 self._traj_mpl_canvas._apply_napari_theme()
                 self._traj_mpl_canvas.update_plot_range(
                     Event(type_name="", value=[self.viewer.dims.current_step[0]]),
@@ -1212,7 +1246,7 @@ class KeypointControls(ViewerSingletonWidget):
             logger.warning("Layer manager audit on close reported issues:\n%s", report.issues)
 
         if self.layer_manager is not None:
-            self.layer_manager.set_merge_decision_provider(None)
+            self.layer_manager.set_placeholder_config_decision_provider(None)
 
     def on_active_layer_change(self, event) -> None:
         """Updates the GUI when the active layer changes

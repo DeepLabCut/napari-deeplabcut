@@ -25,7 +25,7 @@ os.environ["NAPARI_ASYNC"] = "0"  # avoid async teardown surprises in tests
 # os.environ["QT_OPENGL"] = "software"  # avoid some CI issues with OpenGL
 # os.environ["PYTEST_QT_API"] = "pyqt6" # only for local testing with pyqt6, we use pyside6 otherwise
 logging.getLogger("napari_deeplabcut").propagate = True
-logging.getLogger("napari-deeplabcut").propagate = True
+# logging.getLogger("napari-deeplabcut").propagate = True # use the underscore variant to match __name__ throughout.
 
 
 def force_show(widget, qtbot, *, process_ms: int = 50):
