@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator
+from enum import Enum
 from types import MethodType
 from typing import TYPE_CHECKING, Any
 
@@ -33,7 +34,7 @@ from ...tracking.core.data import TRACKING_LAYER_METADATA_KEY, is_tracking_resul
 from ...ui.base_widget._qt_timers import OwnedTimersMixin
 from ...ui.cropping import resolve_project_path_from_image_layer
 from ...utils.debug import log_timing
-from .merge import MergeDecisionProvider, MergeDecisionRequest, MergeDecisionResult, MergeDisposition
+from .merge import PlaceholderConfigAction, PlaceholderConfigDecisionProvider
 from .registry import (
     ClearedRegistryEntry,
     ManagedPointsRuntime,
@@ -49,6 +50,14 @@ if TYPE_CHECKING:
     from ..keypoints import KeypointStore
 
 logger = logging.getLogger(__name__)
+
+LAYER_REMOVAL_DELAY_MS = 300
+
+
+class PointsInsertResult(str, Enum):
+    ADDED = "added"
+    CONFIG_PLACEHOLDER_MERGED = "config_placeholder_merged"
+    SKIPPED = "skipped"
 
 
 class LayerLifecycleManager(QObject, OwnedTimersMixin):
@@ -93,7 +102,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         self.viewer = viewer
         self.registry: RuntimeRegistry[Any] = RuntimeRegistry()
-        self._merge_decision_provider: MergeDecisionProvider | None = None
+        self._placeholder_config_decision_provider: PlaceholderConfigDecisionProvider | None = None
 
         # Lifecycle-owned viewer/image context
         self._active_dlc_image_layer_id: int | None = None
@@ -144,8 +153,11 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
     def audit_registry(self) -> RegistryAuditReport:
         return self.registry.audit()
 
-    def set_merge_decision_provider(self, provider: MergeDecisionProvider | None) -> None:
-        self._merge_decision_provider = provider
+    def set_placeholder_config_decision_provider(
+        self,
+        provider: PlaceholderConfigDecisionProvider | None,
+    ) -> None:
+        self._placeholder_config_decision_provider = provider
 
     # ------------------------------------------------------------------ #
     # lifecycle-owned image/project context                              #
@@ -429,8 +441,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         return data.size == 0
 
-    @staticmethod
-    def validate_header(layer: Points) -> bool:
+    def validate_header(self, layer: Points) -> bool:
         res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
         if hasattr(res, "errors") or getattr(res, "header", None) is None:
             # self.viewer.status = (
@@ -670,33 +681,38 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         except Exception:
             logger.debug("Failed to remove layer=%r", getattr(layer, "name", layer), exc_info=True)
 
-    @staticmethod
-    def _set_layer_visible(layer: Layer, visible: bool) -> None:
-        try:
-            layer.visible = visible
-        except Exception:
-            try:
-                layer.shown = visible
-            except Exception:
-                logger.debug("Failed to set visibility for layer=%r", getattr(layer, "name", layer), exc_info=True)
-
-    def _setup_points_layer(self, layer: Points, *, allow_merge: bool = True) -> None:
+    def _setup_points_layer(
+        self,
+        layer: Points,
+        *,
+        allow_merge: bool = True,
+    ) -> PointsInsertResult:
         """Lifecycle-owned setup for an inserted/adopted Points layer."""
         if not self.validate_header(layer):
-            return
+            return PointsInsertResult.SKIPPED
 
         if allow_merge:
-            consumed = self._maybe_merge_config_points_layer(layer)
-            if consumed:
+            action = self._maybe_merge_config_points_layer(layer)
+
+            if action is PlaceholderConfigAction.APPLY_TO_CURRENT:
                 logger.debug(
-                    "Consumed temporary config placeholder layer=%r during merge path",
+                    "Applied config placeholder layer=%r to current managed layer(s)",
                     getattr(layer, "name", layer),
                 )
-                return
+                return PointsInsertResult.CONFIG_PLACEHOLDER_MERGED
+
+            if action is PlaceholderConfigAction.CANCEL:
+                logger.debug(
+                    "Cancelled config placeholder handling for layer=%r",
+                    getattr(layer, "name", layer),
+                )
+                return PointsInsertResult.SKIPPED
+
+            # KEEP_AS_SEPARATE_LAYER means continue normal setup below.
 
         store = self._wire_points_layer(layer)
         if store is None:
-            return
+            return PointsInsertResult.SKIPPED
 
         logger.debug(
             "Setup points layer=%r allow_merge=%s metadata_keys=%s",
@@ -704,6 +720,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             allow_merge,
             sorted((layer.metadata or {}).keys()),
         )
+        return PointsInsertResult.ADDED
 
     def _schedule_post_remove_refresh(self) -> None:
         """Coalesce repeated UI refreshes during layer removal bursts."""
@@ -850,25 +867,27 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         except Exception:
             logger.exception("Failed to remap frame indices for layer %s", getattr(layer, "name", str(layer)))
 
-    def _maybe_merge_config_points_layer(self, layer: Points) -> bool:
-        """Merge a temporary config placeholder layer into existing managed layers.
+    def _maybe_merge_config_points_layer(self, layer: Points) -> PlaceholderConfigAction | None:
+        """Handle insertion of a temporary config placeholder layer.
 
         Returns
         -------
-        bool
-            True if the placeholder layer was consumed by the merge flow
-            (including explicit HIDE_NEW / CANCEL handling), else False.
+        PlaceholderConfigAction | None
+            - APPLY_TO_CURRENT: current managed layer(s) were updated
+            - KEEP_AS_SEPARATE_LAYER: do not merge, continue normal setup for the new layer
+            - CANCEL: discard placeholder and do not update anything
+            - None: not applicable / not a placeholder
         """
         if not self.is_config_placeholder_points_layer(layer):
-            return False
+            return None
 
         managed = list(self.iter_managed_points())
         if not managed:
-            return False
+            return None
 
         md = layer.metadata or {}
         logger.debug(
-            "Maybe merge config placeholder layer=%r project=%r managed_layers=%d",
+            "Maybe handle config placeholder layer=%r project=%r managed_layers=%d",
             getattr(layer, "name", layer),
             md.get("project"),
             len(managed),
@@ -878,74 +897,70 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         new_header = self.get_header_model_from_metadata(new_metadata)
         if new_header is None:
             logger.debug(
-                "Skipping config placeholder merge for layer=%r: missing/invalid header",
+                "Skipping config placeholder handling for layer=%r: missing/invalid header",
                 getattr(layer, "name", layer),
             )
-            return False
+            return None
 
         reference_layer, _reference_store = managed[0]
         reference_header = self.get_header_model_from_metadata(reference_layer.metadata or {})
         if reference_header is None:
             logger.debug(
-                "Skipping config placeholder merge for layer=%r: reference managed layer has no valid header",
+                "Skipping config placeholder handling for layer=%r: reference managed layer has no valid header",
                 getattr(layer, "name", layer),
             )
-            return False
+            return None
 
-        current_keypoint_set = set(reference_header.bodyparts)
-        new_keypoint_set = set(new_header.bodyparts)
-        diff = tuple(sorted(new_keypoint_set.difference(current_keypoint_set)))
+        # current_keypoint_set = set(reference_header.bodyparts)
+        # new_keypoint_set = set(new_header.bodyparts)
+        # diff = tuple(sorted(new_keypoint_set.difference(current_keypoint_set)))
+        headers_equal = reference_header.model_dump() == new_header.model_dump()
+        current_kpt_set = set(reference_header.bodyparts)
+        new_kpt_set = set(new_header.bodyparts)
+        diff = tuple(sorted(new_kpt_set.difference(current_kpt_set)))
 
-        visible_existing_layer = None
-        for managed_layer, _store in managed:
-            if managed_layer is layer:
-                continue
-            try:
-                if getattr(managed_layer, "visible", True):
-                    visible_existing_layer = managed_layer
-                    break
-            except Exception:
-                visible_existing_layer = managed_layer
-                break
+        # message = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found from config." if diff else ""
 
-        message = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found." if diff else ""
+        if diff:
+            message = f"New keypoint{'s' if len(diff) > 1 else ''} {', '.join(diff)} found from config."
+        elif not headers_equal:
+            message = "Config keypoints differ from the current layer layout."
+        else:
+            message = ""
 
-        decision = self._resolve_merge_decision(
-            new_layer=layer,
-            existing_layers=tuple(ly for ly, _ in managed if ly is not layer),
+        action = self._resolve_placeholder_config_action(
+            placeholder_layer=layer,
+            managed_layers=tuple(ly for ly, _ in managed if ly is not layer),
             added_keypoints=diff,
+            headers_match=headers_equal,
             message=message,
         )
 
-        disposition = decision.disposition
-
-        # Optional visibility policy before merge
-        if disposition is MergeDisposition.HIDE_EXISTING and visible_existing_layer is not None:
-            self._set_layer_visible(visible_existing_layer, False)
+        if action is PlaceholderConfigAction.KEEP_AS_SEPARATE_LAYER:
             logger.debug(
-                "Config placeholder merge layer=%r hid_existing_layer=%r",
-                getattr(layer, "name", layer),
-                getattr(visible_existing_layer, "name", visible_existing_layer),
-            )
-
-        if disposition is MergeDisposition.HIDE_NEW:
-            self._single_shot_owned(0, lambda ly=layer: self._remove_layer_if_present(ly))
-            return True
-
-        if disposition is MergeDisposition.CANCEL:
-            # Conservative behavior: stop lifecycle setup and leave the placeholder
-            # layer untouched/unmanaged for now.
-            logger.debug(
-                "Config placeholder merge cancelled for layer=%r",
+                "Keeping config placeholder layer=%r as separate layer",
                 getattr(layer, "name", layer),
             )
-            return True
+            return action
 
+        if action is PlaceholderConfigAction.CANCEL:
+            logger.debug(
+                "Cancelling placeholder config insertion for layer=%r",
+                getattr(layer, "name", layer),
+            )
+            self._single_shot_owned(
+                LAYER_REMOVAL_DELAY_MS,
+                lambda ly=layer: self._remove_layer_if_present(ly),
+            )
+            return action
+
+        # APPLY_TO_CURRENT
         if diff:
             self.viewer.status = message
 
-        # Merge header into all managed layers.
         affected_layers: list[Points] = []
+
+        # Merge header into all managed layers.
         for managed_layer, store in managed:
             pts = read_points_meta(
                 managed_layer,
@@ -964,7 +979,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             store.layer = managed_layer
             affected_layers.append(managed_layer)
 
-        # Apply updated presentation metadata to existing managed layers.
+        # Apply presentation metadata to existing managed layers.
         for managed_layer, store in managed:
             managed_layer.metadata["config_colormap"] = new_metadata.get(
                 "config_colormap",
@@ -980,44 +995,58 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             mark_layer_presentation_changed(managed_layer)
             store.layer = managed_layer
 
-        # Ask UI consumers to refresh menus/colors based on updated managed layers.
-        self.points_layers_merged_requested.emit(tuple(affected_layers))
+        def _finalize_placeholder_apply(ly=layer, affected=tuple(affected_layers)):
+            self._remove_layer_if_present(ly)
+            self.points_layers_merged_requested.emit(affected)
+            self.refresh_layer_status_requested.emit()
 
-        # Remove the temporary placeholder layer explicitly by identity.
-        self._single_shot_owned(0, lambda ly=layer: self._remove_layer_if_present(ly))
+        self._single_shot_owned(LAYER_REMOVAL_DELAY_MS, _finalize_placeholder_apply)
+        return action
 
-        # General panel refreshes
-        self.refresh_layer_status_requested.emit()
-
-        return True
-
-    def _resolve_merge_decision(
+    def _resolve_placeholder_config_action(
         self,
         *,
-        new_layer: Any,
-        existing_layers: tuple[Any, ...],
+        placeholder_layer: Any,
+        managed_layers: tuple[Any, ...],
         added_keypoints: tuple[str, ...],
+        headers_match: bool,
         message: str,
-    ) -> MergeDecisionResult:
-        provider = self._merge_decision_provider
-        if provider is None:
-            return MergeDecisionResult(disposition=MergeDisposition.KEEP_BOTH)
+    ) -> PlaceholderConfigAction:
 
-        req = MergeDecisionRequest(
-            new_layer=new_layer,
-            existing_layers=existing_layers,
-            added_keypoints=added_keypoints,
-            message=message,
-        )
+        def _default_action() -> PlaceholderConfigAction:
+            if headers_match:
+                return PlaceholderConfigAction.APPLY_TO_CURRENT
+            return PlaceholderConfigAction.KEEP_AS_SEPARATE_LAYER
+
+        provider = self._placeholder_config_decision_provider
+        if provider is None:
+            return _default_action()
 
         try:
-            result = provider.resolve_merge(req)
+            result = provider.resolve_placeholder_config_action(
+                placeholder_layer=placeholder_layer,
+                managed_layers=managed_layers,
+                added_keypoints=added_keypoints,
+                message=message,
+            )
         except Exception:
-            logger.debug("Merge decision provider failed; defaulting to KEEP_BOTH", exc_info=True)
-            return MergeDecisionResult(disposition=MergeDisposition.KEEP_BOTH)
+            mode = _default_action()
+            logger.debug(
+                "Placeholder config decision provider failed; defaulting to %s",
+                mode,
+                exc_info=True,
+            )
+            return mode
 
-        if result is None:
-            return MergeDecisionResult(disposition=MergeDisposition.KEEP_BOTH)
+        if not isinstance(result, PlaceholderConfigAction):
+            mode = _default_action()
+            logger.warning(
+                "Placeholder config decision provider returned invalid result %r; "
+                "expected PlaceholderConfigAction. Defaulting to %s",
+                result,
+                mode,
+            )
+            return mode
 
         return result
 
@@ -1309,15 +1338,23 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         )
 
         should_remap = False
+        emit_insert_processed = True
 
         if isinstance(layer, Image):
             should_remap = self._maybe_accept_and_setup_image_layer(
                 layer,
                 getattr(event, "index", None),
             )
+
         elif isinstance(layer, Points):
-            self._setup_points_layer(layer, allow_merge=True)
-            should_remap = True
+            outcome = self._setup_points_layer(layer, allow_merge=True)
+            should_remap = outcome is PointsInsertResult.ADDED
+            emit_insert_processed = outcome is PointsInsertResult.ADDED
+
+            if outcome is PointsInsertResult.CONFIG_PLACEHOLDER_MERGED:
+                self.refresh_video_panel_requested.emit()
+                self.refresh_layer_status_requested.emit()
+                return
 
         if should_remap:
             for layer_ in self.viewer.layers:
@@ -1326,7 +1363,9 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         self.refresh_video_panel_requested.emit()
         self.refresh_layer_status_requested.emit()
-        self.layer_insert_processed.emit(layer)
+
+        if emit_insert_processed:
+            self.layer_insert_processed.emit(layer)
 
     def on_remove(self, event: Any) -> None:
         layer = getattr(event, "value", None)
