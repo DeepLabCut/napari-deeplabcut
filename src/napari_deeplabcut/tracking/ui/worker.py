@@ -13,15 +13,16 @@ from napari_deeplabcut.tracking.core.data import (
 )
 from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS
 
+TORCH_MISSING_MSG = (
+    "TrackingWorker requires PyTorch to be installed. Please install with `pip install napari-deeplabcut[tracking]`."
+)
 try:
     import importlib
 
     # import torch
     importlib.import_module("torch")
 except ImportError as e:
-    raise ImportError(
-        "TrackingWorker requires PyTorch to be installed.Please install with `pip install napari-deeplabcut[tracking]`."
-    ) from e
+    raise ImportError(TORCH_MISSING_MSG) from e
 
 """Worker is not allowed to perform main thread operations, such as :
 - viewer.add_*
@@ -143,6 +144,8 @@ class TrackingWorker(QObject):
                 import torch
 
                 torch.cuda.empty_cache()
+            except ImportError:
+                logger.debug(f"Could not clear CUDA cache: {TORCH_MISSING_MSG}")
             except Exception:
                 logger.debug("Could not clear CUDA cache", exc_info=True)
 
