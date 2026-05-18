@@ -165,7 +165,7 @@ def build_tracking_result_metadata(
     return md
 
 
-def is_tracking_result_layer(layer) -> bool:
+def is_tracking_result_points_layer(layer) -> bool:
     md = getattr(layer, "metadata", {}) or {}
     info = md.get(TRACKING_LAYER_METADATA_KEY)
     return isinstance(info, dict) and info.get("kind") == "cotracker-result"

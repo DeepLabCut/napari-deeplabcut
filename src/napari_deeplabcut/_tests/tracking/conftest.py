@@ -1,7 +1,14 @@
+# src/napari_deeplabcut/_tests/tracking/conftest.py
+from __future__ import annotations
+
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
+from napari.layers import Points
 
+from napari_deeplabcut.tracking.core import utils as tracking_utils
 from napari_deeplabcut.tracking.core.data import TrackingModelInputs, TrackingWorkerData, TrackingWorkerOutput
 from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS, RawModelOutputs, TrackingModel
 
@@ -27,7 +34,7 @@ class DummyTracker(TrackingModel):
 
         return _NoOpModel()
 
-    def prepare_inputs(self, cfg: "TrackingWorkerData", **kwargs) -> TrackingModelInputs:
+    def prepare_inputs(self, cfg: TrackingWorkerData, **kwargs) -> TrackingModelInputs:
         # Ensure video is (T, H, W, C) and keypoints is (K, 3) where columns: [frame_idx, x, y] or [id, x, y]
         video = np.asarray(cfg.video)
         queries = np.asarray(cfg.keypoints).copy()
@@ -59,8 +66,8 @@ class DummyTracker(TrackingModel):
         return RawModelOutputs(keypoints=tracks, keypoint_features={"visibility": vis})
 
     def prepare_outputs(
-        self, model_outputs: RawModelOutputs, worker_inputs: "TrackingWorkerData" = None, **kwargs
-    ) -> "TrackingWorkerOutput":
+        self, model_outputs: RawModelOutputs, worker_inputs: TrackingWorkerData = None, **kwargs
+    ) -> TrackingWorkerOutput:
         # Flatten (T, K, 2) -> (N, 3) with [frame_idx, x, y]
         tracks = model_outputs.keypoints
         T = tracks.shape[0]
@@ -82,7 +89,7 @@ class DummyTracker(TrackingModel):
             keypoint_features=keypoints_features,
         )
 
-    def validate_outputs(self, inputs: TrackingModelInputs, outputs: "TrackingWorkerOutput") -> tuple[bool, str]:
+    def validate_outputs(self, inputs: TrackingModelInputs, outputs: TrackingWorkerOutput) -> tuple[bool, str]:
         """
         Validate DummyTracker outputs.
 
@@ -216,3 +223,162 @@ def track_worker_inputs():
         keypoint_features=keypoint_features,
         backward_tracking=False,
     )
+
+
+# -----------------------------------------------------------------------------#
+# Pure-unit helpers for tracking.core.utils tests
+# -----------------------------------------------------------------------------#
+@pytest.fixture
+def fake_points_layer_factory():
+    """
+    Flexible factory for tracking core tests.
+
+    Behavior
+    --------
+    - Returns a real napari Points layer for "normal" merge/refine-style tests
+      when labels are provided and no explicit `features=` payload is passed.
+    - Returns a lightweight fake Points-like object (SimpleNamespace) when tests
+      need full control over `features` / `properties`, including intentionally
+      invalid or mismatched states used by utils tests.
+    - The behavior can be forced with `real=True` or `real=False`.
+
+    Supported patterns
+    ------------------
+    1) Real Points layer:
+        fake_points_layer_factory(
+            name="target",
+            data=[[0, 10, 20]],
+            labels=["nose"],
+            ids=[""],
+            extra_features={"likelihood": [0.9]},
+        )
+
+    2) Fake Points-like layer:
+        fake_points_layer_factory(
+            data=[[0, 10, 20], [1, 11, 21]],
+            features=pd.DataFrame({"label": ["nose"]}),  # mismatched on purpose
+            properties={"label": np.array(["nose", "tail"], dtype=object)},
+        )
+    """
+
+    def _make(
+        *,
+        data,
+        name: str = "layer",
+        labels=None,
+        ids=None,
+        extra_features: dict | None = None,
+        features: pd.DataFrame | dict | None = None,
+        properties: dict | None = None,
+        real: bool | None = None,
+    ):
+        data_arr = np.asarray(data, dtype=float)
+        props = dict(properties or {})
+
+        # Caller explicitly supplied features payload
+        explicit_features = features is not None
+
+        if explicit_features:
+            if isinstance(features, pd.DataFrame):
+                feat_df = features.copy()
+            else:
+                feat_df = pd.DataFrame(features)
+        elif labels is not None:
+            if ids is None:
+                ids = [""] * len(labels)
+
+            feat_df = pd.DataFrame(
+                {
+                    "label": list(labels),
+                    "id": list(ids),
+                }
+            )
+
+            if extra_features:
+                for key, values in extra_features.items():
+                    feat_df[key] = list(values)
+        else:
+            feat_df = None
+
+        # Auto mode:
+        # - if explicit features are provided, use fake object unless caller forces real=True
+        #   (this supports mismatched/broken states for utils tests)
+        # - if labels are provided normally, use real Points
+        if real is None:
+            real = (labels is not None) and (not explicit_features)
+
+        if real:
+            if feat_df is None:
+                feat_df = pd.DataFrame(index=range(len(data_arr)))
+
+            layer = Points(
+                data=data_arr,
+                features=feat_df,
+                name=name,
+            )
+
+            # Best-effort property override for tests that want explicit properties too
+            if props:
+                try:
+                    layer.properties = props
+                except Exception:
+                    pass
+
+            return layer
+
+        # Fake minimal object for pure-unit tests that need invalid/flexible state
+        return SimpleNamespace(
+            data=data_arr,
+            features=feat_df,
+            properties=props,
+            name=name,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def dummy_viewer_factory():
+    """
+    Factory for minimal fake Viewer-like objects with only `.layers`.
+    """
+
+    def _make(*, layers):
+        return SimpleNamespace(layers=list(layers))
+
+    return _make
+
+
+@pytest.fixture
+def tracking_manager_factory():
+    """
+    Factory for minimal fake LayerLifecycleManager-like objects used by naming tests.
+    """
+
+    def _make(
+        *,
+        tracking_layers=(),
+        source_name_by_layer_id=None,
+    ):
+        tracking_ids = {id(layer) for layer in tracking_layers}
+        source_name_by_layer_id = dict(source_name_by_layer_id or {})
+
+        return SimpleNamespace(
+            is_tracking_result_layer=lambda layer: id(layer) in tracking_ids,
+            tracking_result_source_layer_name=lambda layer: source_name_by_layer_id.get(id(layer)),
+        )
+
+    return _make
+
+
+@pytest.fixture
+def patch_tracking_manager(monkeypatch):
+    """
+    Patch tracking.core.utils.get_or_create_layer_manager(...) for pure unit tests.
+    """
+
+    def _patch(manager):
+        monkeypatch.setattr(tracking_utils, "get_or_create_layer_manager", lambda _viewer: manager)
+        return manager
+
+    return _patch

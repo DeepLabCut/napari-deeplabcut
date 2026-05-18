@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
     from ..keypoints import KeypointStore
 
-logger = logging.getLogger("napari-deeplabcut.lifecycle.registry")
+logger = logging.getLogger(__name__)
 StoreT = TypeVar("StoreT")
 
 

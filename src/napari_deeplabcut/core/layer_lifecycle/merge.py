@@ -1,30 +1,22 @@
 # src/napari_deeplabcut/core/layer_lifecycle/merge.py
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
 
 
-class MergeDisposition(str, Enum):
-    KEEP_BOTH = "keep_both"
-    HIDE_EXISTING = "hide_existing"
-    HIDE_NEW = "hide_new"
+class PlaceholderConfigAction(str, Enum):
+    APPLY_TO_CURRENT = "apply_to_current"
+    KEEP_AS_SEPARATE_LAYER = "keep_as_separate_layer"
     CANCEL = "cancel"
 
 
-@dataclass(frozen=True, slots=True)
-class MergeDecisionRequest:
-    new_layer: Any
-    existing_layers: tuple[Any, ...]
-    added_keypoints: tuple[str, ...]
-    message: str
-
-
-@dataclass(frozen=True, slots=True)
-class MergeDecisionResult:
-    disposition: MergeDisposition
-
-
-class MergeDecisionProvider(Protocol):
-    def resolve_merge(self, request: MergeDecisionRequest) -> MergeDecisionResult: ...
+class PlaceholderConfigDecisionProvider(Protocol):
+    def resolve_placeholder_config_action(
+        self,
+        *,
+        placeholder_layer: Any,
+        managed_layers: tuple[Any, ...],
+        added_keypoints: tuple[str, ...],
+        message: str,
+    ) -> PlaceholderConfigAction: ...
