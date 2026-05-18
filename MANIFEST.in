@@ -6,6 +6,8 @@ include src/napari_deeplabcut/assets/superanimal_topviewmouse.jpg
 include src/napari_deeplabcut/assets/superanimal_topviewmouse.json
 include src/napari_deeplabcut/assets/superanimal_quadruped.jpg
 include src/napari_deeplabcut/assets/superanimal_quadruped.json
+include src/napari_deeplabcut/assets/info_icon_light.svg
+include src/napari_deeplabcut/assets/info_icon_dark.svg
 
 recursive-exclude * __pycache__
 recursive-exclude * *.py[co]

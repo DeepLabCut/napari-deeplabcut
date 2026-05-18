@@ -256,7 +256,7 @@ def get_uniform_point_size(layer: Points, *, default: int = 6) -> int:
         arr = np.asarray(size, dtype=float).ravel()
         if arr.size == 0:
             return default
-        return int(round(float(np.nanmean(arr))))
+        return int(round(float(np.nanmedian(arr))))
     except Exception:
         try:
             return int(round(float(size)))

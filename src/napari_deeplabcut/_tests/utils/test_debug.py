@@ -94,7 +94,7 @@ def test_recorder_captures_exception_text():
 
 def test_recorder_is_bounded():
     recorder = InMemoryDebugRecorder(capacity=3)
-    logger = logging.getLogger("napari-deeplabcut.test.bounded")
+    logger = logging.getLogger("napari_deeplabcut.test.bounded")
     logger.setLevel(logging.DEBUG)
     logger.addHandler(recorder)
 
@@ -111,7 +111,7 @@ def test_recorder_is_bounded():
 
 def test_clear_resets_records_and_dropped_count():
     recorder = InMemoryDebugRecorder(capacity=3)
-    logger = logging.getLogger("napari-deeplabcut.test.clear")
+    logger = logging.getLogger("napari_deeplabcut.test.clear")
     logger.setLevel(logging.DEBUG)
     logger.addHandler(recorder)
 
@@ -129,7 +129,7 @@ def test_clear_resets_records_and_dropped_count():
 
 def test_render_text_includes_message_and_level():
     recorder = InMemoryDebugRecorder(capacity=10)
-    logger = logging.getLogger("napari-deeplabcut.test.render")
+    logger = logging.getLogger("napari_deeplabcut.test.render")
     logger.setLevel(logging.DEBUG)
     logger.addHandler(recorder)
 
@@ -139,14 +139,14 @@ def test_render_text_includes_message_and_level():
 
         assert "INFO" in text
         assert "hello render" in text
-        assert "napari-deeplabcut.test.render" in text
+        assert "napari_deeplabcut.test.render" in text
     finally:
         logger.removeHandler(recorder)
 
 
 def test_render_text_respects_limit():
     recorder = InMemoryDebugRecorder(capacity=10)
-    logger = logging.getLogger("napari-deeplabcut.test.limit")
+    logger = logging.getLogger("napari_deeplabcut.test.limit")
     logger.setLevel(logging.DEBUG)
     logger.addHandler(recorder)
 
@@ -168,7 +168,7 @@ def test_emit_handles_unrenderable_message_without_raising():
     recorder = InMemoryDebugRecorder(capacity=10)
 
     record = logging.LogRecord(
-        name="napari-deeplabcut.test.unrenderable",
+        name="napari_deeplabcut.test.unrenderable",
         level=logging.INFO,
         pathname=__file__,
         lineno=1,
