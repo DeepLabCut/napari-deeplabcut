@@ -594,9 +594,10 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
         with mplstyle.context(self.mpl_style_sheet_path):
             half = self._window / 2.0
-
             start = max(state.frame_min, value - half)
+            start = min(start, state.frame_max - self._window)
             end = min(state.frame_max, value + half)
+            end = max(end, state.frame_min + self._window)
 
             if end <= start:
                 end = start + 1.0
