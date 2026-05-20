@@ -127,12 +127,30 @@ def expand_query_features_over_time(
 
     if visibility is not None:
         vis = np.asarray(visibility)
-        if vis.ndim == 3 and vis.shape[-1] == 1:
-            vis = vis[..., 0]
-        elif vis.ndim == 3 and vis.shape[0] == 1:
-            vis = vis.squeeze(0)
+
+        # Remove known batch dimension
+        if vis.ndim >= 1 and vis.shape[0] == 1:
+            vis = np.squeeze(vis, axis=0)
+
+        # Remove known trailing singleton channel
+        if vis.ndim >= 1 and vis.shape[-1] == 1:
+            vis = np.squeeze(vis, axis=-1)
 
         expected = (T, K)
+
+        if vis.shape == (K, T):
+            vis = vis.T
+
+        elif vis.shape == (T,):
+            if K != 1:
+                raise ValueError(...)
+            vis = vis[:, None]
+
+        elif vis.shape == (K,):
+            if T != 1:
+                raise ValueError(...)
+            vis = vis[None, :]
+
         if vis.shape != expected:
             raise ValueError(f"Visibility shape mismatch. Expected {expected}, got {vis.shape}.")
 
