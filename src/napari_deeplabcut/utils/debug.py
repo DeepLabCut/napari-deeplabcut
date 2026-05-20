@@ -28,6 +28,7 @@ def log_timing(
     *,
     level: int = logging.DEBUG,
     threshold_ms: float | None = None,
+    enable: bool = NAPARI_DLC_LOG_TIMING,
 ):
     """Lightweight scoped timer for debug instrumentation.
 
@@ -35,7 +36,7 @@ def log_timing(
     Logs only if logger is enabled for the requested level.
     Optionally suppresses tiny timings below threshold_ms.
     """
-    if not logger.isEnabledFor(level) or not NAPARI_DLC_LOG_TIMING:
+    if not logger.isEnabledFor(level) or not enable:
         yield
         return
 

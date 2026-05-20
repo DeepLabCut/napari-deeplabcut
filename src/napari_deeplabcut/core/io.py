@@ -64,6 +64,7 @@ from napari_deeplabcut.core.project_paths import (
     infer_dlc_project_from_points_meta,
 )
 from napari_deeplabcut.core.provenance import resolve_output_path_from_metadata
+from napari_deeplabcut.utils.debug import log_timing
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,11 @@ logger = logging.getLogger(__name__)
 _SUPPORTED_SUFFIXES = {ext.lower() for ext in SUPPORTED_IMAGES}
 DLC_CANONICAL_H5_KEY = "df_with_missing"  # TODO use this key instead of str literal in all places
 FALLBACK_H5_KEYS = ["keypoints"]
+
+# -----------------------------------------------------------------------------
+#  Debug consts
+# -----------------------------------------------------------------------------
+LOG_VIDEO_READER_TIMING = False
 
 # =============================================================================
 # CONFIG (YAML)
@@ -855,19 +861,25 @@ def is_video(filename: str) -> bool:
 
 # Video reader using OpenCV
 class Video:
+    """
+    Better reader for viewer-like access:
+    - preserves decoder state
+    - small forward jumps decode forward instead of seeking
+    """
+
     def __init__(self, video_path):
         if not Path(video_path).is_file():
             raise ValueError(f'Video path "{video_path}" does not point to a file.')
 
-        self.path = video_path
-        self.stream = cv2.VideoCapture(video_path)
+        self.path = str(video_path)
+        self.stream = cv2.VideoCapture(self.path)
         if not self.stream.isOpened():
             raise OSError("Video could not be opened.")
 
         self._n_frames = int(self.stream.get(cv2.CAP_PROP_FRAME_COUNT))
         self._width = int(self.stream.get(cv2.CAP_PROP_FRAME_WIDTH))
         self._height = int(self.stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self._frame = cv2.UMat(self._height, self._width, cv2.CV_8UC3)
+        self._pos = 0  # next frame to read
 
     def __len__(self):
         return self._n_frames
@@ -880,43 +892,108 @@ class Video:
     def height(self):
         return self._height
 
-    def set_to_frame(self, ind):
-        ind = min(ind, len(self) - 1)
-        ind += 1  # Unclear why this is needed at all
-        self.stream.set(cv2.CAP_PROP_POS_FRAMES, ind)
+    def seek(self, ind: int):
+        with log_timing(logger, f"Seeking video to frame {ind}", enable=LOG_VIDEO_READER_TIMING, threshold_ms=1):
+            ind = max(0, min(ind, len(self) - 1))
+            if ind != self._pos:
+                ok = self.stream.set(cv2.CAP_PROP_POS_FRAMES, ind)
+                if not ok:
+                    raise OSError(f"Failed to seek to frame {ind}")
+                self._pos = ind
 
-    def read_frame(self):
-        self.stream.retrieve(self._frame)
-        cv2.cvtColor(self._frame, cv2.COLOR_BGR2RGB, self._frame, 3)
-        return self._frame.get()
+    def read_next(self):
+        ok, frame = self.stream.read()
+        if not ok:
+            raise IndexError("Could not read frame")
+        self._pos += 1
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    def grab_next(self):
+        ok = self.stream.grab()
+        if not ok:
+            raise IndexError("Could not grab frame")
+        self._pos += 1
+        return ok
+
+    def read_frame(self, ind: int):
+        with log_timing(logger, f"Reading video frame {ind}", enable=LOG_VIDEO_READER_TIMING, threshold_ms=2):
+            if ind == self._pos:
+                return self.read_next()
+
+            # Small forward jumps: decode forward instead of reseeking
+            if ind > self._pos and (ind - self._pos) <= 8:
+                while self._pos < ind:
+                    self.grab_next()
+                return self.read_next()
+
+            self.seek(ind)
+            return self.read_next()
+
+    def read_frames(self, start: int, stop: int):
+        start = max(0, start)
+        stop = min(stop, len(self))
+        if stop <= start:
+            return np.empty((0, self.height, self.width, 3), dtype=np.uint8)
+
+        self.seek(start)
+        out = np.empty((stop - start, self.height, self.width, 3), dtype=np.uint8)
+
+        for i in range(stop - start):
+            ok, frame = self.stream.read()
+            if not ok:
+                raise IndexError(f"Could not read frame {start + i}")
+            self._pos += 1
+            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB, dst=out[i])
+
+        return out
 
     def close(self):
         self.stream.release()
 
 
-def read_video(filename: str, opencv: bool = True, *, dlc_meta: dict | None = None):
-    if opencv:
-        stream = Video(filename)
-        # NOTE construct output shape tuple in (H, W, C) order to match read_frame() data
-        shape = stream.height, stream.width, 3
+def _choose_chunk_size(height: int, width: int, target_mb: int = 256) -> int:
+    """Here we have to trade off between:
 
-        def _read_frame(ind):
-            stream.set_to_frame(ind)
-            return stream.read_frame()
+    - Larger chunks: better for local frame access (going frame-by-frame),
+    but when changing chunks, feels slower. So dragging fast is more expensive.
+    - Smaller chunks: feels more responsive when dragging fast,
+    but chunks recompute more often, so more latency when dragging slowly or frame-by-frame.
+    """
+    bytes_per_frame = height * width * 3
+    target_bytes = target_mb * 1024 * 1024
+    chunk = target_bytes // bytes_per_frame
+    return int(min(max(chunk, 8), 32))
 
-        lazy_reader = delayed(_read_frame)
-    else:  # pragma: no cover
-        from pims import PyAVReaderIndexed
 
-        try:
-            stream = PyAVReaderIndexed(filename)
-        except ImportError:
-            raise ImportError("`pip install av` to use the PyAV video reader.") from None
+def read_video(filename: str, *, dlc_meta: dict | None = None, chunk_size: int | None = None):
+    probe = Video(filename)
+    n_frames = len(probe)
+    shape = (probe.height, probe.width, 3)
+    if chunk_size is None:
+        chunk_size = _choose_chunk_size(probe.height, probe.width)
+        logger.debug("Auto-chosen chunk size for video %s: %d frames (target ~256MB)", filename, chunk_size)
+    probe.close()
 
-        shape = stream.frame_shape
-        lazy_reader = delayed(stream.get_frame)
+    @delayed
+    def _read_block(start: int, stop: int):
+        with log_timing(logger, f"Reading video block {start}-{stop}", enable=LOG_VIDEO_READER_TIMING, threshold_ms=5):
+            vid = Video(filename)
+            try:
+                return vid.read_frames(start, stop)
+            finally:
+                vid.close()
 
-    movie = da.stack([da.from_delayed(lazy_reader(i), shape=shape, dtype=np.uint8) for i in range(len(stream))])
+    blocks = []
+    for start in range(0, n_frames, chunk_size):
+        stop = min(start + chunk_size, n_frames)
+        block = da.from_delayed(
+            _read_block(start, stop),
+            shape=(stop - start, *shape),
+            dtype=np.uint8,
+        )
+        blocks.append(block)
+
+    movie = da.concatenate(blocks, axis=0)
     elems = list(Path(filename).parts)
     elems[-2] = "labeled-data"
     elems[-1] = Path(elems[-1]).stem  # + Path(filename).suffix
