@@ -319,7 +319,6 @@ def test_video_init_and_properties(video_path):
 def test_video_read_single_frame(video_path):
     """Check that we can read at least one frame correctly."""
     vid = Video(video_path)
-    # vid.set_to_frame(0)
     frame = vid.read_frame(0)
 
     assert isinstance(frame, np.ndarray)
