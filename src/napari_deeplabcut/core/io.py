@@ -15,6 +15,8 @@ is just a translation of already-valid objects to disk. This would also make
 validation more consistent across reads and writes.
 Config I/O is an especially good candidate for this, the logic is a bit spread right now
 (here, config_sync.py, and the sidecar JSON)
+
+Also consider breaking this down into video/csv/config modules.
 """
 # src/napari_deeplabcut/core/io.py
 
@@ -916,6 +918,9 @@ class Video:
         return ok
 
     def read_frame(self, ind: int):
+        if ind < 0 or ind >= len(self):
+            raise IndexError(f"Frame index {ind} out of bounds for video with {len(self)} frames.")
+
         with log_timing(logger, f"Reading video frame {ind}", enable=LOG_VIDEO_READER_TIMING, threshold_ms=2):
             if ind == self._pos:
                 return self.read_next()
