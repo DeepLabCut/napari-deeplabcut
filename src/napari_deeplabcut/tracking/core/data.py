@@ -127,28 +127,24 @@ def expand_query_features_over_time(
 
     if visibility is not None:
         vis = np.asarray(visibility)
-
-        # Remove known batch dimension
-        if vis.ndim >= 1 and vis.shape[0] == 1:
-            vis = np.squeeze(vis, axis=0)
-
-        # Remove known trailing singleton channel
-        if vis.ndim >= 1 and vis.shape[-1] == 1:
-            vis = np.squeeze(vis, axis=-1)
-
         expected = (T, K)
 
-        if vis.shape == (K, T):
+        if vis.shape == expected:
+            pass
+        elif vis.shape == (T, K, 1):
+            vis = vis[..., 0]
+        elif vis.shape == (1, T, K):
+            vis = vis[0]
+        elif vis.shape == (1, T, K, 1):
+            vis = vis[0, ..., 0]
+        elif vis.shape == (K, T):
+            # Transposed time/query layout.
             vis = vis.T
-
-        elif vis.shape == (T,):
-            if K != 1:
-                raise ValueError(...)
+        elif vis.shape == (T,) and K == 1:
+            # Single-query vector over time.
             vis = vis[:, None]
-
-        elif vis.shape == (K,):
-            if T != 1:
-                raise ValueError(...)
+        elif vis.shape == (K,) and T == 1:
+            # Single-frame vector over queries.
             vis = vis[None, :]
 
         if vis.shape != expected:

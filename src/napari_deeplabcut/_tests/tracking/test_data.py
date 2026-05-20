@@ -312,6 +312,29 @@ def test_expand_query_features_over_time_accepts_visibility_shape_k_t_transposed
     ]
 
 
+def test_expand_query_features_over_time_accepts_single_frame_single_query_visibility_vector():
+    seed = pd.DataFrame(
+        {
+            "label": ["nose"],
+            "id": ["animal-a"],
+        }
+    )
+    frame_ids = np.array([42], dtype=int)
+
+    visibility = np.array([True], dtype=bool)  # shape (1,)
+
+    out = expand_query_features_over_time(
+        seed,
+        frame_ids=frame_ids,
+        visibility=visibility,
+        tracker_name="Cotracker 3",
+    )
+
+    assert len(out) == 1
+    assert out["tracking_frame"].tolist() == [42]
+    assert out["tracking_visible"].tolist() == [True]
+
+
 # -----------------------------------------------------------------------------#
 # build_tracking_result_metadata
 # -----------------------------------------------------------------------------#
