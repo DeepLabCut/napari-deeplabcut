@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -9,6 +10,8 @@ import pandas as pd
 
 TRACKING_LAYER_METADATA_KEY = "ndlc_tracking"
 TRACKING_SCHEMA_VERSION = 1
+
+logger = logging.getLogger(__name__)
 
 
 # ----- Data schemas -----
@@ -138,8 +141,11 @@ def expand_query_features_over_time(
         elif vis.shape == (1, T, K, 1):
             vis = vis[0, ..., 0]
         elif vis.shape == (K, T):
-            # Transposed time/query layout.
-            vis = vis.T
+            if K == T:
+                raise ValueError("Ambiguous visibility shape (K, T) with K == T. Please check model output shapes.")
+            else:
+                # Transposed time/query layout.
+                vis = vis.T
         elif vis.shape == (T,) and K == 1:
             # Single-query vector over time.
             vis = vis[:, None]
