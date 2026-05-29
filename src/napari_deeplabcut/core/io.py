@@ -5,7 +5,7 @@ Includes:
 - Config file reading/writing
 - HDF reading with provenance attachment
 - Lazy image reading with Dask support
-- Video reading with OpenCV and optional PyAV fallback
+- Video reading with OpenCV and dask-backed block loader
 - Superkeypoints diagram and JSON loading
 
 NOTE: write_hdf could use some refactoring to split responsibilities more cleanly
@@ -853,7 +853,7 @@ def read_images(
 
 
 # =============================================================================
-# VIDEO (OpenCV; optional PyAV fallback)
+# VIDEO (OpenCV)
 # =============================================================================
 
 
@@ -944,11 +944,7 @@ class Video:
         out = np.empty((stop - start, self.height, self.width, 3), dtype=np.uint8)
 
         for i in range(stop - start):
-            ok, frame = self.stream.read()
-            if not ok:
-                raise IndexError(f"Could not read frame {start + i}")
-            self._pos += 1
-            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB, dst=out[i])
+            out[i] = self.read_next()
 
         return out
 
@@ -964,6 +960,8 @@ def _choose_chunk_size(height: int, width: int, target_mb: int = 256) -> int:
     - Smaller chunks: feels more responsive when dragging fast,
     but chunks recompute more often, so more latency when dragging slowly or frame-by-frame.
     """
+    if height <= 0 or width <= 0:
+        raise ValueError("Invalid video dimensions for chunk size calculation.")
     bytes_per_frame = height * width * 3
     target_bytes = target_mb * 1024 * 1024
     chunk = target_bytes // bytes_per_frame
@@ -972,12 +970,25 @@ def _choose_chunk_size(height: int, width: int, target_mb: int = 256) -> int:
 
 def read_video(filename: str, *, dlc_meta: dict | None = None, chunk_size: int | None = None):
     probe = Video(filename)
-    n_frames = len(probe)
-    shape = (probe.height, probe.width, 3)
-    if chunk_size is None:
-        chunk_size = _choose_chunk_size(probe.height, probe.width)
-        logger.debug("Auto-chosen chunk size for video %s: %d frames (target ~256MB)", filename, chunk_size)
-    probe.close()
+    try:
+        n_frames = len(probe)
+        height = probe.height
+        width = probe.width
+        shape = (height, width, 3)
+
+        if n_frames <= 0:
+            raise OSError(f"Video {filename} contains no frames or could not be read.")
+
+        if height <= 0 or width <= 0:
+            raise OSError(f"Video {filename} has invalid dimensions ({width}x{height}).")
+
+        if chunk_size is None:
+            chunk_size = _choose_chunk_size(height, width)
+            logger.debug("Auto-chosen chunk size for video %s: %d frames (target ~256MB)", filename, chunk_size)
+        elif chunk_size <= 0:
+            raise ValueError(f"Chunk size must be a positive integer, got {chunk_size}.")
+    finally:
+        probe.close()
 
     @delayed
     def _read_block(start: int, stop: int):
