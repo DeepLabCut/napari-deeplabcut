@@ -2,6 +2,8 @@ import os
 
 from qtpy.QtCore import QSettings
 
+from .utils import _get_int_env
+
 # Colormap settings
 DEFAULT_SINGLE_ANIMAL_CMAP = "rainbow"
 DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP = "Set3"
@@ -12,6 +14,14 @@ AUTO_OPEN_KEYPOINT_CONTROLS_KEY = "napari_deeplabcut/ui/auto_open_keypoint_contr
 
 # Tracking settings
 TRACKING_SHORTCUTS_ENABLED = os.environ.get("NAPARI_DLC_TRACKING_SHORTCUTS_ENABLED", "1") == "1"
+
+# Reader settings
+VIDEO_READER_MIN_CHUNK_SIZE = _get_int_env(
+    "NAPARI_DLC_VIDEO_READER_MIN_CHUNK_SIZE", 8, minimum=1
+)  # lower if you have very little RAM
+VIDEO_READER_CHUNK_TARGET_MB = _get_int_env(
+    "NAPARI_DLC_VIDEO_READER_CHUNK_TARGET_MB", 256, minimum=1
+)  # lower if you have very little RAM
 
 
 def get_overwrite_confirmation_enabled() -> bool:

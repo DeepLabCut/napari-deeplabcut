@@ -45,7 +45,11 @@ from pydantic import ValidationError
 
 from napari_deeplabcut import misc
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel, PointsMetadata
-from napari_deeplabcut.config.settings import DEFAULT_SINGLE_ANIMAL_CMAP
+from napari_deeplabcut.config.settings import (
+    DEFAULT_SINGLE_ANIMAL_CMAP,
+    VIDEO_READER_CHUNK_TARGET_MB,
+    VIDEO_READER_MIN_CHUNK_SIZE,
+)
 from napari_deeplabcut.config.supported_files import SUPPORTED_IMAGES, SUPPORTED_VIDEOS
 from napari_deeplabcut.core import schemas as dlc_schemas
 from napari_deeplabcut.core.dataframes import (
@@ -952,7 +956,13 @@ class Video:
         self.stream.release()
 
 
-def _choose_chunk_size(height: int, width: int, target_mb: int = 256) -> int:
+def _choose_chunk_size(
+    height: int,
+    width: int,
+    target_mb: int = VIDEO_READER_CHUNK_TARGET_MB,
+    min_chunk_size: int = VIDEO_READER_MIN_CHUNK_SIZE,
+    max_chunk_size: int = 32,
+) -> int:
     """Here we have to trade off between:
 
     - Larger chunks: better for local frame access (going frame-by-frame),
@@ -961,11 +971,17 @@ def _choose_chunk_size(height: int, width: int, target_mb: int = 256) -> int:
     but chunks recompute more often, so more latency when dragging slowly or frame-by-frame.
     """
     if height <= 0 or width <= 0:
-        raise ValueError("Invalid video dimensions for chunk size calculation.")
+        raise ValueError(f"Invalid video dimensions for chunk size calculation: height={height}, width={width}.")
+
+    target_mb = max(1, int(target_mb))
+    min_chunk_size = max(1, int(min_chunk_size))
+    max_chunk_size = max(min_chunk_size, int(max_chunk_size))
+
     bytes_per_frame = height * width * 3
     target_bytes = target_mb * 1024 * 1024
     chunk = target_bytes // bytes_per_frame
-    return int(min(max(chunk, 8), 32))
+
+    return int(min(max(chunk, min_chunk_size), max_chunk_size))
 
 
 def read_video(filename: str, *, dlc_meta: dict | None = None, chunk_size: int | None = None):
