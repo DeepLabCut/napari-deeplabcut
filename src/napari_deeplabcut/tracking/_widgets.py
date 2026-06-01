@@ -1,5 +1,4 @@
 import logging
-from copy import deepcopy
 from functools import partial
 
 import napari
@@ -38,7 +37,6 @@ from napari_deeplabcut.config.settings import TRACKING_SHORTCUTS_ENABLED
 from napari_deeplabcut.core.keypoints import KeypointStore
 from napari_deeplabcut.core.layer_lifecycle import get_or_create_layer_manager
 from napari_deeplabcut.core.layer_versioning import mark_layer_presentation_changed
-from napari_deeplabcut.core.layers import get_uniform_point_size
 from napari_deeplabcut.ui.base_widget.singleton_widget import ViewerSingletonWidget
 from napari_deeplabcut.ui.icons import apply_help_info_icon
 
@@ -391,36 +389,7 @@ class TrackingControls(ViewerSingletonWidget):
         )
 
         # Distinguish tracking results visually
-        try:
-            layer.symbol = "cross"
-        except Exception:
-            pass
-
-        try:
-            layer.opacity = 0.85
-        except Exception:
-            pass
-
-        try:
-            layer.size = get_uniform_point_size(source)
-        except Exception:
-            try:
-                layer.size = deepcopy(source.size)
-            except Exception:
-                pass
-
-        try:
-            # Optional: keep source colors if useful, but still visually distinct
-            layer.face_color = deepcopy(source.face_color)
-            layer.face_color_mode = source.face_color_mode
-        except Exception:
-            pass
-
-        try:
-            layer.border_width = 0.15
-            layer.border_color = "green"
-        except Exception:
-            pass
+        self.lifecycle_manager.apply_points_display_settings(layer, source=source)
 
         return layer
 
