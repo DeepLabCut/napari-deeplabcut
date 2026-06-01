@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/_tests/core/layer_manager/test_manager.py
 from __future__ import annotations
 
 import gc
@@ -7,7 +8,13 @@ import numpy as np
 import pytest
 from napari.layers import Image, Points
 
+from napari_deeplabcut.config.models import AnnotationKind
 from napari_deeplabcut.core.layer_lifecycle import LayerLifecycleManager
+from napari_deeplabcut.core.layer_lifecycle.display_settings import (
+    MACHINE_LABELS_POINTS_DISPLAY,
+    PointsDisplaySource,
+)
+from napari_deeplabcut.tracking.core.data import build_tracking_result_metadata
 
 
 def mark_as_dlc_session_image(layer, *, role="image"):
@@ -166,6 +173,12 @@ def make_image(name="img"):
 
 def make_points(name="pts"):
     layer = Points(np.zeros((0, 3)))
+    layer.name = name
+    return layer
+
+
+def make_nonempty_points(name="pts"):
+    layer = Points(np.array([[0, 1, 2]], dtype=float))
     layer.name = name
     return layer
 
@@ -436,3 +449,196 @@ def test_manager_resolve_inserted_layer_prefers_value_then_index_then_source(qtb
 
     assert layer is pts
     assert layer.name == expected_name
+
+
+# ----------------------------------------------------------------------------
+# Display settings logic tests
+# ---------------------------------------------------------------------------
+
+
+def make_machine_points(name="machine", *, nonempty: bool = False):
+    layer = make_nonempty_points(name) if nonempty else make_points(name)
+    layer.metadata = {
+        "io": {
+            "kind": AnnotationKind.MACHINE,
+        }
+    }
+    return layer
+
+
+def make_machine_points_serialized_kind(name="machine", *, nonempty: bool = False):
+    layer = make_nonempty_points(name) if nonempty else make_points(name)
+    layer.metadata = {
+        "io": {
+            "kind": "machine",
+        }
+    }
+    return layer
+
+
+def make_tracking_points(name="tracking", *, nonempty: bool = False):
+    layer = make_nonempty_points(name) if nonempty else make_points(name)
+    layer.metadata = build_tracking_result_metadata(
+        {},
+        tracker_name="test-tracker",
+        source_layer_name="source",
+        query_frame=0,
+    )
+    return layer
+
+
+def test_manager_detects_machine_label_layer_from_annotation_kind(qtbot):
+    viewer = DummyViewer()
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    layer = make_machine_points()
+
+    assert LayerLifecycleManager.is_machine_label_layer(layer) is True
+    assert manager.points_display_role(layer) is PointsDisplaySource.MACHINE_LABELS
+
+
+def test_manager_detects_machine_label_layer_from_serialized_kind(qtbot):
+    viewer = DummyViewer()
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    layer = make_machine_points_serialized_kind()
+
+    assert LayerLifecycleManager.is_machine_label_layer(layer) is True
+    assert manager.points_display_role(layer) is PointsDisplaySource.MACHINE_LABELS
+
+
+def test_manager_does_not_treat_regular_points_as_machine_labels(qtbot):
+    viewer = DummyViewer()
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    layer = make_points("regular")
+    layer.metadata = {
+        "io": {
+            "kind": AnnotationKind.GT,
+        }
+    }
+
+    assert LayerLifecycleManager.is_machine_label_layer(layer) is False
+    assert manager.points_display_role(layer) is None
+
+
+def test_manager_tracking_display_role_takes_precedence_over_machine_kind(qtbot):
+    viewer = DummyViewer()
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    layer = make_tracking_points()
+    layer.metadata["io"] = {"kind": AnnotationKind.MACHINE}
+
+    assert LayerLifecycleManager.is_tracking_result_layer(layer) is True
+    assert LayerLifecycleManager.is_machine_label_layer(layer) is False
+    assert manager.points_display_role(layer) is PointsDisplaySource.TRACKING_RESULT
+
+
+def test_setup_points_layer_applies_display_settings(
+    qtbot,
+    fake_store,
+    monkeypatch,
+):
+    pts = make_machine_points("machine")
+    viewer = DummyViewer([pts])
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    monkeypatch.setattr(manager, "validate_header", lambda layer: True)
+
+    applied = []
+
+    def fake_apply(layer, *, source=None):
+        applied.append((layer, source))
+        return layer
+
+    monkeypatch.setattr(manager, "apply_points_display_settings", fake_apply)
+
+    result = manager._setup_points_layer(pts, allow_merge=False)
+
+    assert result is not None
+    assert manager.is_managed(pts) is True
+    assert applied == [(pts, None)]
+
+
+def test_manager_apply_points_display_settings_delegates_machine_role(
+    qtbot,
+    monkeypatch,
+):
+    from napari_deeplabcut.core.layer_lifecycle import manager as manager_module
+
+    pts = make_machine_points("machine")
+    viewer = DummyViewer([pts])
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    calls = []
+
+    def fake_apply_points_display_role(layer, role, *, source=None):
+        calls.append((layer, role, source))
+        return layer
+
+    monkeypatch.setattr(
+        manager_module,
+        "apply_points_display_role",
+        fake_apply_points_display_role,
+    )
+
+    out = manager.apply_points_display_settings(pts)
+
+    assert out is pts
+    assert calls == [(pts, PointsDisplaySource.MACHINE_LABELS, None)]
+
+
+def test_manager_apply_points_display_settings_delegates_tracking_role_with_source(
+    qtbot,
+    monkeypatch,
+):
+    from napari_deeplabcut.core.layer_lifecycle import manager as manager_module
+
+    source = make_points("source")
+    tracking = make_tracking_points("tracking")
+
+    viewer = DummyViewer([source, tracking])
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    calls = []
+
+    def fake_apply_points_display_role(layer, role, *, source=None):
+        calls.append((layer, role, source))
+        return layer
+
+    monkeypatch.setattr(
+        manager_module,
+        "apply_points_display_role",
+        fake_apply_points_display_role,
+    )
+
+    out = manager.apply_points_display_settings(tracking, source=source)
+
+    assert out is tracking
+    assert calls == [(tracking, PointsDisplaySource.TRACKING_RESULT, source)]
+
+
+def test_setup_points_layer_styles_machine_labels_using_config(
+    qtbot,
+    fake_store,
+    monkeypatch,
+):
+    pts = make_machine_points("machine", nonempty=True)
+    viewer = DummyViewer([pts])
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    monkeypatch.setattr(manager, "validate_header", lambda layer: True)
+
+    manager._setup_points_layer(pts, allow_merge=False)
+
+    if MACHINE_LABELS_POINTS_DISPLAY.symbol is not None:
+        assert MACHINE_LABELS_POINTS_DISPLAY.symbol in set(pts.symbol)
+
+    if MACHINE_LABELS_POINTS_DISPLAY.opacity is not None:
+        assert pts.opacity == MACHINE_LABELS_POINTS_DISPLAY.opacity
+
+    if MACHINE_LABELS_POINTS_DISPLAY.border_width is not None:
+        assert getattr(pts, "border_width", None) == MACHINE_LABELS_POINTS_DISPLAY.border_width
+
+    if MACHINE_LABELS_POINTS_DISPLAY.border_color is not None:
+        assert getattr(pts, "border_color", None) is not None
