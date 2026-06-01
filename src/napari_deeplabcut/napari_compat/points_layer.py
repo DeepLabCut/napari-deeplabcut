@@ -94,6 +94,9 @@ def _get_current_slice_point(controls: Any, layer: Any) -> tuple | Any | None:
     except Exception:
         pass
 
+    if hasattr(layer, "_data_slice"):
+        return layer._data_slice
+
     if hasattr(layer, "_slice_indices"):
         return layer._slice_indices
 
@@ -102,6 +105,99 @@ def _get_current_slice_point(controls: Any, layer: Any) -> tuple | Any | None:
         return slice_input.point
 
     return None
+
+
+def _select_pasted_points(
+    layer: Any,
+    *,
+    data_start: int,
+    view_start: int,
+    count: int,
+) -> None:
+    """
+    Select newly pasted points compatibly across napari versions.
+
+    In napari 0.7.0, Points._selected_view is a read-only property backed by
+    layer._slicing_state._selected_view. Older/fake layers may expose
+    _selected_view directly.
+    """
+    if count <= 0:
+        return
+
+    selected_data = set(range(data_start, data_start + count))
+    selected_view = list(range(view_start, view_start + count))
+
+    # napari 0.7.0 behavior: update the private Selection directly.
+    # This mirrors Points._paste_data().
+    try:
+        private_selected_data = getattr(layer, "_selected_data", None)
+        if private_selected_data is not None and hasattr(private_selected_data, "update"):
+            private_selected_data.update(selected_data)
+        elif hasattr(layer, "_selected_data"):
+            layer._selected_data = selected_data
+        else:
+            layer.selected_data = selected_data
+    except Exception:
+        logger.debug("Failed to update selected data after paste", exc_info=True)
+
+    # napari 0.7.0: _selected_view lives on the slicing state.
+    try:
+        slicing_state = getattr(layer, "_slicing_state", None)
+        if slicing_state is not None and hasattr(slicing_state, "_selected_view"):
+            slicing_state._selected_view = selected_view
+            return
+    except Exception:
+        logger.debug("Failed to update slicing-state selected view after paste", exc_info=True)
+
+    # Test-layer / older-private fallback.
+    try:
+        if hasattr(layer, "_selected_view"):
+            layer._selected_view = selected_view
+    except Exception:
+        logger.debug("Failed to update selected view after paste", exc_info=True)
+
+
+def _filter_text_payload(text: Any, mask: list[bool]) -> dict[str, Any] | None:
+    """
+    Filter a napari Points text clipboard payload.
+
+    napari may store text["string"] as either:
+    - a per-point array, e.g. array(["tail-2", "nose-1"], dtype=object)
+    - a scalar / 0-d array, e.g. array("", dtype="<U1")
+
+    Only per-point arrays can be indexed with the pasted-point mask.
+    """
+    if text is None:
+        return None
+
+    try:
+        text_string = text.get("string")
+    except Exception:
+        return text
+
+    filtered = dict(text)
+
+    try:
+        string_array = np.asarray(text_string)
+
+        if string_array.ndim == 0:
+            # Scalar text payload, e.g. empty string. Keep as-is.
+            filtered["string"] = text_string
+        elif len(string_array) == len(mask):
+            filtered["string"] = string_array[mask]
+        else:
+            # Unexpected length. Keep as-is rather than crashing paste.
+            logger.debug(
+                "Text clipboard string length %s does not match mask length %s; keeping text unchanged.",
+                len(string_array),
+                len(mask),
+            )
+            filtered["string"] = text_string
+    except Exception:
+        logger.debug("Failed to filter text clipboard payload", exc_info=True)
+        filtered["string"] = text_string
+
+    return filtered
 
 
 def _get_clipboard_slice_point(indices: Any) -> Any:
@@ -350,18 +446,16 @@ def make_paste_data(controls, *, store):
         filtered_clipboard["features"] = new_features
         filtered_clipboard["indices"] = indices
 
-        if text is not None:
-            filtered_clipboard["text"] = {
-                "string": text["string"][unannotated],
-                "color": text["color"],
-            }
+        filtered_text = _filter_text_payload(text, unannotated)
+        if filtered_text is not None:
+            filtered_clipboard["text"] = filtered_text
 
         layer_self._clipboard = filtered_clipboard
 
         if not filtered_clipboard:
             return
 
-        len(layer_self._view_data)
+        npoints_view = len(layer_self._view_data)
         totpoints = len(layer_self.data)
 
         data = _offset_pasted_data(
@@ -382,12 +476,15 @@ def make_paste_data(controls, *, store):
         _paste_colors(layer_self, filtered_clipboard)
 
         n_new = len(filtered_clipboard["data"])
-        layer_self.refresh()
 
-        try:
-            layer_self.selected_data = set(range(totpoints, totpoints + n_new))
-        except Exception:
-            logger.debug("Failed to update selected_data after paste", exc_info=True)
+        _select_pasted_points(
+            layer_self,
+            data_start=totpoints,
+            view_start=npoints_view,
+            count=n_new,
+        )
+
+        layer_self.refresh()
 
         try:
             controls._schedule_recolor(_store.layer)
