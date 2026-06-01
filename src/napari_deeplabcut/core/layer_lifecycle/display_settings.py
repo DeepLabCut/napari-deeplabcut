@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any
 
 from napari.layers import Points
+
 from ..layers import get_uniform_point_size
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ def apply_points_display_role(
         return layer
 
     return apply_points_display_settings(layer, settings, source=source)
+
 
 def apply_points_display_settings(
     layer: Points,
