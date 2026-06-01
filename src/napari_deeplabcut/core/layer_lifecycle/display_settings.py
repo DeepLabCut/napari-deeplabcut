@@ -7,9 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-import napari
 from napari.layers import Points
-
 from ..layers import get_uniform_point_size
 
 logger = logging.getLogger(__name__)
@@ -66,21 +64,18 @@ def apply_points_display_role(
     role: PointsDisplaySource,
     *,
     source: Points | None = None,
-    viewer: napari.Viewer | None = None,
 ) -> Points:
     settings = POINTS_DISPLAY_SETTINGS_BY_ROLE.get(role)
     if settings is None:
         return layer
 
-    return apply_points_display_settings(layer, settings, source=source, viewer=viewer)
-
+    return apply_points_display_settings(layer, settings, source=source)
 
 def apply_points_display_settings(
     layer: Points,
     settings: PointsDisplaySettings,
     *,
     source: Points | None = None,
-    viewer: napari.Viewer | None = None,
 ) -> Points:
     """Apply display settings to a Points layer.
 
@@ -114,7 +109,6 @@ def apply_tracking_result_display_settings(
     layer: Points,
     *,
     source: Points | None = None,
-    viewer: napari.Viewer | None = None,
 ) -> Points:
     """Apply the standard visual style for tracking-result Points layers."""
 
@@ -122,7 +116,6 @@ def apply_tracking_result_display_settings(
         layer,
         TRACKING_RESULT_POINTS_DISPLAY,
         source=source,
-        viewer=viewer,
     )
 
 
