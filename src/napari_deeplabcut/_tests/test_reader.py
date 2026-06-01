@@ -319,13 +319,38 @@ def test_video_init_and_properties(video_path):
 def test_video_read_single_frame(video_path):
     """Check that we can read at least one frame correctly."""
     vid = Video(video_path)
-    vid.set_to_frame(0)
-    frame = vid.read_frame()
+    frame = vid.read_frame(0)
 
     assert isinstance(frame, np.ndarray)
     assert frame.shape == (50, 50, 3)
     assert frame.dtype == np.uint8
 
+    vid.close()
+
+
+def test_video_read_frame_out_of_bounds(video_path):
+    vid = Video(video_path)
+    with pytest.raises(IndexError):
+        vid.read_frame(5)
+    with pytest.raises(IndexError):
+        vid.read_frame(-1)
+    vid.close()
+
+
+def test_video_read_sequential_frames(video_path):
+    vid = Video(video_path)
+    f0 = vid.read_frame(0)
+    f1 = vid.read_frame(1)
+    assert f0.shape == f1.shape == (50, 50, 3)
+    vid.close()
+
+
+def test_video_read_frames_block(video_path):
+    vid = Video(video_path)
+    block = vid.read_frames(1, 4)  # frames 1, 2, 3
+    assert block.shape == (3, 50, 50, 3)
+    assert block.dtype == np.uint8
+    assert block[0].shape == (50, 50, 3)
     vid.close()
 
 

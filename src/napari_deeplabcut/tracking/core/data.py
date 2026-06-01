@@ -110,7 +110,7 @@ def expand_query_features_over_time(
     frame_ids
         Actual frame indices corresponding to the model output time axis.
     visibility
-        Optional visibility array of shape (T, K) or (T, K, 1).
+        Optional visibility array of shape, ideally (T, K) or (T, K, 1).
     tracker_name
         Human-readable tracker name, e.g. "Cotracker 3".
     """
@@ -127,12 +127,29 @@ def expand_query_features_over_time(
 
     if visibility is not None:
         vis = np.asarray(visibility)
-        if vis.ndim == 3 and vis.shape[-1] == 1:
-            vis = vis[..., 0]
-        elif vis.ndim == 3 and vis.shape[0] == 1:
-            vis = vis.squeeze(0)
-
         expected = (T, K)
+
+        if vis.shape == expected:
+            pass
+        elif vis.shape == (T, K, 1):
+            vis = vis[..., 0]
+        elif vis.shape == (1, T, K):
+            vis = vis[0]
+        elif vis.shape == (1, T, K, 1):
+            vis = vis[0, ..., 0]
+        elif vis.shape == (K, T):
+            if K == T:
+                raise ValueError("Ambiguous visibility shape (K, T) with K == T. Please check model output shapes.")
+            else:
+                # Transposed time/query layout.
+                vis = vis.T
+        elif vis.shape == (T,) and K == 1:
+            # Single-query vector over time.
+            vis = vis[:, None]
+        elif vis.shape == (K,) and T == 1:
+            # Single-frame vector over queries.
+            vis = vis[None, :]
+
         if vis.shape != expected:
             raise ValueError(f"Visibility shape mismatch. Expected {expected}, got {vis.shape}.")
 

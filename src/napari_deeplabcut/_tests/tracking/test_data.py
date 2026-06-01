@@ -243,6 +243,98 @@ def test_expand_query_features_over_time_raises_for_visibility_shape_mismatch():
         )
 
 
+def test_expand_query_features_over_time_accepts_single_query_visibility_shape_k_t_regression():
+    seed = pd.DataFrame(
+        {
+            "label": ["nose"],
+            "id": ["animal-a"],
+        }
+    )
+    frame_ids = np.array([10, 11, 12], dtype=int)
+
+    # Regression case:
+    # T=3, K=1
+    # Expected canonical shape is (T, K) == (3, 1),
+    # but some model outputs can arrive as (K, T) == (1, 3).
+    visibility = np.array(
+        [[True, False, True]],
+        dtype=bool,
+    )  # shape (1, T)
+
+    out = expand_query_features_over_time(
+        seed,
+        frame_ids=frame_ids,
+        visibility=visibility,
+        tracker_name="Cotracker 3",
+    )
+
+    assert len(out) == 3
+    assert out["tracking_frame"].tolist() == [10, 11, 12]
+    assert out["tracking_visible"].tolist() == [True, False, True]
+
+
+def test_expand_query_features_over_time_accepts_visibility_shape_k_t_transposed():
+    seed = pd.DataFrame(
+        {
+            "label": ["nose", "tail"],
+            "id": ["animal-a", "animal-a"],
+        }
+    )
+    frame_ids = np.array([0, 1, 2], dtype=int)
+
+    # Shape is (K, T) == (2, 3), not canonical (T, K) == (3, 2).
+    visibility = np.array(
+        [
+            [True, False, True],  # nose over time
+            [False, True, False],  # tail over time
+        ],
+        dtype=bool,
+    )
+
+    out = expand_query_features_over_time(
+        seed,
+        frame_ids=frame_ids,
+        visibility=visibility,
+        tracker_name="Cotracker 3",
+    )
+
+    # Output is frame-major:
+    # frame 0: nose, tail
+    # frame 1: nose, tail
+    # frame 2: nose, tail
+    assert out["tracking_visible"].tolist() == [
+        True,
+        False,
+        False,
+        True,
+        True,
+        False,
+    ]
+
+
+def test_expand_query_features_over_time_accepts_single_frame_single_query_visibility_vector():
+    seed = pd.DataFrame(
+        {
+            "label": ["nose"],
+            "id": ["animal-a"],
+        }
+    )
+    frame_ids = np.array([42], dtype=int)
+
+    visibility = np.array([True], dtype=bool)  # shape (1,)
+
+    out = expand_query_features_over_time(
+        seed,
+        frame_ids=frame_ids,
+        visibility=visibility,
+        tracker_name="Cotracker 3",
+    )
+
+    assert len(out) == 1
+    assert out["tracking_frame"].tolist() == [42]
+    assert out["tracking_visible"].tolist() == [True]
+
+
 # -----------------------------------------------------------------------------#
 # build_tracking_result_metadata
 # -----------------------------------------------------------------------------#
