@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -10,8 +9,6 @@ import pandas as pd
 
 TRACKING_LAYER_METADATA_KEY = "ndlc_tracking"
 TRACKING_SCHEMA_VERSION = 1
-
-logger = logging.getLogger(__name__)
 
 
 # ----- Data schemas -----
@@ -113,7 +110,7 @@ def expand_query_features_over_time(
     frame_ids
         Actual frame indices corresponding to the model output time axis.
     visibility
-        Optional visibility array of shape (T, K) or (T, K, 1).
+        Optional visibility array of shape, ideally (T, K) or (T, K, 1).
     tracker_name
         Human-readable tracker name, e.g. "Cotracker 3".
     """

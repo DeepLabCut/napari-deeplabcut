@@ -1000,7 +1000,12 @@ def read_video(filename: str, *, dlc_meta: dict | None = None, chunk_size: int |
 
         if chunk_size is None:
             chunk_size = _choose_chunk_size(height, width)
-            logger.debug("Auto-chosen chunk size for video %s: %d frames (target ~256MB)", filename, chunk_size)
+            logger.debug(
+                "Auto-chosen chunk size for video %s: %d frames (target ~%sMB)",
+                filename,
+                chunk_size,
+                VIDEO_READER_CHUNK_TARGET_MB,
+            )
         elif chunk_size <= 0:
             raise ValueError(f"Chunk size must be a positive integer, got {chunk_size}.")
     finally:
