@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 def write_hdf_napari_dlc(path: str, data, attributes: dict) -> list[str]:
     if not path:
         path = "__dlc__.h5"  # dummy path to trigger napari-deeplabcut-specific handling in write_hdf
+
     if path != "__dlc__.h5":
         logger.info(
             "This function should not be used with a user-specified path."
@@ -23,7 +24,18 @@ def write_hdf_napari_dlc(path: str, data, attributes: dict) -> list[str]:
             "are refined by a human (as we do not want to overwrite machine labels),"
             "but that case is handled separately."
         )
-    return write_hdf(path, data, attributes)
+
+    logger.debug("write_hdf_napari_dlc ENTER path=%r", path)
+
+    written = write_hdf(path, data, attributes)
+
+    logger.debug("write_hdf_napari_dlc RETURN written=%r", written)
+    logger.debug(
+        "write_hdf_napari_dlc EXISTS=%r",
+        [(p, Path(p).exists()) for p in written],
+    )
+
+    return written
 
 
 # TODO rewrite explicitly as napari-facing func

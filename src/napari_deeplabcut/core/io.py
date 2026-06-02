@@ -593,11 +593,21 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
         )
 
     # Write .h5 and .csv
-    _atomic_to_hdf(df_out, out, key=DLC_CANONICAL_H5_KEY)
-    csv_path = out.with_suffix(".csv")
-    df_out.to_csv(csv_path)
+    try:
+        logger.debug("Writing HDF to %s", out)
+        _atomic_to_hdf(df_out, out, key=DLC_CANONICAL_H5_KEY)
 
-    return [str(out), str(csv_path)]
+        csv_path = out.with_suffix(".csv")
+        logger.debug("Writing CSV to %s", csv_path)
+        df_out.to_csv(csv_path)
+
+        written = [str(out), str(csv_path)]
+        logger.debug("write_hdf returning %r exists=%r", written, [(p, Path(p).exists()) for p in written])
+        return written
+
+    except Exception:
+        logger.exception("write_hdf failed during final disk write")
+        raise
 
 
 # =============================================================================
