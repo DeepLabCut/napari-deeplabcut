@@ -420,11 +420,19 @@ def _resolve_multianimalproject_for_write(
 def _atomic_to_hdf(df: pd.DataFrame, out_path: Path, key: str = DLC_CANONICAL_H5_KEY) -> None:
     """Best-effort atomic write: write to temp and replace."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
-    # Write temp
-    df.to_hdf(tmp, key=key, mode="w")
-    # Replace
-    tmp.replace(out_path)
+
+    tmp = out_path.parent / f".{out_path.stem}.tmp{out_path.suffix}"
+
+    try:
+        df.to_hdf(tmp, key=key, mode="w")
+        tmp.replace(out_path)
+    except Exception:
+        logger.exception("Failed atomic HDF write tmp=%s out=%s", tmp, out_path)
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            logger.debug("Failed to remove temporary HDF file %s", tmp, exc_info=True)
+        raise
 
 
 def write_hdf(path: str, data, attributes: dict) -> list[str]:
