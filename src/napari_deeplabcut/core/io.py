@@ -600,6 +600,16 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             list(dict.fromkeys(df_out.columns.get_level_values("individuals").astype(str))),
         )
 
+    cols = df_out.columns
+    logger.debug("FINAL WRITE columns count=%d unique_count=%d", len(cols), len(cols.unique()))
+
+    if cols.has_duplicates:
+        dup = cols[cols.duplicated(keep=False)]
+        logger.error(
+            "FINAL WRITE duplicate columns sample=%s",
+            list(dict.fromkeys(map(str, dup)))[:50],
+        )
+
     # Write .h5 and .csv
     try:
         logger.debug("Writing HDF to %s", out)
