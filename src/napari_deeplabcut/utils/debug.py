@@ -254,6 +254,7 @@ def collect_environment_summary() -> dict[str, str]:
         "platform": platform.platform(),
         "napari-deeplabcut": _version("napari-deeplabcut"),
         "napari": _version("napari"),
+        "npe2": _version("npe2"),
         "qtpy": _version("QtPy"),
         "PySide6": _version("PySide6"),
         "PyQt6": _version("PyQt6"),
