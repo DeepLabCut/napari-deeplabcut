@@ -54,6 +54,7 @@ from napari_deeplabcut.config.supported_files import SUPPORTED_IMAGES, SUPPORTED
 from napari_deeplabcut.core import schemas as dlc_schemas
 from napari_deeplabcut.core.dataframes import (
     complete_df_for_save,
+    drop_likelihood_columns,
     form_df_from_validated,
     guarantee_multiindex_rows,
     merge_multiple_scorers,
@@ -340,22 +341,6 @@ def form_df(
     return df
 
 
-def _drop_likelihood_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Remove DLC likelihood columns from a dataframe if present."""
-    # DLC-style wide dataframe: MultiIndex columns with a coords level
-    if isinstance(df.columns, pd.MultiIndex):
-        col_names = list(df.columns.names)
-        if "coords" in col_names:
-            mask = df.columns.get_level_values("coords").astype(str) != "likelihood"
-            return df.loc[:, mask]
-
-    # Fallback for already-stacked / flat dataframes
-    if "likelihood" in df.columns:
-        return df.drop(columns="likelihood")
-
-    return df
-
-
 def _drop_likelihood_from_header(header: DLCHeaderModel) -> DLCHeaderModel:
     """
     Return, "names": names})    Return a header model with likelihood removed from the coords level,
@@ -465,7 +450,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     logger.debug("WRITE header bodyparts=%s", ctx.meta.header.bodyparts)
     logger.debug("WRITE props labels unique=%s", list(dict.fromkeys(map(str, attrs.properties.get("label", []))))[:30])
     df_new = form_df_from_validated(ctx)
-    df_new = _drop_likelihood_columns(df_new)
+    df_new = drop_likelihood_columns(df_new)
 
     logger.debug("DF_NEW columns nlevels: %s", df_new.columns.nlevels)
     logger.debug("DF_NEW columns names: %s", df_new.columns.names)
@@ -542,7 +527,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
 
     # Merge-on-save for GT
     if destination_kind == AnnotationKind.GT and out.exists():
-        df_old = _drop_likelihood_columns(_read_hdf_any_key(out))
+        df_old = drop_likelihood_columns(_read_hdf_any_key(out))
 
         # Harmonize indices and merge
         try:
@@ -573,7 +558,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
         pts_meta=pts_meta,
     )
     df_out = restore_dlc_on_disk_header_shape(df_out, header_for_write, is_ma_project=is_ma_project)
-    df_out = _drop_likelihood_columns(df_out)
+    df_out = drop_likelihood_columns(df_out)
 
     logger.debug("FINAL WRITE first columns=%s", list(df_out.columns[:10]))
     logger.debug(

@@ -13,6 +13,22 @@ from napari_deeplabcut.core.schemas import DLCHeaderModel, PointsWriteInputModel
 logger = logging.getLogger(__name__)
 
 
+def drop_likelihood_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove DLC likelihood columns from a dataframe if present."""
+    # DLC-style wide dataframe: MultiIndex columns with a coords level
+    if isinstance(df.columns, pd.MultiIndex):
+        col_names = list(df.columns.names)
+        if "coords" in col_names:
+            mask = df.columns.get_level_values("coords").astype(str) != "likelihood"
+            return df.loc[:, mask]
+
+    # Fallback for already-stacked / flat dataframes
+    if "likelihood" in df.columns:
+        return df.drop(columns="likelihood")
+
+    return df
+
+
 def restore_dlc_on_disk_header_shape(
     df: pd.DataFrame, header: DLCHeaderModel, *, is_ma_project: bool | None = None
 ) -> pd.DataFrame:
@@ -484,6 +500,7 @@ def complete_df_for_save(
 
     guarantee_multiindex_rows(df_copy)
     df_copy = harmonize_keypoint_column_index(df_copy)
+    df_copy = drop_likelihood_columns(df_copy)
 
     target_cols = canonical_keypoint_columns_from_header(header)
 
@@ -530,6 +547,74 @@ def merge_save_df(
     return df_out
 
 
+def _keypoint_group_levels(columns: pd.Index | pd.MultiIndex) -> list[str] | None:
+    """
+    For internal DLC comparisons, columns are expected to be normalized to:
+        scorer / individuals / bodyparts / coords
+    Conflict reporting ignores scorer and coords, grouping by:
+        individuals / bodyparts
+    or just:
+        bodyparts
+    for single-animal data.
+    """
+    if not isinstance(columns, pd.MultiIndex):
+        return None
+
+    col_names = list(columns.names or [])
+    has_inds = "individuals" in col_names
+    has_body = "bodyparts" in col_names
+    has_coords = "coords" in col_names
+
+    if not (has_body and has_coords):
+        return None
+
+    key_levels: list[str] = []
+    if has_inds:
+        key_levels.append("individuals")
+    key_levels.append("bodyparts")
+
+    return key_levels
+
+
+def keypoint_deletions(df_old: pd.DataFrame, df_new: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return a keypoint-level boolean table for destructive deletions.
+
+    True means:
+
+        old keypoint has at least one stored value,
+        new save-scope keypoint has no stored value.
+
+    Important
+    ---------
+    df_new should already be expanded with complete_df_for_save().
+
+    That means absent napari Points inside the editable save scope are represented
+    as explicit NaN. Rows outside df_new's scope are ignored, so labels from
+    other frames/images are not incorrectly reported as deletions.
+    """
+    scoped_new = harmonize_keypoint_column_index(df_new.copy())
+    guarantee_multiindex_rows(scoped_new)
+
+    old_scoped, new_scoped = align_old_new(df_old, scoped_new)
+
+    # Restrict deletion detection to exactly the new save scope.
+    # This avoids falsely treating old rows outside the loaded/current scope
+    # as deleted.
+    old_scoped = old_scoped.loc[scoped_new.index, scoped_new.columns]
+    new_scoped = new_scoped.loc[scoped_new.index, scoped_new.columns]
+
+    key_levels = _keypoint_group_levels(old_scoped.columns)
+
+    if key_levels is None:
+        return (old_scoped.notna().any(axis=1) & ~new_scoped.notna().any(axis=1)).to_frame(name="deleted")
+
+    old_key_has = old_scoped.notna().T.groupby(level=key_levels).any().T
+    new_key_has = new_scoped.notna().T.groupby(level=key_levels).any().T
+
+    return old_key_has & ~new_key_has
+
+
 def keypoint_conflicts(
     df_old: pd.DataFrame,
     df_new: pd.DataFrame,
@@ -547,12 +632,12 @@ def keypoint_conflicts(
 
     If include_deletions=True, this also reports keypoint deletions:
 
-        old keypoint has any coord value,
-        new keypoint has no coord values
+        old keypoint has any stored value,
+        new keypoint has no stored value
 
     Deletion detection only applies within df_new's own save scope.
     Callers should pass a df_new that has already been expanded with
-    complete_keypoint_dataframe_for_save_scope().
+    complete_df_for_save().
     """
     old, new = align_old_new(df_old, df_new)
 
@@ -563,46 +648,19 @@ def keypoint_conflicts(
     # old and new both have values, but they differ.
     cell_conflict = (old != new) & old_has & new_has
 
-    col_names = list(old.columns.names)
-    has_inds = "individuals" in col_names
-    has_body = "bodyparts" in col_names
-    has_coords = "coords" in col_names
+    key_levels = _keypoint_group_levels(old.columns)
 
-    if not (has_body and has_coords):
-        return cell_conflict.any(axis=1).to_frame(name="conflict")
-
-    key_levels = []
-    if has_inds:
-        key_levels.append("individuals")
-    key_levels.append("bodyparts")
-
-    overwrite_conflict = cell_conflict.T.groupby(level=key_levels).any().T
+    if key_levels is None:
+        overwrite_conflict = cell_conflict.any(axis=1).to_frame(name="conflict")
+    else:
+        overwrite_conflict = cell_conflict.T.groupby(level=key_levels).any().T
 
     if not include_deletions:
         return overwrite_conflict
 
-    # Deletion conflict:
-    # per keypoint, old has at least one coord value and new has no coord values.
-    #
-    # Important: because align_old_new() aligns to the union of rows/columns,
-    # we must restrict deletion checks to df_new's original save scope.
-    # Otherwise rows outside the current layer scope would appear as missing
-    # in new and be incorrectly reported as deletions.
-    scoped_new = harmonize_keypoint_column_index(df_new.copy())
-    guarantee_multiindex_rows(scoped_new)
+    deletion_conflict = keypoint_deletions(df_old, df_new)
 
-    old_scoped, new_scoped = align_old_new(df_old, scoped_new)
-
-    # Restrict back to exactly the rows/columns represented by scoped_new.
-    old_scoped = old_scoped.loc[scoped_new.index, scoped_new.columns]
-    new_scoped = new_scoped.loc[scoped_new.index, scoped_new.columns]
-
-    old_key_has = old_scoped.notna().T.groupby(level=key_levels).any().T
-    new_key_has = new_scoped.notna().T.groupby(level=key_levels).any().T
-
-    deletion_conflict = old_key_has & ~new_key_has
-
-    # Align both key-level conflict tables and combine.
+    # Align both key-level tables and combine for legacy/simple callers.
     idx = overwrite_conflict.index.union(deletion_conflict.index)
     cols = overwrite_conflict.columns.union(deletion_conflict.columns)
 
@@ -637,45 +695,74 @@ def _format_keypoint_id(kp) -> str:
 def build_overwrite_conflict_report(
     key_conflict: pd.DataFrame,
     *,
+    deletion_conflict: pd.DataFrame | None = None,
     max_entries: int = 50,
     layer_name: str | None = None,
     destination_path: str | None = None,
 ) -> OverwriteConflictReport:
     """
-    Convert a pandas key-conflict table into a UI-facing overwrite report.
+    Convert pandas key-conflict tables into a UI-facing overwrite report.
 
     Parameters
     ----------
     key_conflict:
-        Boolean-like DataFrame indexed by frame/image identifier, with columns
-        representing keypoints. Truthy cells indicate a keypoint overwrite conflict.
+        Boolean DataFrame indexed by frame/image identifier, with columns
+        representing keypoints.
+        Truthy cells indicate an existing keypoint value
+        will be overwritten by another finite value.
+
+    deletion_conflict:
+        Optional boolean DataFrame with the same shape convention.
+        Truthy cells indicate an existing keypoint value will be cleared/deleted,
+        i.e. written as missing values.
 
     Returns
     -------
     OverwriteConflictReport
-        Plain-Python UI contract describing overwrite counts and detailed entries.
-
-    Notes
-    -----
-    This function is the pandas boundary for overwrite reporting. The UI should
-    depend only on OverwriteConflictReport, not on DataFrame structure.
     """
+    if deletion_conflict is None:
+        deletion_conflict = pd.DataFrame(
+            False,
+            index=key_conflict.index,
+            columns=key_conflict.columns,
+        )
+
+    idx = key_conflict.index.union(deletion_conflict.index)
+    cols = key_conflict.columns.union(deletion_conflict.columns)
+
+    key_conflict = key_conflict.reindex(index=idx, columns=cols, fill_value=False)
+    deletion_conflict = deletion_conflict.reindex(index=idx, columns=cols, fill_value=False)
+
+    # Prefer showing a keypoint as deleted if both flags somehow appear.
+    # This avoids duplicated UI entries like "Modified" and "Deleted" for the same keypoint.
+    key_conflict = key_conflict & ~deletion_conflict
+
     n_overwrites = int(key_conflict.to_numpy().sum())
-    n_frames = int(key_conflict.any(axis=1).to_numpy().sum())
+    n_deletions = int(deletion_conflict.to_numpy().sum())
+
+    affected = key_conflict | deletion_conflict
+    n_frames = int(affected.any(axis=1).to_numpy().sum())
 
     entries: list[ConflictEntry] = []
 
-    for img, row in key_conflict.iterrows():
-        conflicted: list[str] = []
-        for kp, flag in row.items():
-            if bool(flag):
-                conflicted.append(_format_keypoint_id(kp))
+    for img in idx:
+        modified: list[str] = []
+        deleted: list[str] = []
 
-        if conflicted:
+        for kp, flag in key_conflict.loc[img].items():
+            if bool(flag):
+                modified.append(_format_keypoint_id(kp))
+
+        for kp, flag in deletion_conflict.loc[img].items():
+            if bool(flag):
+                deleted.append(_format_keypoint_id(kp))
+
+        if modified or deleted:
             entries.append(
                 ConflictEntry(
                     frame_label=_format_image_id(img),
-                    keypoints=tuple(conflicted),
+                    keypoints=tuple(modified),
+                    deleted_keypoints=tuple(deleted),
                 )
             )
 
@@ -684,6 +771,7 @@ def build_overwrite_conflict_report(
 
     return OverwriteConflictReport(
         n_overwrites=n_overwrites,
+        n_deletions=n_deletions,
         n_frames=n_frames,
         entries=shown,
         truncated_entries=truncated,

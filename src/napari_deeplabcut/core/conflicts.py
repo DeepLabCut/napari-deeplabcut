@@ -12,6 +12,7 @@ from napari_deeplabcut.core.dataframes import (
     complete_df_for_save,
     form_df_from_validated,
     keypoint_conflicts,
+    keypoint_deletions,
     set_df_scorer,
 )
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
@@ -154,10 +155,12 @@ def compute_overwrite_report_for_points_save(
     except (KeyError, ValueError):
         df_old = pd.read_hdf(out)
 
-    key_conflict = keypoint_conflicts(df_old, df_new, include_deletions=True)
+    key_conflict = keypoint_conflicts(df_old, df_new)
+    deletion_conflict = keypoint_deletions(df_old, df_new)
 
     report = build_overwrite_conflict_report(
         key_conflict,
+        deletion_conflict=deletion_conflict,
         layer_name=attributes.get("name"),
         destination_path=str(out),
     )
