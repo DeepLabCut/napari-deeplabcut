@@ -7,7 +7,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from napari_deeplabcut.config.models import ConflictEntry, OverwriteConflictReport
+from napari_deeplabcut.config.models import ConflictEntry, OverwriteConflictReport, PointsMetadata
 from napari_deeplabcut.core.schemas import DLCHeaderModel, PointsWriteInputModel
 
 logger = logging.getLogger(__name__)
@@ -401,54 +401,215 @@ def align_old_new(df_old: pd.DataFrame, df_new: pd.DataFrame) -> tuple[pd.DataFr
     )
 
 
-def keypoint_conflicts(df_old: pd.DataFrame, df_new: pd.DataFrame) -> pd.DataFrame:
+def canonical_keypoint_columns_from_header(header: DLCHeaderModel) -> pd.MultiIndex:
     """
-    Return a boolean DataFrame indexed by image, with columns as keypoints,
-    True when any coord (x/y[/likelihood]) would overwrite an existing value.
+    Return the canonical internal keypoint column index for save/merge/conflict logic.
 
-    Columns in output are MultiIndex levels subset: (individuals?, bodyparts)
-    or just (bodyparts) for single animal.
+    Internally we normalize DLC columns to 4 levels:
+        scorer / individuals / bodyparts / coords
+    even for single-animal projects, where individuals is represented as "".
+    Final on-disk shape is restored later by restore_dlc_on_disk_header_shape().
+    """
+    cols = header.as_multiindex()
+
+    if not isinstance(cols, pd.MultiIndex):
+        raise TypeError("DLC header columns must be a pandas MultiIndex.")
+
+    # Single-animal DLC header: scorer / bodyparts / coords
+    if cols.nlevels == 3:
+        frame = cols.to_frame(index=False)
+
+        # Be defensive about unnamed levels. We assume DLC order:
+        # scorer, bodyparts, coords.
+        frame.columns = ["scorer", "bodyparts", "coords"]
+        frame.insert(1, "individuals", "")
+
+        return pd.MultiIndex.from_frame(
+            frame,
+            names=["scorer", "individuals", "bodyparts", "coords"],
+        )
+
+    # Multi-animal DLC header: scorer / individuals / bodyparts / coords
+    if cols.nlevels == 4:
+        return cols.set_names(["scorer", "individuals", "bodyparts", "coords"])
+
+    raise ValueError(f"Unsupported DLC header column depth. Expected 3 or 4 levels, got {cols.nlevels}.")
+
+
+def save_index_from_points_metadata(pts_meta: PointsMetadata) -> pd.Index | pd.MultiIndex | None:
+    """
+    Build the editable row index from PointsMetadata for saving.
+
+    If pts_meta.paths is present, those paths define the set of frames/images
+    currently represented by the layer. Missing keypoints within this row scope
+    should be saved as NaN, which is how deleted napari points clear old labels.
+
+    Returns None if no explicit path scope is available.
+    """
+    paths = list(pts_meta.paths or [])
+    if not paths:
+        return None
+
+    idx = pd.Index(paths)
+    dummy = pd.DataFrame(index=idx)
+    guarantee_multiindex_rows(dummy)
+    return dummy.index
+
+
+def complete_df_for_save(
+    df: pd.DataFrame,
+    *,
+    pts_meta: PointsMetadata,
+    header: DLCHeaderModel,
+) -> pd.DataFrame:
+    """
+    Napari Points.data contains only present/finite keypoints. If a user deletes
+    a point, that point disappears from Points.data and layer.properties. For
+    save semantics, absence inside the current editable scope must become NaN,
+    otherwise merge-on-save will preserve the old on-disk value.
+
+    This reindexes the dataframe to:
+
+    - all editable rows from pts_meta.paths, when available
+    - all expected keypoint columns from the DLC header
+
+    Goal:
+
+    - present keypoint -> finite x/y
+    - deleted/missing keypoint inside save scope -> NaN
+    - rows outside save scope are not included and can be preserved separately
+      during merge.
+    """
+    df_copy = df.copy()
+
+    guarantee_multiindex_rows(df_copy)
+    df_copy = harmonize_keypoint_column_index(df_copy)
+
+    target_cols = canonical_keypoint_columns_from_header(header)
+
+    # Always drop likelihood
+    coords = target_cols.get_level_values("coords").astype(str)
+    target_cols = target_cols[coords != "likelihood"]
+
+    target_index = save_index_from_points_metadata(pts_meta)
+
+    # If we have explicit paths, they define the editable frame/image scope.
+    # Otherwise, preserve the current dataframe rows and only complete columns.
+    if target_index is not None:
+        df_copy = df_copy.reindex(index=target_index, columns=target_cols)
+    else:
+        df_copy = df_copy.reindex(columns=target_cols)
+
+    return df_copy
+
+
+def merge_save_df(
+    df_old: pd.DataFrame,
+    df_new: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Merge an existing DLC dataframe with a new save dataframe.
+
+    Semantics:
+    - rows/columns outside df_new scope are preserved from df_old
+    - rows/columns inside df_new scope replace df_old, including NaN
+    - NaN in df_new therefore clears/deletes an old saved keypoint
+    """
+    df_new2, df_old2 = harmonize_keypoint_row_index(df_new, df_old)
+    df_new2 = harmonize_keypoint_column_index(df_new2)
+    df_old2 = harmonize_keypoint_column_index(df_old2)
+
+    idx = df_old2.index.union(df_new2.index)
+    cols = df_old2.columns.union(df_new2.columns)
+
+    df_out = df_old2.reindex(index=idx, columns=cols)
+
+    # Critical: assign df_new values directly, including NaN.
+    df_out.loc[df_new2.index, df_new2.columns] = df_new2
+
+    return df_out
+
+
+def keypoint_conflicts(
+    df_old: pd.DataFrame,
+    df_new: pd.DataFrame,
+    *,
+    include_deletions: bool = False,
+) -> pd.DataFrame:
+    """
+    Return a boolean DataFrame indexed by image, with columns as keypoints.
+
+    True means saving df_new would destructively affect an existing value in df_old.
+
+    By default this reports overwrites only:
+
+        old finite, new finite, values differ
+
+    If include_deletions=True, this also reports keypoint deletions:
+
+        old keypoint has any coord value,
+        new keypoint has no coord values
+
+    Deletion detection only applies within df_new's own save scope.
+    Callers should pass a df_new that has already been expanded with
+    complete_keypoint_dataframe_for_save_scope().
     """
     old, new = align_old_new(df_old, df_new)
 
     old_has = old.notna()
     new_has = new.notna()
 
-    # cell-level conflicts: both have values and differ
+    # Cell-level overwrite conflicts:
+    # old and new both have values, but they differ.
     cell_conflict = (old != new) & old_has & new_has
 
-    # Identify which levels exist
     col_names = list(old.columns.names)
     has_inds = "individuals" in col_names
     has_body = "bodyparts" in col_names
     has_coords = "coords" in col_names
 
     if not (has_body and has_coords):
-        # Unexpected format; fall back to cell-level summary
         return cell_conflict.any(axis=1).to_frame(name="conflict")
 
-    # Drop scorer level if present (not meaningful for end-user warning)
-    # We want to aggregate per (individual, bodypart) across coords.
-    # Build the grouping levels that define a "keypoint".
     key_levels = []
     if has_inds:
         key_levels.append("individuals")
     key_levels.append("bodyparts")
 
-    # Reduce across coords first -> any conflict for that coord-set
-    # This yields a DataFrame with columns still multi-level including scorer and coords.
-    # We then group by key_levels.
-    # Ensure we can group by dropping coords by grouping over it using "any".
-    # We'll group over all columns that share the same (individual/bodypart), ignoring coords.
-    # To do that cleanly: swap coords to last, then groupby on key_levels.
-    conflict_cols = cell_conflict.copy()
+    overwrite_conflict = cell_conflict.T.groupby(level=key_levels).any().T
 
-    # Group columns by key_levels and reduce with any() across remaining levels (coords + scorer)
-    # pandas no longer allows groupby on axis=1 by level names
-    # we use .T to swap axes, groupby on rows, then .T back to original orientation instead
-    key_conflict = conflict_cols.T.groupby(level=key_levels).any().T
+    if not include_deletions:
+        return overwrite_conflict
 
-    return key_conflict
+    # Deletion conflict:
+    # per keypoint, old has at least one coord value and new has no coord values.
+    #
+    # Important: because align_old_new() aligns to the union of rows/columns,
+    # we must restrict deletion checks to df_new's original save scope.
+    # Otherwise rows outside the current layer scope would appear as missing
+    # in new and be incorrectly reported as deletions.
+    scoped_new = harmonize_keypoint_column_index(df_new.copy())
+    guarantee_multiindex_rows(scoped_new)
+
+    old_scoped, new_scoped = align_old_new(df_old, scoped_new)
+
+    # Restrict back to exactly the rows/columns represented by scoped_new.
+    old_scoped = old_scoped.loc[scoped_new.index, scoped_new.columns]
+    new_scoped = new_scoped.loc[scoped_new.index, scoped_new.columns]
+
+    old_key_has = old_scoped.notna().T.groupby(level=key_levels).any().T
+    new_key_has = new_scoped.notna().T.groupby(level=key_levels).any().T
+
+    deletion_conflict = old_key_has & ~new_key_has
+
+    # Align both key-level conflict tables and combine.
+    idx = overwrite_conflict.index.union(deletion_conflict.index)
+    cols = overwrite_conflict.columns.union(deletion_conflict.columns)
+
+    overwrite_conflict = overwrite_conflict.reindex(index=idx, columns=cols, fill_value=False)
+    deletion_conflict = deletion_conflict.reindex(index=idx, columns=cols, fill_value=False)
+
+    return overwrite_conflict | deletion_conflict
 
 
 def _format_image_id(img_id) -> str:

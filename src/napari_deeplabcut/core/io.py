@@ -53,11 +53,11 @@ from napari_deeplabcut.config.settings import (
 from napari_deeplabcut.config.supported_files import SUPPORTED_IMAGES, SUPPORTED_VIDEOS
 from napari_deeplabcut.core import schemas as dlc_schemas
 from napari_deeplabcut.core.dataframes import (
+    complete_df_for_save,
     form_df_from_validated,
     guarantee_multiindex_rows,
-    harmonize_keypoint_column_index,
-    harmonize_keypoint_row_index,
     merge_multiple_scorers,
+    merge_save_df,
     restore_dlc_on_disk_header_shape,
     set_df_scorer,
 )
@@ -486,6 +486,8 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     header_for_write = pts_meta.header.with_scorer(target_scorer) if target_scorer else pts_meta.header
     header_for_write = _drop_likelihood_from_header(header_for_write)
 
+    df_new = complete_df_for_save(df_new, pts_meta=pts_meta, header=header_for_write)
+
     # Never write back to machine sources without an explicit promotion target
     if not out_path and source_kind == AnnotationKind.MACHINE:
         raise MissingProvenanceError("Cannot resolve provenance output path for MACHINE source.")
@@ -554,10 +556,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             )
             pass
 
-        df_new, df_old = harmonize_keypoint_row_index(df_new, df_old)
-        df_new = harmonize_keypoint_column_index(df_new)
-        df_old = harmonize_keypoint_column_index(df_old)
-        df_out = df_new.combine_first(df_old)
+        df_out = merge_save_df(df_old, df_new)
     else:
         df_out = df_new
 
