@@ -71,7 +71,7 @@ from napari_deeplabcut.core.project_paths import (
     infer_dlc_project_from_points_meta,
 )
 from napari_deeplabcut.core.provenance import resolve_output_path_from_metadata
-from napari_deeplabcut.core.schemas.identity import (
+from napari_deeplabcut.core.schemas.layer_identity import (
     save_behavior_disallows_deletions,
     tag_config_placeholder_metadata,
 )

@@ -25,7 +25,7 @@ from napari_deeplabcut.core.project_paths import (
     looks_like_dlc_labeled_folder,
     session_key_from_project_context,
 )
-from napari_deeplabcut.core.schemas.identity import (
+from napari_deeplabcut.core.schemas.layer_identity import (
     FrameLayerType,
     tag_frames_metadata,
 )

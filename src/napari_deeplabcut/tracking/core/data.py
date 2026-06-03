@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from napari_deeplabcut.core.schemas.identity import (
+from napari_deeplabcut.core.schemas.layer_identity import (
     LayerRole,
     get_layer_role_from_metadata,
     tag_tracking_result_metadata,

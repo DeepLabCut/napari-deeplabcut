@@ -22,7 +22,7 @@ from napari_deeplabcut.core.project_paths import infer_dlc_project_from_points_m
 from napari_deeplabcut.core.provenance import (
     resolve_output_path_from_metadata,
 )
-from napari_deeplabcut.core.schemas.identity import save_behavior_disallows_deletions
+from napari_deeplabcut.core.schemas.layer_identity import save_behavior_disallows_deletions
 
 
 def compute_overwrite_report_for_points_save(

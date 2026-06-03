@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from napari_deeplabcut.core.schemas.identity import (
+from napari_deeplabcut.core.schemas.layer_identity import (
     DLC_LAYER_ROLE_KEY,
     DLC_SAVE_BEHAVIOR_KEY,
     LayerRole,
