@@ -100,21 +100,6 @@ def _replace_layer_metadata_in_place(layer: Points, metadata: dict) -> None:
     current.update(metadata or {})
 
 
-def _apply_layer_save_identity_to_metadata(self, layer: Points, metadata: dict) -> dict:
-    """
-    Ensure save-time metadata carries the manager's save behavior decision.
-
-    The writer and conflict preflight both consume this metadata, so this keeps
-    UI-preflight and actual write semantics aligned.
-    """
-    md = dict(metadata or {})
-
-    behavior = self.layer_manager.save_behavior_for_points_layer(layer)
-    md[DLC_SAVE_BEHAVIOR_KEY] = behavior.value
-
-    return md
-
-
 @contextmanager
 def _temporary_layer_metadata(layer: Points, metadata: dict):
     current = layer.metadata
@@ -244,6 +229,19 @@ class PointsLayerSaveWorkflow:
     # ------------------------------------------------------------------ #
     # Single-layer points save                                           #
     # ------------------------------------------------------------------ #
+    def _apply_layer_save_identity_to_metadata(self, layer: Points, metadata: dict) -> dict:
+        """
+        Ensure save-time metadata carries the manager's save behavior decision.
+
+        The writer and conflict preflight both consume this metadata, so this keeps
+        UI-preflight and actual write semantics aligned.
+        """
+        md = dict(metadata or {})
+
+        behavior = self.layer_manager.save_behavior_for_points_layer(layer)
+        md[DLC_SAVE_BEHAVIOR_KEY] = behavior.value
+
+        return md
 
     def _save_single_points_layer(self, layer: Points) -> SaveOutcome:
         ok = self._ensure_promotion_save_target(layer)
@@ -266,7 +264,7 @@ class PointsLayerSaveWorkflow:
 
             base_metadata = overridden_metadata if overridden_metadata is not None else dict(layer.metadata or {})
             save_metadata = self._enrich_points_metadata_for_save(layer, base_metadata)
-            save_metadata = _apply_layer_save_identity_to_metadata(layer, save_metadata)
+            save_metadata = self._apply_layer_save_identity_to_metadata(layer, save_metadata)
 
             if self._is_unsupported_direct_video_label_save(layer, save_metadata):
                 self.logger.debug(
