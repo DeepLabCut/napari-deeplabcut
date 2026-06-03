@@ -1,4 +1,4 @@
-# src/napari_deeplabcut/core/layer_lifecycle/identity.py
+# src/napari_deeplabcut/core/schemas/layer_identity.py
 from __future__ import annotations
 
 from enum import Enum
@@ -33,13 +33,13 @@ class LayerSaveBehavior(str, Enum):
         represent intentional deletions, depending on the existing destination
         file and preflight conflict report.
 
-    NO_DELETIONS:
+    PARTIAL_UPDATE:
         Missing keypoints must not be interpreted as deletions. Only explicitly
         present keypoints should be written/merged.
     """
 
     REGULAR = "regular"
-    NO_DELETIONS = "no_deletions"
+    PARTIAL_UPDATE = "partial_update"
 
 
 # ---- Metadata accessors / role helpers --------------------------------------------
@@ -100,12 +100,22 @@ def set_layer_identity_metadata(
 
 
 def save_behavior_disallows_deletions(metadata: dict[str, Any] | None) -> bool:
-    return get_save_behavior_from_metadata(metadata) is LayerSaveBehavior.NO_DELETIONS
+    return get_save_behavior_from_metadata(metadata) is LayerSaveBehavior.PARTIAL_UPDATE
+
+
+# ---- Annotation layer ------------------------------------------------------------
+def tag_dlc_annotation_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Mark metadata for a Points layer that represents a DLC annotation layer.
+    """
+    return set_layer_identity_metadata(
+        metadata,
+        role=LayerRole.DLC_ANNOTATION,
+        save_behavior=LayerSaveBehavior.REGULAR,
+    )
 
 
 # ---- Frames layer ------------------------------------------------------------
-
-
 def tag_frames_metadata(
     metadata: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -119,8 +129,6 @@ def tag_frames_metadata(
 
 
 # ---- Config placeholder layer ------------------------------------------------
-
-
 def tag_config_placeholder_metadata(
     metadata: dict[str, Any] | None,
     *,
@@ -129,21 +137,17 @@ def tag_config_placeholder_metadata(
     """
     Mark metadata for a Points layer created from config.yaml.
 
-    This tag captures layer origin, not current state.
-
-    A config-derived layer starts empty, but users may later add points to it.
-    Even then, it should remain distinguishable from a full annotation layer
-    loaded from an existing h5/csv file.
-
-    Save behavior is NO_DELETIONS because missing keypoints in this layer mean
-    "not added yet", not "delete existing saved coordinates".
+    This is a temporary lifecycle identity. The layer starts as a config-only
+    placeholder and may later be merged into an existing DLC annotation layer
+    or promoted/reinterpreted as a real annotation layer once it has concrete
+    image/save scope.
     """
-    md = dict(metadata or {})
-
-    md[DLC_LAYER_ROLE_KEY] = LayerRole.CONFIG_PLACEHOLDER.value
-    md[DLC_SAVE_BEHAVIOR_KEY] = LayerSaveBehavior.NO_DELETIONS.value
+    md = set_layer_identity_metadata(
+        metadata,
+        role=LayerRole.CONFIG_PLACEHOLDER,
+        save_behavior=LayerSaveBehavior.PARTIAL_UPDATE,
+    )
     md[DLC_SOURCE_CONFIG_KEY] = str(Path(config_path).expanduser().resolve(strict=False))
-
     return md
 
 

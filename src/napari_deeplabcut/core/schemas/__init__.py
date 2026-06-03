@@ -7,11 +7,20 @@ from .layer_identity import (
     set_layer_identity_metadata,
     set_layer_role_metadata,
 )
-from .metadata_schemas import DLCHeaderModel, PointsLayerAttributesModel, PointsMetadata, PointsWriteInputModel
+from .metadata_schemas import (
+    DLCHeaderModel,
+    KeypointPropertiesModel,
+    PointsDataModel,
+    PointsLayerAttributesModel,
+    PointsMetadata,
+    PointsWriteInputModel,
+)
 
 __all__ = [
     "DLCHeaderModel",
     "PointsMetadata",
+    "PointsDataModel",
+    "KeypointPropertiesModel",
     "PointsLayerAttributesModel",
     "PointsWriteInputModel",
     "LayerRole",

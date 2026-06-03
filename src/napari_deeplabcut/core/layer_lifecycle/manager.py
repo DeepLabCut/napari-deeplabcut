@@ -411,13 +411,13 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             return behavior
 
         if LayerLifecycleManager.is_config_derived_points_layer(layer):
-            return LayerSaveBehavior.NO_DELETIONS
+            return LayerSaveBehavior.PARTIAL_UPDATE
 
         return LayerSaveBehavior.REGULAR
 
     @staticmethod
     def point_layer_disallows_deletions_on_save(layer: Any) -> bool:
-        return LayerLifecycleManager.save_behavior_for_points_layer(layer) is LayerSaveBehavior.NO_DELETIONS
+        return LayerLifecycleManager.save_behavior_for_points_layer(layer) is LayerSaveBehavior.PARTIAL_UPDATE
 
     @staticmethod
     def is_multianimal(layer) -> bool:

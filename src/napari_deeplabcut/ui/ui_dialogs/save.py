@@ -173,6 +173,20 @@ class PointsLayerSaveWorkflow:
 
         if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
             layer = selected_layers[0]
+
+            if self._is_tracking_result_points_layer(layer):
+                return self._save_multiple_layers(selected=selected, selected_layers=selected_layers)
+
+            if self.layer_manager.validate_header(layer):
+                if self.layer_manager.is_empty_points_layer(layer):
+                    QMessageBox.information(
+                        self.parent,
+                        "Nothing to save",
+                        "This layer is empty and has no annotations to save.",
+                        QMessageBox.Ok,
+                    )
+                    return SaveOutcome(saved=False)
+
             if self._is_saveable_dlc_points_layer(layer):
                 return self._save_single_points_layer(layer)
 

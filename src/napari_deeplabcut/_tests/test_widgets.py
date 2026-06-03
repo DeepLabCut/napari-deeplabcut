@@ -46,9 +46,42 @@ def test_keypoint_controls(keypoint_controls):
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_save_layers(viewer, keypoint_controls, points):
+def test_save_layers_routes_saveable_points_to_dlc_writer(
+    viewer,
+    keypoint_controls,
+    points,
+    monkeypatch,
+):
+    viewer.layers.selection.clear()
     viewer.layers.selection.add(points)
-    keypoint_controls._save_layers_dialog()
+    viewer.layers.selection.active = points
+
+    # If this opens, the test would otherwise hang.
+    def fail_generic_save_dialog(*args, **kwargs):
+        raise AssertionError("Unexpected generic save dialog; DLC save routing failed.")
+
+    monkeypatch.setattr(
+        "napari_deeplabcut.ui.ui_dialogs.save.QFileDialog.getSaveFileName",
+        fail_generic_save_dialog,
+    )
+
+    # Do not run real overwrite preflight in this broad widget test.
+    monkeypatch.setattr(
+        "napari_deeplabcut.ui.ui_dialogs.save.compute_overwrite_report_for_points_save",
+        lambda data, attributes: None,
+    )
+
+    calls = []
+
+    def fake_layers_save(path, *, selected=False, plugin=None):
+        calls.append((path, selected, plugin))
+        return []
+
+    monkeypatch.setattr(viewer.layers, "save", fake_layers_save)
+
+    keypoint_controls._save_layers_dialog(selected=True)
+
+    assert calls == [("__dlc__.h5", True, "napari-deeplabcut")]
 
 
 @pytest.mark.usefixtures("qtbot")
