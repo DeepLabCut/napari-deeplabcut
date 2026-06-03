@@ -42,36 +42,7 @@ class LayerSaveBehavior(str, Enum):
     NO_DELETIONS = "no_deletions"
 
 
-# ---- Config placeholder layer ------------------------------------------------
-
-
-def tag_config_placeholder_metadata(
-    metadata: dict[str, Any] | None,
-    *,
-    config_path: str | Path,
-) -> dict[str, Any]:
-    """
-    Mark metadata for a Points layer created from config.yaml.
-
-    This tag captures layer origin, not current state.
-
-    A config-derived layer starts empty, but users may later add points to it.
-    Even then, it should remain distinguishable from a full annotation layer
-    loaded from an existing h5/csv file.
-
-    Save behavior is NO_DELETIONS because missing keypoints in this layer mean
-    "not added yet", not "delete existing saved coordinates".
-    """
-    md = dict(metadata or {})
-
-    md[DLC_LAYER_ROLE_KEY] = LayerRole.CONFIG_PLACEHOLDER.value
-    md[DLC_SAVE_BEHAVIOR_KEY] = LayerSaveBehavior.NO_DELETIONS.value
-    md[DLC_SOURCE_CONFIG_KEY] = str(Path(config_path).expanduser().resolve(strict=False))
-
-    return md
-
-
-# ---- Metadata accessors / role helpers ------------------------------------------------------------
+# ---- Metadata accessors / role helpers --------------------------------------------
 
 
 def _enum_value(value: Any) -> str | None:
@@ -130,3 +101,58 @@ def set_layer_identity_metadata(
 
 def save_behavior_disallows_deletions(metadata: dict[str, Any] | None) -> bool:
     return get_save_behavior_from_metadata(metadata) is LayerSaveBehavior.NO_DELETIONS
+
+
+# ---- Frames layer ------------------------------------------------------------
+
+
+def tag_frames_metadata(
+    metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """
+    Mark metadata for an image/video layer that acts as the DLC session frame source.
+
+    The concrete frame source type is stored separately, currently in the
+    existing session_role field used by the reader/manager.
+    """
+    return set_layer_role_metadata(metadata, role=LayerRole.FRAMES)
+
+
+# ---- Config placeholder layer ------------------------------------------------
+
+
+def tag_config_placeholder_metadata(
+    metadata: dict[str, Any] | None,
+    *,
+    config_path: str | Path,
+) -> dict[str, Any]:
+    """
+    Mark metadata for a Points layer created from config.yaml.
+
+    This tag captures layer origin, not current state.
+
+    A config-derived layer starts empty, but users may later add points to it.
+    Even then, it should remain distinguishable from a full annotation layer
+    loaded from an existing h5/csv file.
+
+    Save behavior is NO_DELETIONS because missing keypoints in this layer mean
+    "not added yet", not "delete existing saved coordinates".
+    """
+    md = dict(metadata or {})
+
+    md[DLC_LAYER_ROLE_KEY] = LayerRole.CONFIG_PLACEHOLDER.value
+    md[DLC_SAVE_BEHAVIOR_KEY] = LayerSaveBehavior.NO_DELETIONS.value
+    md[DLC_SOURCE_CONFIG_KEY] = str(Path(config_path).expanduser().resolve(strict=False))
+
+    return md
+
+
+# ---- Tracking result layer ----------------------------------------------------
+def tag_tracking_result_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Mark metadata for a Points layer produced by a tracking workflow.
+    """
+    return set_layer_identity_metadata(
+        metadata,
+        role=LayerRole.TRACKING_RESULT,
+    )

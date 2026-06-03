@@ -21,8 +21,7 @@ from napari_deeplabcut.core.io import (
 )
 from napari_deeplabcut.core.layer_lifecycle.identity import (
     FrameLayerType,
-    LayerRole,
-    set_layer_role_metadata,
+    tag_frames_metadata,
 )
 from napari_deeplabcut.core.project_paths import (
     infer_dlc_project_from_labeled_folder,
@@ -63,7 +62,7 @@ def _build_dlc_layer_meta(
         "session_key": session_key_from_project_context(project_context),
     }
 
-    return set_layer_role_metadata(meta, role=LayerRole.FRAMES)
+    return tag_frames_metadata(meta)
 
 
 def get_hdf_reader(path):
