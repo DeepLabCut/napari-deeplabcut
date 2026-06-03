@@ -14,6 +14,7 @@ from pathlib import Path
 
 from napari.layers import Points
 from qtpy.QtCore import QPoint, Qt
+from qtpy.QtGui import QPalette
 from qtpy.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -516,6 +517,16 @@ class Tutorial(QDialog):
 # --------------------------------------------------------------------------------
 # Headless labeled data resolved to existing config.yaml project dialog
 # --------------------------------------------------------------------------------
+def _inverted_parent_bg_hex(widget: QWidget) -> str:
+    """Return inverse of the parent widget background color as #RRGGBB."""
+    ref = widget.parentWidget() or widget
+    bg = ref.palette().color(QPalette.Window)
+    inv_r = 255 - bg.red()
+    inv_g = 255 - bg.green()
+    inv_b = 255 - bg.blue()
+    return f"#{inv_r:02x}{inv_g:02x}{inv_b:02x}"
+
+
 class ProjectConfigPromptAction(str, Enum):
     ASSOCIATE = "associate"
     SKIP = "skip"
@@ -787,16 +798,11 @@ def _conflict_summary_text(report: OverwriteConflictReport) -> str:
     if n_deletions and n_overwrites:
         return (
             "Saving will modify existing annotations in the destination file.<br><br>"
-            "<b>Deletion warning:</b> Some keypoints will be written as missing values, "
-            "which removes their previous coordinates from the saved DLC file."
+            "<b>Deletion warning:</b> Some keypoints will be deleted."
         )
 
     if n_deletions:
-        return (
-            "Saving will delete existing keypoints from the destination file.<br><br>"
-            "<b>Deletion warning:</b> Deleted keypoints will be written as missing values, "
-            "which removes their previous coordinates from the saved DLC file."
-        )
+        return "Saving will delete existing keypoints from the destination file.<br><br>"
 
     return "Saving will overwrite existing keypoints in the destination file."
 
@@ -885,6 +891,13 @@ class OverwriteConflictsDialog(QDialog):
         details_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         layout.addWidget(details_label)
 
+        separator = QFrame(self)
+        separator.setFrameShape(QFrame.NoFrame)
+        separator.setFixedHeight(1)
+        separator.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        separator.setStyleSheet(f"background-color: {_inverted_parent_bg_hex(self)}; border: none;")
+        layout.addWidget(separator)
+
         text = QPlainTextEdit(self)
         text.setReadOnly(True)
         text.setPlainText(details)
@@ -970,12 +983,12 @@ def maybe_confirm_overwrite(
 
     title = "Confirm keypoint deletions" if has_deletions else "Overwrite warning"
 
-    confirm_button_text = "Save and clear keypoints" if has_deletions else "Overwrite"
+    confirm_button_text = "Save keypoints" if has_deletions else "Save (overwrite) keypoints"
 
     details_label_text = (
-        "Conflicts (frame/image → modified and deleted keypoints):"
+        "<i>Conflicts (frame/image → modified or deleted keypoints):</i>"
         if has_deletions
-        else "Conflicts (frame/image → keypoints):"
+        else "<i>Conflicts (frame/image → keypoints):</i>"
     )
 
     return OverwriteConflictsDialog.confirm(
