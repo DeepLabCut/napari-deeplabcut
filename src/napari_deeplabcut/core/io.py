@@ -63,10 +63,6 @@ from napari_deeplabcut.core.dataframes import (
     set_df_scorer,
 )
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
-from napari_deeplabcut.core.layer_lifecycle.identity import (
-    save_behavior_disallows_deletions,
-    tag_config_placeholder_metadata,
-)
 from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
 from napari_deeplabcut.core.metadata import attach_source_and_io_to_layer_kwargs, parse_points_metadata
 from napari_deeplabcut.core.project_paths import (
@@ -75,6 +71,10 @@ from napari_deeplabcut.core.project_paths import (
     infer_dlc_project_from_points_meta,
 )
 from napari_deeplabcut.core.provenance import resolve_output_path_from_metadata
+from napari_deeplabcut.core.schemas.identity import (
+    save_behavior_disallows_deletions,
+    tag_config_placeholder_metadata,
+)
 from napari_deeplabcut.utils.debug import log_timing
 
 logger = logging.getLogger(__name__)

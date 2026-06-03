@@ -19,15 +19,15 @@ from napari_deeplabcut.core.io import (
     read_images,
     read_video,
 )
-from napari_deeplabcut.core.layer_lifecycle.identity import (
-    FrameLayerType,
-    tag_frames_metadata,
-)
 from napari_deeplabcut.core.project_paths import (
     infer_dlc_project_from_labeled_folder,
     infer_dlc_project_from_video_path,
     looks_like_dlc_labeled_folder,
     session_key_from_project_context,
+)
+from napari_deeplabcut.core.schemas.identity import (
+    FrameLayerType,
+    tag_frames_metadata,
 )
 
 logger = logging.getLogger(__name__)

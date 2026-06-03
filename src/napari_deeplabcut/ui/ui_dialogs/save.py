@@ -17,9 +17,6 @@ from qtpy.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 from ...core.conflicts import compute_overwrite_report_for_points_save
 from ...core.errors import MissingProvenanceError
 from ...core.io import is_video
-from ...core.layer_lifecycle.identity import (
-    DLC_SAVE_BEHAVIOR_KEY,
-)
 from ...core.layers import is_machine_layer
 from ...core.metadata import (
     MergePolicy,
@@ -42,6 +39,9 @@ from ...core.provenance import (
     is_projectless_folder_association_candidate,
     requires_gt_promotion,
     suggest_human_placeholder,
+)
+from ...core.schemas.identity import (
+    DLC_SAVE_BEHAVIOR_KEY,
 )
 from ...core.sidecar import get_default_scorer, set_default_scorer
 from ...core.trails import safe_folder_anchor_from_points_layer

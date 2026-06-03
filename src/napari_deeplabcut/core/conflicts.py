@@ -17,12 +17,12 @@ from napari_deeplabcut.core.dataframes import (
 )
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.io import DLC_CANONICAL_H5_KEY
-from napari_deeplabcut.core.layer_lifecycle.identity import save_behavior_disallows_deletions
 from napari_deeplabcut.core.metadata import parse_points_metadata
 from napari_deeplabcut.core.project_paths import infer_dlc_project_from_points_meta
 from napari_deeplabcut.core.provenance import (
     resolve_output_path_from_metadata,
 )
+from napari_deeplabcut.core.schemas.identity import save_behavior_disallows_deletions
 
 
 def compute_overwrite_report_for_points_save(

@@ -34,7 +34,7 @@ from ...tracking.core.data import TRACKING_LAYER_METADATA_KEY, is_tracking_resul
 from ...ui.base_widget._qt_timers import OwnedTimersMixin
 from ...ui.cropping import resolve_project_path_from_image_layer
 from ...utils.debug import log_timing
-from .identity import (
+from ..schemas.identity import (
     FrameLayerType,
     LayerRole,
     LayerSaveBehavior,
