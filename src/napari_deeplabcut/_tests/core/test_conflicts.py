@@ -71,7 +71,7 @@ def _stub_validation_pipeline(
         completed_df = df_new
 
     monkeypatch.setattr(
-        conflicts_mod.dlc_schemas.PointsLayerAttributesModel,
+        conflicts_mod.dlc_schemas.metadata_schemas.PointsLayerAttributesModel,
         "model_validate",
         lambda payload: attrs_obj,
     )
@@ -81,17 +81,17 @@ def _stub_validation_pipeline(
         lambda metadata, drop_header=False: pts_meta,
     )
     monkeypatch.setattr(
-        conflicts_mod.dlc_schemas.PointsDataModel,
+        conflicts_mod.dlc_schemas.metadata_schemas.PointsDataModel,
         "model_validate",
         lambda payload: points_obj,
     )
     monkeypatch.setattr(
-        conflicts_mod.dlc_schemas.KeypointPropertiesModel,
+        conflicts_mod.dlc_schemas.metadata_schemas.KeypointPropertiesModel,
         "model_validate",
         lambda payload: props_obj,
     )
     monkeypatch.setattr(
-        conflicts_mod.dlc_schemas.PointsWriteInputModel,
+        conflicts_mod.dlc_schemas.metadata_schemas.PointsWriteInputModel,
         "model_validate",
         lambda payload: ctx_obj,
     )
@@ -293,10 +293,11 @@ def test_compute_overwrite_report_returns_report_for_existing_gt_file_with_confl
     assert result is report
     assert seen["set_df_scorer"] == (raw_new_df, "target_scorer")
 
-    completed_input_df, completed_pts_meta, completed_header = stub.seen["complete_df_for_save"]
+    completed_input_df, completed_pts_meta, completed_header, allow_deletions = stub.seen["complete_df_for_save"]
     assert completed_input_df is promoted_df
     assert completed_pts_meta is pts_meta
     assert completed_header.scorer == "target_scorer"
+    assert allow_deletions is True
 
     assert seen["read_hdf_calls"] == [(out, "df_with_missing")]
     assert seen["keypoint_conflicts"] == (old_df, completed_df)

@@ -13,10 +13,25 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_config_regression_no_silent_deletion(viewer, keypoint_controls, qtbot, tmp_path, caplog):
+def test_config_derived_direct_save_preserves_unmentioned_existing_labels(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    caplog,
+):
     """
-    Regression for the original report:
-    Save the WRONG (placeholder) layer and still preserve previous labels due to merge-on-save.
+    Regression: a layer created from config.yaml is a partial/no-deletions
+    annotation source.
+
+    If the user adds bodypart2 to that config-derived layer and saves it
+    directly through the writer, absent keypoints from that layer must not be
+    interpreted as deletion intent.
+
+    Expected behavior:
+    - existing bodypart1 in the destination H5 is preserved
+    - newly added bodypart2 is written
+    - no deletion is materialized for unmentioned keypoints
     """
     caplog.set_level(logging.DEBUG)
 
@@ -27,33 +42,55 @@ def test_config_regression_no_silent_deletion(viewer, keypoint_controls, qtbot, 
     assert np.isnan(_get_coord_from_df(pre, "bodypart2", "x"))
 
     from napari_deeplabcut.core import keypoints
+    from napari_deeplabcut.core.schemas.layer_identity import (
+        DLC_SAVE_BEHAVIOR_KEY,
+        LayerSaveBehavior,
+    )
 
     viewer.window.add_dock_widget(keypoint_controls, name="Keypoint controls", area="right")
 
-    # Open config first -> placeholder Points layer exists
+    # Open config first -> config-derived placeholder Points layer exists.
     viewer.open(str(config_path), plugin="napari-deeplabcut")
-    qtbot.waitUntil(lambda: len([ly for ly in viewer.layers if isinstance(ly, Points)]) >= 1, timeout=5_000)
+    qtbot.waitUntil(
+        lambda: len([ly for ly in viewer.layers if isinstance(ly, Points)]) >= 1,
+        timeout=5_000,
+    )
 
     placeholder = next((ly for ly in viewer.layers if isinstance(ly, Points)), None)
     assert placeholder is not None
     assert placeholder.data is None or len(placeholder.data) == 0
 
-    # Open folder -> images + GT points layer
+    # The config-created layer should carry no-deletions save behavior.
+    assert placeholder.metadata.get(DLC_SAVE_BEHAVIOR_KEY) == LayerSaveBehavior.PARTIAL_UPDATE.value
+    assert keypoint_controls.layer_manager.is_config_derived_points_layer(placeholder)
+    assert keypoint_controls.layer_manager.is_empty_config_placeholder_points_layer(placeholder)
+
+    # Open folder -> images + GT points layer.
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
     qtbot.wait(200)
 
-    # Placeholder should still be present for this regression to apply
+    # Placeholder should still be present for this regression to apply.
     assert placeholder in viewer.layers
 
     store = keypoint_controls.get_layer_store(placeholder)
     assert store is not None
 
-    # Add a new bodypart2 point to placeholder using (frame, y, x)
+    # Add a new bodypart2 point to the config-derived layer using napari [frame, y, x].
     store.current_keypoint = keypoints.Keypoint("bodypart2", "")
     placeholder.add(np.array([0.0, 33.0, 44.0], dtype=float))
 
+    assert not keypoint_controls.layer_manager.is_empty_points_layer(placeholder)
+    assert keypoint_controls.layer_manager.is_config_derived_points_layer(placeholder)
+    assert (
+        keypoint_controls.layer_manager.save_behavior_for_points_layer(placeholder) is LayerSaveBehavior.PARTIAL_UPDATE
+    )
+
+    # Direct writer regression: make sure selected=True really saves only the placeholder.
+    viewer.layers.selection.clear()
+    viewer.layers.selection.add(placeholder)
     viewer.layers.selection.active = placeholder
+
     viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
     qtbot.wait(200)
 
@@ -61,7 +98,10 @@ def test_config_regression_no_silent_deletion(viewer, keypoint_controls, qtbot, 
     b1x_post = _get_coord_from_df(post, "bodypart1", "x")
     b2x_post = _get_coord_from_df(post, "bodypart2", "x")
 
-    assert np.isfinite(b1x_post), "bodypart1 must be preserved (no silent deletion)."
+    assert np.isfinite(b1x_post), (
+        "bodypart1 must be preserved because config-derived layers use "
+        "PARTIAL_UPDATE semantics for unmentioned keypoints."
+    )
     assert np.isfinite(b2x_post), "bodypart2 must be saved."
     assert b2x_post == 44.0
 
@@ -165,6 +205,64 @@ def test_overwrite_warning_triggers_on_conflict(viewer, keypoint_controls, qtbot
 
     post = pd.read_hdf(h5_path, key="df_with_missing")
     assert _get_coord_from_df(post, "bodypart1", "x") == 99.0
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_deletion_warning_triggers_when_existing_keypoint_is_removed(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    overwrite_confirm,
+    monkeypatch,
+):
+    """
+    Removing an existing saved keypoint from a real loaded DLC annotation layer
+    must trigger confirmation before the saved coordinate is cleared.
+    """
+    overwrite_confirm.capture().reset_calls()
+    monkeypatch.setattr(
+        "napari_deeplabcut.ui.ui_dialogs.save.QMessageBox.warning",
+        lambda *args, **kwargs: pytest.fail("Unexpected warning dialog; deletion preflight should run."),
+    )
+
+    _, _, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
+
+    pre = pd.read_hdf(h5_path, key="df_with_missing")
+    assert np.isfinite(_get_coord_from_df(pre, "bodypart1", "x"))
+
+    viewer.window.add_dock_widget(keypoint_controls, name="Keypoint controls", area="right")
+
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
+    qtbot.wait(200)
+
+    points = _get_points_layer_with_data(viewer)
+
+    labels = np.asarray(points.properties.get("label"))
+    mask = labels != "bodypart1"
+
+    points.data = np.asarray(points.data)[mask]
+    for key, values in list(points.properties.items()):
+        try:
+            arr = np.asarray(values)
+            if len(arr) == len(mask):
+                points.properties[key] = arr[mask]
+        except Exception:
+            pass
+
+    viewer.layers.selection.clear()
+    viewer.layers.selection.add(points)
+    viewer.layers.selection.active = points
+
+    keypoint_controls._save_layers_dialog(selected=True)
+    qtbot.wait(200)
+
+    assert len(overwrite_confirm.calls) == 1
+    assert overwrite_confirm.calls[0].get("n_deletions", 0) >= 1
+
+    post = pd.read_hdf(h5_path, key="df_with_missing")
+    assert np.isnan(_get_coord_from_df(post, "bodypart1", "x"))
 
 
 @pytest.mark.usefixtures("qtbot")
