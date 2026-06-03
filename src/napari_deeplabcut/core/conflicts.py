@@ -23,7 +23,7 @@ from napari_deeplabcut.core.provenance import (
     resolve_output_path_from_metadata,
 )
 from napari_deeplabcut.core.schemas.layer_identity import (
-    validate_save_behavior_from_metadata,
+    validate_plugin_managed_dlc_annotation_metadata,
 )
 
 
@@ -72,7 +72,7 @@ def compute_overwrite_report_for_points_save(
     # - core.io imports dataframe helpers and metadata parsing
 
     attrs = dlc_schemas.PointsLayerAttributesModel.model_validate(attributes or {})
-    validate_save_behavior_from_metadata(attrs.metadata)
+    validate_plugin_managed_dlc_annotation_metadata(attrs.metadata)
     pts_meta: PointsMetadata = parse_points_metadata(attrs.metadata, drop_header=False)
 
     if not pts_meta.header:
