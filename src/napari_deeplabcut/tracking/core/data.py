@@ -14,6 +14,7 @@ from napari_deeplabcut.core.layer_lifecycle.identity import (
 )
 
 TRACKING_LAYER_METADATA_KEY = "ndlc_tracking"
+TRACKING_RESULT_TYPE = "tracking-result"
 TRACKING_SCHEMA_VERSION = 1
 
 
@@ -181,7 +182,7 @@ def build_tracking_result_metadata(
     md = tag_tracking_result_metadata(md)
     md[TRACKING_LAYER_METADATA_KEY] = {
         "schema_version": TRACKING_SCHEMA_VERSION,
-        "kind": f"{tracker_name}-result",
+        "kind": TRACKING_RESULT_TYPE,
         "tracker_name": str(tracker_name),
         "source_layer_name": str(source_layer_name),
         "query_frame": int(query_frame),
@@ -197,4 +198,4 @@ def is_tracking_result_points_layer(layer) -> bool:
 
     # Legacy fallback.
     info = md.get(TRACKING_LAYER_METADATA_KEY)
-    return isinstance(info, dict) and info.get("kind") == f"{info.get('tracker_name')}-result"
+    return isinstance(info, dict) and info.get("kind") == TRACKING_RESULT_TYPE

@@ -13,6 +13,7 @@ from napari_deeplabcut.core.layer_lifecycle.identity import (
 )
 from napari_deeplabcut.tracking.core.data import (
     TRACKING_LAYER_METADATA_KEY,
+    TRACKING_RESULT_TYPE,
     TRACKING_SCHEMA_VERSION,
     add_query_identity_columns,
     build_tracking_result_metadata,
@@ -365,7 +366,7 @@ def test_build_tracking_result_metadata_preserves_existing_metadata_and_adds_tra
     tracker = "Cotracker 3"
     assert info == {
         "schema_version": TRACKING_SCHEMA_VERSION,
-        "kind": f"{tracker}-result",
+        "kind": TRACKING_RESULT_TYPE,
         "tracker_name": tracker,
         "source_layer_name": "CollectedData_me",
         "query_frame": 5,
@@ -402,7 +403,7 @@ def test_build_tracking_result_metadata_handles_none_source_metadata():
 
     assert isinstance(out, dict)
     assert TRACKING_LAYER_METADATA_KEY in out
-    assert out[TRACKING_LAYER_METADATA_KEY]["kind"] == f"{tracker}-result"
+    assert out[TRACKING_LAYER_METADATA_KEY]["kind"] == TRACKING_RESULT_TYPE
 
 
 # -----------------------------------------------------------------------------#
@@ -415,7 +416,7 @@ def test_is_tracking_result_points_layer_returns_true_for_expected_metadata():
     layer = SimpleNamespace(
         metadata={
             TRACKING_LAYER_METADATA_KEY: {
-                "kind": f"{tracker}-result",
+                "kind": TRACKING_RESULT_TYPE,
                 "tracker_name": tracker,
             }
         }
@@ -453,7 +454,7 @@ def test_build_tracking_result_metadata_tags_tracking_identity():
     assert DLC_SAVE_BEHAVIOR_KEY not in md
 
     info = md[TRACKING_LAYER_METADATA_KEY]
-    assert info["kind"] == f"{tracker}-result"
+    assert info["kind"] == TRACKING_RESULT_TYPE
     assert info["tracker_name"] == tracker
     assert info["source_layer_name"] == "CollectedData_scorer"
     assert info["query_frame"] == 5
