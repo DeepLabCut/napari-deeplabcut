@@ -246,7 +246,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if layer is None or not isinstance(layer, Points):
             return False
 
-        if self.is_config_placeholder_points_layer(layer):
+        if self.is_empty_points_layer(layer):
             return False
 
         try:
@@ -410,7 +410,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if behavior is not None:
             return behavior
 
-        if LayerLifecycleManager.is_config_placeholder_points_layer(layer):
+        if LayerLifecycleManager.is_config_derived_points_layer(layer):
             return LayerSaveBehavior.NO_DELETIONS
 
         return LayerSaveBehavior.REGULAR
@@ -438,38 +438,38 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             return False
 
     @staticmethod
-    def is_config_placeholder_points_layer(layer: Points) -> bool:
-        """
-        Return True if this layer originated from config.yaml as a config placeholder.
+    def is_config_derived_points_layer(layer: Any) -> bool:
+        if layer is None or not isinstance(layer, Points):
+            return False
+        return get_layer_role_from_metadata(layer.metadata or {}) is LayerRole.CONFIG_PLACEHOLDER
 
-        Prefer explicit identity metadata. Fall back to the legacy empty-layer
-        heuristic for layers created before identity tagging existed.
-        """
+    @staticmethod
+    def is_empty_points_layer(layer: Any) -> bool:
+        if layer is None or not isinstance(layer, Points):
+            return False
+        try:
+            data = np.asarray(layer.data) if layer.data is not None else np.empty((0, 3))
+        except Exception:
+            data = np.empty((0, 3))
+        return data.size == 0 or len(data) == 0
+
+    @staticmethod
+    def is_empty_config_placeholder_points_layer(layer: Any) -> bool:
         if layer is None or not isinstance(layer, Points):
             return False
 
         md = layer.metadata or {}
 
         if get_layer_role_from_metadata(md) is LayerRole.CONFIG_PLACEHOLDER:
-            return True
+            return LayerLifecycleManager.is_empty_points_layer(layer)
 
         # Legacy fallback.
-        logger.warning(
-            "Using legacy fallback checks for config placeholder layer identity."
-            "Please update such that callers use the explicit identity tagging."
-        )
         if not md.get("project"):
             return False
-
         if md.get("root") or md.get("paths"):
             return False
 
-        try:
-            data = np.asarray(layer.data) if layer.data is not None else np.empty((0, 3))
-        except Exception:
-            data = np.empty((0, 3))
-
-        return data.size == 0
+        return LayerLifecycleManager.is_empty_points_layer(layer)
 
     @staticmethod
     def dlc_meta_for_layer(layer: Layer) -> dict | None:
@@ -939,7 +939,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             - CANCEL: discard placeholder and do not update anything
             - None: not applicable / not a placeholder
         """
-        if not self.is_config_placeholder_points_layer(layer):
+        if not self.is_empty_config_placeholder_points_layer(layer):
             return None
 
         managed = list(self.iter_managed_points())
@@ -1226,7 +1226,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if layer is None or not isinstance(layer, Points):
             return False
 
-        if self.is_config_placeholder_points_layer(layer):
+        if self.is_empty_config_placeholder_points_layer(layer):
             return False
 
         try:

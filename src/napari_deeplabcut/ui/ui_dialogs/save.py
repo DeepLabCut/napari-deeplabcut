@@ -9,7 +9,6 @@ from html import escape
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import numpy as np
 from napari.layers import Image, Points
 from napari.utils.history import get_save_history
 from qtpy.QtCore import Qt
@@ -194,8 +193,7 @@ class PointsLayerSaveWorkflow:
 
         Excludes:
         - tracking-result layers
-        - config placeholder layers
-        - invalid/non-DLC Points layers
+        - empty/invalid/non-DLC Points layers
         """
         if not isinstance(layer, Points):
             return False
@@ -203,10 +201,8 @@ class PointsLayerSaveWorkflow:
         if self.layer_manager.is_tracking_result_layer(layer):
             return False
 
-        if self.layer_manager.is_config_placeholder_points_layer(layer):
-            data = np.asarray(layer.data) if layer.data is not None else np.empty((0, 3))
-            if data.size == 0:
-                return False
+        if self.layer_manager.is_empty_points_layer(layer):
+            return False
 
         if not self.layer_manager.validate_header(layer):
             return False
