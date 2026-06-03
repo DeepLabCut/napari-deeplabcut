@@ -9,6 +9,7 @@ import pytest
 import napari_deeplabcut.core.conflicts as conflicts_mod
 from napari_deeplabcut.config.models import AnnotationKind, DLCProjectContext
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
+from napari_deeplabcut.core.schemas.layer_identity import tag_dlc_annotation_metadata
 
 
 class _HeaderStub:
@@ -56,7 +57,7 @@ def _stub_validation_pipeline(
     """
     if attrs_obj is None:
         attrs_obj = SimpleNamespace(
-            metadata={"some": "meta"},
+            metadata=tag_dlc_annotation_metadata({"some": "meta"}),
             properties={"label": ["nose"], "id": [1]},
         )
     if points_obj is None:

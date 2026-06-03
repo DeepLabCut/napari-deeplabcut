@@ -11,8 +11,14 @@ from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 from napari_deeplabcut.core import io
 from napari_deeplabcut.core.dataframes import guarantee_multiindex_rows
 from napari_deeplabcut.core.errors import MissingProvenanceError
+from napari_deeplabcut.core.schemas.layer_identity import tag_dlc_annotation_metadata
 
 rng = np.random.default_rng(42)
+
+
+def _tag_plugin_managed_dlc_annotation(metadata: dict) -> None:
+    """Tag metadata['metadata'] as eligible for the plugin DLC annotation writer."""
+    metadata["metadata"] = tag_dlc_annotation_metadata(metadata.get("metadata"))
 
 
 #  Basic tests
@@ -196,6 +202,7 @@ def test_write_hdf_basic(tmp_path, fake_keypoints):
             "root": str(root),
         },
     }
+    _tag_plugin_managed_dlc_annotation(metadata)
 
     points = np.column_stack(
         [
@@ -257,6 +264,7 @@ def test_write_hdf_promotion_merges_into_existing_gt(tmp_path, fake_keypoints, m
 
     # Source provenance: machine/prediction file
     _add_source_io(metadata, root=root, kind=AnnotationKind.MACHINE, source_name="machinelabels-iter0.h5")
+    _tag_plugin_managed_dlc_annotation(metadata)
 
     # Promotion target: existing GT
     _add_save_target(metadata, root=root, scorer="me")
@@ -329,6 +337,7 @@ def test_write_hdf_machine_source_without_save_target_aborts(tmp_path, fake_keyp
         },
     }
 
+    _tag_plugin_managed_dlc_annotation(metadata)
     _add_source_io(metadata, root=root, kind=AnnotationKind.MACHINE, source_name="machinelabels-iter0.h5")
 
     points = np.column_stack([np.arange(n_rows), rng.random(n_rows), rng.random(n_rows)])
@@ -371,6 +380,7 @@ def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, m
         },
     }
 
+    _tag_plugin_managed_dlc_annotation(metadata)
     _add_source_io(metadata, root=root, kind=AnnotationKind.MACHINE, source_name="machinelabels-iter0.h5")
     _add_save_target(metadata, root=root, scorer="alice")
 
