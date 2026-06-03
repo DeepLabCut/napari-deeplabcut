@@ -103,8 +103,8 @@ def _stub_validation_pipeline(
 
     seen = {}
 
-    def fake_complete_df_for_save(df, *, pts_meta, header):
-        seen["complete_df_for_save"] = (df, pts_meta, header)
+    def fake_complete_df_for_save(df, *, pts_meta, header, allow_deletions=True):
+        seen["complete_df_for_save"] = (df, pts_meta, header, allow_deletions)
         return completed_df
 
     monkeypatch.setattr(
