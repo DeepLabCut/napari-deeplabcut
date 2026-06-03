@@ -7,9 +7,16 @@ import pandas as pd
 import pytest
 
 import napari_deeplabcut.core.conflicts as conflicts_mod
-import napari_deeplabcut.core.dataframes as dataframes_mod
 from napari_deeplabcut.config.models import AnnotationKind, DLCProjectContext
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
+
+
+class _HeaderStub:
+    def __init__(self, scorer: str | None = "scorerA"):
+        self.scorer = scorer
+
+    def with_scorer(self, scorer: str | None):
+        return _HeaderStub(scorer or self.scorer)
 
 
 def _make_points_meta(
@@ -19,7 +26,7 @@ def _make_points_meta(
     io_kind=AnnotationKind.GT,
     root: str | None = None,
 ):
-    header = None if header_scorer is None else SimpleNamespace(scorer=header_scorer)
+    header = None if header_scorer is None else _HeaderStub(header_scorer)
     io = None if io_kind is None else SimpleNamespace(kind=io_kind)
     return SimpleNamespace(
         header=header,
@@ -38,12 +45,14 @@ def _stub_validation_pipeline(
     props_obj=None,
     ctx_obj=None,
     df_new=None,
+    completed_df=None,
 ):
     """
-    Stub schema validation + parse_points_metadata + form_df_from_validated.
+    Stub schema validation + parse_points_metadata + dataframe construction.
 
     This keeps tests focused on the routing/conflict logic rather than on
-    pydantic/schema correctness (which is tested elsewhere).
+    pydantic/schema correctness or dataframe save-scope expansion, which are
+    tested elsewhere.
     """
     if attrs_obj is None:
         attrs_obj = SimpleNamespace(
@@ -58,6 +67,8 @@ def _stub_validation_pipeline(
         ctx_obj = SimpleNamespace(ctx="CTX")
     if df_new is None:
         df_new = pd.DataFrame({"dummy": [1]})
+    if completed_df is None:
+        completed_df = df_new
 
     monkeypatch.setattr(
         conflicts_mod.dlc_schemas.PointsLayerAttributesModel,
@@ -85,9 +96,21 @@ def _stub_validation_pipeline(
         lambda payload: ctx_obj,
     )
     monkeypatch.setattr(
-        dataframes_mod,
+        conflicts_mod,
         "form_df_from_validated",
         lambda ctx: df_new,
+    )
+
+    seen = {}
+
+    def fake_complete_df_for_save(df, *, pts_meta, header):
+        seen["complete_df_for_save"] = (df, pts_meta, header)
+        return completed_df
+
+    monkeypatch.setattr(
+        conflicts_mod,
+        "complete_df_for_save",
+        fake_complete_df_for_save,
     )
 
     return SimpleNamespace(
@@ -96,6 +119,8 @@ def _stub_validation_pipeline(
         props_obj=props_obj,
         ctx_obj=ctx_obj,
         df_new=df_new,
+        completed_df=completed_df,
+        seen=seen,
     )
 
 
@@ -212,11 +237,19 @@ def test_compute_overwrite_report_returns_report_for_existing_gt_file_with_confl
     old_df = pd.DataFrame({"old": [1]})
     raw_new_df = pd.DataFrame({"new": [1]})
     promoted_df = pd.DataFrame({"promoted": [1]})
+    completed_df = pd.DataFrame({"completed": [1]})
+
     key_conflict = object()
+    deletion_conflict = object()
     report = SimpleNamespace(has_conflicts=True, marker="REPORT")
 
     pts_meta = _make_points_meta(io_kind=AnnotationKind.GT)
-    _stub_validation_pipeline(monkeypatch, pts_meta=pts_meta, df_new=raw_new_df)
+    stub = _stub_validation_pipeline(
+        monkeypatch,
+        pts_meta=pts_meta,
+        df_new=raw_new_df,
+        completed_df=completed_df,
+    )
 
     monkeypatch.setattr(
         conflicts_mod,
@@ -238,14 +271,19 @@ def test_compute_overwrite_report_returns_report_for_existing_gt_file_with_confl
         seen["keypoint_conflicts"] = (df_old, df_new)
         return key_conflict
 
-    def fake_build_report(conflicts, *, layer_name, destination_path):
-        seen["build_report"] = (conflicts, layer_name, destination_path)
+    def fake_keypoint_deletions(df_old, df_new):
+        seen["keypoint_deletions"] = (df_old, df_new)
+        return deletion_conflict
+
+    def fake_build_report(conflicts, *, deletion_conflict, layer_name, destination_path):
+        seen["build_report"] = (conflicts, deletion_conflict, layer_name, destination_path)
         return report
 
     monkeypatch.setattr(conflicts_mod, "set_df_scorer", fake_set_df_scorer)
     monkeypatch.setattr(pd, "read_hdf", fake_read_hdf)
-    monkeypatch.setattr(dataframes_mod, "keypoint_conflicts", fake_keypoint_conflicts)
-    monkeypatch.setattr(dataframes_mod, "build_overwrite_conflict_report", fake_build_report)
+    monkeypatch.setattr(conflicts_mod, "keypoint_conflicts", fake_keypoint_conflicts)
+    monkeypatch.setattr(conflicts_mod, "keypoint_deletions", fake_keypoint_deletions)
+    monkeypatch.setattr(conflicts_mod, "build_overwrite_conflict_report", fake_build_report)
 
     result = conflicts_mod.compute_overwrite_report_for_points_save(
         data=[[0, 1, 2]],
@@ -254,10 +292,18 @@ def test_compute_overwrite_report_returns_report_for_existing_gt_file_with_confl
 
     assert result is report
     assert seen["set_df_scorer"] == (raw_new_df, "target_scorer")
+
+    completed_input_df, completed_pts_meta, completed_header = stub.seen["complete_df_for_save"]
+    assert completed_input_df is promoted_df
+    assert completed_pts_meta is pts_meta
+    assert completed_header.scorer == "target_scorer"
+
     assert seen["read_hdf_calls"] == [(out, "df_with_missing")]
-    assert seen["keypoint_conflicts"] == (old_df, promoted_df)
+    assert seen["keypoint_conflicts"] == (old_df, completed_df)
+    assert seen["keypoint_deletions"] == (old_df, completed_df)
     assert seen["build_report"] == (
         key_conflict,
+        deletion_conflict,
         "my-points-layer",
         str(out),
     )
@@ -269,10 +315,16 @@ def test_compute_overwrite_report_returns_none_when_report_has_no_conflicts(monk
 
     old_df = pd.DataFrame({"old": [1]})
     new_df = pd.DataFrame({"new": [1]})
+    completed_df = pd.DataFrame({"completed": [1]})
     report = SimpleNamespace(has_conflicts=False)
 
     pts_meta = _make_points_meta(io_kind=AnnotationKind.GT)
-    _stub_validation_pipeline(monkeypatch, pts_meta=pts_meta, df_new=new_df)
+    _stub_validation_pipeline(
+        monkeypatch,
+        pts_meta=pts_meta,
+        df_new=new_df,
+        completed_df=completed_df,
+    )
 
     monkeypatch.setattr(
         conflicts_mod,
@@ -280,11 +332,12 @@ def test_compute_overwrite_report_returns_none_when_report_has_no_conflicts(monk
         lambda attributes: (str(out), None, AnnotationKind.GT),
     )
     monkeypatch.setattr(pd, "read_hdf", lambda path, key=None: old_df)
-    monkeypatch.setattr(dataframes_mod, "keypoint_conflicts", lambda df_old, df_new: "conflicts")
+    monkeypatch.setattr(conflicts_mod, "keypoint_conflicts", lambda df_old, df_new: "conflicts")
+    monkeypatch.setattr(conflicts_mod, "keypoint_deletions", lambda df_old, df_new: "deletions")
     monkeypatch.setattr(
-        dataframes_mod,
+        conflicts_mod,
         "build_overwrite_conflict_report",
-        lambda conflicts, *, layer_name, destination_path: report,
+        lambda conflicts, *, deletion_conflict, layer_name, destination_path: report,
     )
 
     result = conflicts_mod.compute_overwrite_report_for_points_save(
@@ -301,10 +354,16 @@ def test_compute_overwrite_report_falls_back_when_keyed_hdf_read_fails(monkeypat
 
     old_df = pd.DataFrame({"old": [1]})
     new_df = pd.DataFrame({"new": [1]})
+    completed_df = pd.DataFrame({"completed": [1]})
     report = SimpleNamespace(has_conflicts=True)
 
     pts_meta = _make_points_meta(io_kind=AnnotationKind.GT)
-    _stub_validation_pipeline(monkeypatch, pts_meta=pts_meta, df_new=new_df)
+    _stub_validation_pipeline(
+        monkeypatch,
+        pts_meta=pts_meta,
+        df_new=new_df,
+        completed_df=completed_df,
+    )
 
     monkeypatch.setattr(
         conflicts_mod,
@@ -321,11 +380,12 @@ def test_compute_overwrite_report_falls_back_when_keyed_hdf_read_fails(monkeypat
         return old_df
 
     monkeypatch.setattr(pd, "read_hdf", fake_read_hdf)
-    monkeypatch.setattr(dataframes_mod, "keypoint_conflicts", lambda df_old, df_new: "conflicts")
+    monkeypatch.setattr(conflicts_mod, "keypoint_conflicts", lambda df_old, df_new: "conflicts")
+    monkeypatch.setattr(conflicts_mod, "keypoint_deletions", lambda df_old, df_new: "deletions")
     monkeypatch.setattr(
-        dataframes_mod,
+        conflicts_mod,
         "build_overwrite_conflict_report",
-        lambda conflicts, *, layer_name, destination_path: report,
+        lambda conflicts, *, deletion_conflict, layer_name, destination_path: report,
     )
 
     result = conflicts_mod.compute_overwrite_report_for_points_save(
@@ -338,6 +398,57 @@ def test_compute_overwrite_report_falls_back_when_keyed_hdf_read_fails(monkeypat
         (out, "df_with_missing"),
         (out, None),
     ]
+
+
+def test_compute_overwrite_report_passes_deletion_conflicts_to_report_builder(monkeypatch, tmp_path):
+    out = tmp_path / "CollectedData_target.h5"
+    out.touch()
+
+    old_df = pd.DataFrame({"old": [1]})
+    new_df = pd.DataFrame({"new": [1]})
+    completed_df = pd.DataFrame({"completed": [1]})
+
+    key_conflict = pd.DataFrame([[False]])
+    deletion_conflict = pd.DataFrame([[True]])
+    report = SimpleNamespace(has_conflicts=True, n_deletions=1)
+
+    pts_meta = _make_points_meta(io_kind=AnnotationKind.GT)
+    _stub_validation_pipeline(
+        monkeypatch,
+        pts_meta=pts_meta,
+        df_new=new_df,
+        completed_df=completed_df,
+    )
+
+    monkeypatch.setattr(
+        conflicts_mod,
+        "resolve_output_path_from_metadata",
+        lambda attributes: (str(out), None, AnnotationKind.GT),
+    )
+    monkeypatch.setattr(pd, "read_hdf", lambda path, key=None: old_df)
+    monkeypatch.setattr(conflicts_mod, "keypoint_conflicts", lambda df_old, df_new: key_conflict)
+    monkeypatch.setattr(conflicts_mod, "keypoint_deletions", lambda df_old, df_new: deletion_conflict)
+
+    seen = {}
+
+    def fake_build_report(conflicts, *, deletion_conflict, layer_name, destination_path):
+        seen["args"] = (conflicts, deletion_conflict, layer_name, destination_path)
+        return report
+
+    monkeypatch.setattr(conflicts_mod, "build_overwrite_conflict_report", fake_build_report)
+
+    result = conflicts_mod.compute_overwrite_report_for_points_save(
+        data=[[0, 1, 2]],
+        attributes={"name": "my-points-layer"},
+    )
+
+    assert result is report
+    assert seen["args"] == (
+        key_conflict,
+        deletion_conflict,
+        "my-points-layer",
+        str(out),
+    )
 
 
 def test_compute_overwrite_report_raises_when_gt_fallback_has_no_root_and_no_dataset_dir(monkeypatch):
@@ -360,3 +471,118 @@ def test_compute_overwrite_report_raises_when_gt_fallback_has_no_root_and_no_dat
             data=[[0, 1, 2]],
             attributes={"name": "points"},
         )
+
+
+def test_compute_overwrite_report_for_extracted_labels_row_returns_none_when_output_missing(tmp_path):
+    out = tmp_path / "machinelabels-iter0.h5"
+    df_new = pd.DataFrame({"new": [1]})
+
+    result = conflicts_mod.compute_overwrite_report_for_extracted_labels_row(out, df_new)
+
+    assert result is None
+
+
+def test_compute_overwrite_report_for_extracted_labels_row_returns_report(monkeypatch, tmp_path):
+    out = tmp_path / "machinelabels-iter0.h5"
+    out.touch()
+
+    old_df = pd.DataFrame({"old": [1]})
+    df_new = pd.DataFrame({"new": [1]})
+    key_conflict = object()
+    report = SimpleNamespace(has_conflicts=True)
+
+    seen = {}
+
+    def fake_read_hdf(path, key=None):
+        seen.setdefault("read_hdf_calls", []).append((Path(path), key))
+        return old_df
+
+    def fake_keypoint_conflicts(df_old, df_new_arg):
+        seen["keypoint_conflicts"] = (df_old, df_new_arg)
+        return key_conflict
+
+    def fake_build_report(conflicts, *, layer_name, destination_path):
+        seen["build_report"] = (conflicts, layer_name, destination_path)
+        return report
+
+    monkeypatch.setattr(pd, "read_hdf", fake_read_hdf)
+    monkeypatch.setattr(conflicts_mod, "keypoint_conflicts", fake_keypoint_conflicts)
+    monkeypatch.setattr(conflicts_mod, "build_overwrite_conflict_report", fake_build_report)
+
+    result = conflicts_mod.compute_overwrite_report_for_extracted_labels_row(
+        out,
+        df_new,
+        layer_name="extracted-row",
+    )
+
+    assert result is report
+    assert seen["read_hdf_calls"] == [(out, "df_with_missing")]
+    assert seen["keypoint_conflicts"] == (old_df, df_new)
+    assert seen["build_report"] == (key_conflict, "extracted-row", str(out))
+
+
+def test_compute_overwrite_report_for_extracted_labels_row_returns_none_when_report_has_no_conflicts(
+    monkeypatch,
+    tmp_path,
+):
+    out = tmp_path / "machinelabels-iter0.h5"
+    out.touch()
+
+    old_df = pd.DataFrame({"old": [1]})
+    df_new = pd.DataFrame({"new": [1]})
+    report = SimpleNamespace(has_conflicts=False)
+
+    monkeypatch.setattr(pd, "read_hdf", lambda path, key=None: old_df)
+    monkeypatch.setattr(conflicts_mod, "keypoint_conflicts", lambda df_old, df_new_arg: "conflicts")
+    monkeypatch.setattr(
+        conflicts_mod,
+        "build_overwrite_conflict_report",
+        lambda conflicts, *, layer_name, destination_path: report,
+    )
+
+    result = conflicts_mod.compute_overwrite_report_for_extracted_labels_row(
+        out,
+        df_new,
+        layer_name="extracted-row",
+    )
+
+    assert result is None
+
+
+def test_compute_overwrite_report_for_extracted_labels_row_falls_back_when_keyed_hdf_read_fails(
+    monkeypatch,
+    tmp_path,
+):
+    out = tmp_path / "machinelabels-iter0.h5"
+    out.touch()
+
+    old_df = pd.DataFrame({"old": [1]})
+    df_new = pd.DataFrame({"new": [1]})
+    report = SimpleNamespace(has_conflicts=True)
+    calls = []
+
+    def fake_read_hdf(path, key=None):
+        calls.append((Path(path), key))
+        if key == "df_with_missing":
+            raise ValueError("missing key")
+        return old_df
+
+    monkeypatch.setattr(pd, "read_hdf", fake_read_hdf)
+    monkeypatch.setattr(conflicts_mod, "keypoint_conflicts", lambda df_old, df_new_arg: "conflicts")
+    monkeypatch.setattr(
+        conflicts_mod,
+        "build_overwrite_conflict_report",
+        lambda conflicts, *, layer_name, destination_path: report,
+    )
+
+    result = conflicts_mod.compute_overwrite_report_for_extracted_labels_row(
+        out,
+        df_new,
+        layer_name="extracted-row",
+    )
+
+    assert result is report
+    assert calls == [
+        (out, "df_with_missing"),
+        (out, None),
+    ]
