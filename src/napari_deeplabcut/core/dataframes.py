@@ -501,19 +501,18 @@ def complete_df_for_save(
         target_cols = canonical_keypoint_columns_from_header(header)
         coords = target_cols.get_level_values("coords").astype(str)
         target_cols = target_cols[coords != "likelihood"]
+        target_index = save_index_from_points_metadata(pts_meta)
     else:
-        # Partial/no-deletions mode:
-        # Do not create NaN columns for unmentioned bodyparts.
+        # NO_DELETIONS:
+        # Do not materialize non-existent bodyparts or rows.
+        # Missing keypoints/images mean "not provided by this layer", not deletion.
         target_cols = df_copy.columns
-
-    target_index = save_index_from_points_metadata(pts_meta)
+        target_index = None
 
     if target_index is not None:
-        df_copy = df_copy.reindex(index=target_index, columns=target_cols)
-    else:
-        df_copy = df_copy.reindex(columns=target_cols)
+        return df_copy.reindex(index=target_index, columns=target_cols)
 
-    return df_copy
+    return df_copy.reindex(columns=target_cols)
 
 
 def merge_save_df(

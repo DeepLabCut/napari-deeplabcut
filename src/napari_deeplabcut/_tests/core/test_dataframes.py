@@ -583,6 +583,46 @@ def test_complete_df_for_save_without_paths_preserves_existing_rows_and_complete
     assert pd.isna(out.loc[("img000.png",), ("S", "", "tail", "x")])
 
 
+def test_complete_df_for_save_no_deletions_does_not_materialize_unmentioned_rows_or_bodyparts():
+    header = DLCHeaderModel(
+        columns=cols_4level(
+            scorer="S",
+            individuals=("",),
+            bodyparts=("bodypart1", "bodypart2"),
+            coords=("x", "y"),
+        )
+    )
+    pts_meta = PointsMetadata(
+        header=header,
+        paths=[
+            "labeled-data/test/img000.png",
+            "labeled-data/test/img001.png",
+        ],
+    )
+
+    sparse = pd.DataFrame(
+        [[44.0, 33.0]],
+        columns=cols_4level(
+            scorer="S",
+            individuals=("",),
+            bodyparts=("bodypart2",),
+            coords=("x", "y"),
+        ),
+        index=["labeled-data/test/img000.png"],
+    )
+
+    out = complete_df_for_save(
+        sparse,
+        pts_meta=pts_meta,
+        header=header,
+        allow_deletions=False,
+    )
+
+    assert out.index.to_list() == [("labeled-data", "test", "img000.png")]
+    assert ("S", "", "bodypart2", "x") in out.columns
+    assert ("S", "", "bodypart1", "x") not in out.columns
+
+
 # -----------------------------------------------------------------------------
 # 9) merge_save_df: save-scope overlay preserves intentional NaN deletions
 # -----------------------------------------------------------------------------
