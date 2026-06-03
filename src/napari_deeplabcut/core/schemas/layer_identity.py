@@ -32,22 +32,18 @@ class FrameLayerType(str, Enum):
 class LayerSaveBehavior(str, Enum):
     """Save semantics for Points layers.
 
-    REGULAR:
+    PLUGIN_MANAGED:
         The layer represents a normal editable annotation save scope.
         Missing keypoints may represent intentional deletions, depending on
         the existing destination file and preflight conflict report.
 
-    PARTIAL_UPDATE:
-        Missing keypoints must not be interpreted as deletions. Only explicitly
-        present keypoints should be written or merged.
-
-    Prefer REGULAR for real annotation layers. PARTIAL_UPDATE should remain
-    limited to transient sparse-update cases and should not be sticky merely
-    because a layer originated from config.yaml.
+    NAPARI_MANAGED:
+        Napari owns the save workflow for this layer.
+        No plugin code should operate on the save process.
     """
 
-    REGULAR = "regular"
-    PARTIAL_UPDATE = "partial_update"
+    PLUGIN_MANAGED = "plugin_managed"
+    NAPARI_MANAGED = "napari_managed"
 
 
 # ---- Internal normalization -------------------------------------------------------
@@ -91,18 +87,16 @@ def get_save_behavior_from_metadata(
 def get_effective_save_behavior_from_metadata(
     metadata: dict[str, Any] | None,
 ) -> LayerSaveBehavior | None:
-    """Return explicit or role-implied save behavior.
-
-    This is intentionally metadata-only.
+    """Return explicit or role-implied save ownership.
 
     Rules:
     - explicit save behavior wins;
-    - DLC_ANNOTATION defaults to REGULAR;
+    - DLC_ANNOTATION defaults to PLUGIN_MANAGED;
+    - TRACKING_RESULT defaults to NAPARI_MANAGED;
     - other roles have no default save behavior here.
 
-    In particular, CONFIG_PLACEHOLDER does not default to PARTIAL_UPDATE here.
-    Empty config placeholders are lifecycle objects; their interpretation
-    belongs in the manager/save planner.
+    CONFIG_PLACEHOLDER does not default to PLUGIN_MANAGED. Empty config
+    placeholders are lifecycle objects; their promotion belongs in the manager.
     """
     explicit = get_save_behavior_from_metadata(metadata)
     if explicit is not None:
@@ -110,7 +104,10 @@ def get_effective_save_behavior_from_metadata(
 
     role = get_layer_role_from_metadata(metadata)
     if role is LayerRole.DLC_ANNOTATION:
-        return LayerSaveBehavior.REGULAR
+        return LayerSaveBehavior.PLUGIN_MANAGED
+
+    if role is LayerRole.TRACKING_RESULT:
+        return LayerSaveBehavior.NAPARI_MANAGED
 
     return None
 
@@ -132,10 +129,6 @@ def has_layer_role_metadata(
     role: LayerRole,
 ) -> bool:
     return get_layer_role_from_metadata(metadata) is role
-
-
-def save_behavior_disallows_deletions(metadata: dict[str, Any] | None) -> bool:
-    return get_effective_save_behavior_from_metadata(metadata) is LayerSaveBehavior.PARTIAL_UPDATE
 
 
 # ---- Metadata mutators ------------------------------------------------------------
@@ -171,6 +164,46 @@ def clear_save_behavior_metadata(metadata: dict[str, Any] | None) -> dict[str, A
     return md
 
 
+def plugin_manages_save_from_metadata(metadata: dict[str, Any] | None) -> bool:
+    return get_effective_save_behavior_from_metadata(metadata) is LayerSaveBehavior.PLUGIN_MANAGED
+
+
+def napari_manages_save_from_metadata(metadata: dict[str, Any] | None) -> bool:
+    return get_effective_save_behavior_from_metadata(metadata) is LayerSaveBehavior.NAPARI_MANAGED
+
+
+def validate_plugin_managed_dlc_annotation_metadata(
+    metadata: dict[str, Any] | None,
+) -> None:
+    """Raise if metadata is not eligible for the plugin DLC annotation writer.
+
+    This is metadata-only. UI/session routing belongs in the lifecycle manager,
+    but the writer and save preflight also need a hard safety gate because direct
+    napari writer calls can bypass the UI.
+    """
+    role = get_layer_role_from_metadata(metadata)
+    behavior = get_effective_save_behavior_from_metadata(metadata)
+
+    if role is LayerRole.TRACKING_RESULT:
+        raise ValueError(
+            "Tracking-result layers cannot be saved through the napari-deeplabcut "
+            "DLC annotation writer. Merge them into a DLC annotation layer first, "
+            "or use napari's generic layer save."
+        )
+
+    if behavior is LayerSaveBehavior.NAPARI_MANAGED:
+        raise ValueError(
+            "This layer is marked as napari-managed and cannot be saved through "
+            "the napari-deeplabcut DLC annotation writer."
+        )
+
+    if role is not LayerRole.DLC_ANNOTATION:
+        raise ValueError("Only DLC annotation layers can be saved through the napari-deeplabcut DLC annotation writer.")
+
+    if behavior is not LayerSaveBehavior.PLUGIN_MANAGED:
+        raise ValueError("This DLC annotation layer is not marked as plugin-managed.")
+
+
 # ---- Annotation layer -------------------------------------------------------------
 
 
@@ -183,7 +216,7 @@ def tag_dlc_annotation_metadata(metadata: dict[str, Any] | None) -> dict[str, An
     return set_layer_identity_metadata(
         metadata,
         role=LayerRole.DLC_ANNOTATION,
-        save_behavior=LayerSaveBehavior.REGULAR,
+        save_behavior=LayerSaveBehavior.PLUGIN_MANAGED,
     )
 
 
@@ -245,7 +278,7 @@ def promote_config_placeholder_to_annotation_metadata(
     return set_layer_identity_metadata(
         metadata,
         role=LayerRole.DLC_ANNOTATION,
-        save_behavior=LayerSaveBehavior.REGULAR,
+        save_behavior=LayerSaveBehavior.PLUGIN_MANAGED,
     )
 
 
@@ -258,10 +291,8 @@ def tag_tracking_result_metadata(metadata: dict[str, Any] | None) -> dict[str, A
     Tracking results are merge sources in the DLC workflow. They should not be
     routed through direct DLC annotation saving.
     """
-    md = set_layer_role_metadata(metadata, role=LayerRole.TRACKING_RESULT)
-
-    # Tracking result layers are not DLC annotation save targets. Avoid carrying
-    # stale save behavior if this metadata was copied from another layer.
-    md.pop(DLC_SAVE_BEHAVIOR_KEY, None)
-
-    return md
+    return set_layer_identity_metadata(
+        metadata,
+        role=LayerRole.TRACKING_RESULT,
+        save_behavior=LayerSaveBehavior.NAPARI_MANAGED,
+    )

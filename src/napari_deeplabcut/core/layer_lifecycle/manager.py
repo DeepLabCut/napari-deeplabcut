@@ -38,8 +38,9 @@ from ..schemas.layer_identity import (
     FrameLayerType,
     LayerRole,
     LayerSaveBehavior,
+    get_effective_save_behavior_from_metadata,
     get_layer_role_from_metadata,
-    get_save_behavior_from_metadata,
+    promote_config_placeholder_to_annotation_metadata,
 )
 from .merge import PlaceholderConfigAction, PlaceholderConfigDecisionProvider
 from .registry import (
@@ -394,32 +395,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         return get_layer_role_from_metadata(getattr(layer, "metadata", {}) or {})
 
     @staticmethod
-    def save_behavior_for_points_layer(layer: Any) -> LayerSaveBehavior:
-        """
-        Return save behavior for a Points layer.
-
-        Explicit metadata wins. Legacy config-placeholder heuristic remains as
-        fallback.
-        """
-        if layer is None or not isinstance(layer, Points):
-            return LayerSaveBehavior.REGULAR
-
-        md = layer.metadata or {}
-
-        behavior = get_save_behavior_from_metadata(md)
-        if behavior is not None:
-            return behavior
-
-        if LayerLifecycleManager.is_config_derived_points_layer(layer):
-            return LayerSaveBehavior.PARTIAL_UPDATE
-
-        return LayerSaveBehavior.REGULAR
-
-    @staticmethod
-    def point_layer_disallows_deletions_on_save(layer: Any) -> bool:
-        return LayerLifecycleManager.save_behavior_for_points_layer(layer) is LayerSaveBehavior.PARTIAL_UPDATE
-
-    @staticmethod
     def is_multianimal(layer) -> bool:
         """Return True if this layer looks like a multi-animal Points layer."""
         if layer is None or not isinstance(layer, Points):
@@ -438,7 +413,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             return False
 
     @staticmethod
-    def is_config_derived_points_layer(layer: Any) -> bool:
+    def is_config_placeholder_points_layer(layer: Any) -> bool:
         if layer is None or not isinstance(layer, Points):
             return False
         return get_layer_role_from_metadata(layer.metadata or {}) is LayerRole.CONFIG_PLACEHOLDER
@@ -460,7 +435,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         md = layer.metadata or {}
 
-        if get_layer_role_from_metadata(md) is LayerRole.CONFIG_PLACEHOLDER:
+        if LayerLifecycleManager.is_config_placeholder_points_layer(layer):
             return LayerLifecycleManager.is_empty_points_layer(layer)
 
         # Legacy fallback.
@@ -501,6 +476,53 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         # Legacy fallback for layers created before explicit identity tagging.
         return session_role in valid_frame_roles and isinstance(ctx, dict) and bool(ctx)
+
+    def is_config_metadata_merge_target(self, layer: Any) -> bool:
+        """
+        Return True if a Points layer may receive metadata from a config placeholder.
+
+        This is intentionally narrower than "managed Points layer". Config
+        metadata updates should only target real annotation layers, never the
+        placeholder itself, other config placeholders, tracking results, or
+        generic non-DLC Points layers.
+        """
+        if layer is None or not isinstance(layer, Points):
+            return False
+
+        if self.is_config_placeholder_points_layer(layer):
+            return False
+
+        if self.is_tracking_result_layer(layer):
+            return False
+
+        role = get_layer_role_from_metadata(layer.metadata or {})
+        if role is LayerRole.DLC_ANNOTATION:
+            return self.validate_header(layer)
+
+        if role is not None:
+            return False
+
+        # Legacy fallback for pre-identity managed DLC points layers.
+        return self.is_managed(layer) and self.validate_header(layer)
+
+    # ---- Save context validation ------------------------------------------------------------
+    @staticmethod
+    def save_behavior_for_points_layer(layer: Any) -> LayerSaveBehavior:
+        """
+        Return save ownership for a Points layer.
+
+        Plugin-owned DLC annotation layers are saved by the napari-deeplabcut
+        workflow. Tracking-result, config-placeholder, generic, or foreign
+        Points layers are saved by napari's generic layer writers.
+        """
+        if layer is None or not isinstance(layer, Points):
+            return LayerSaveBehavior.NAPARI_MANAGED
+
+        behavior = get_effective_save_behavior_from_metadata(layer.metadata or {})
+        if behavior is not None:
+            return behavior
+
+        return LayerSaveBehavior.NAPARI_MANAGED
 
     def validate_header(self, layer: Points) -> bool:
         res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
@@ -551,6 +573,59 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         self._image_meta = merged
         return changed
 
+    def points_layer_has_save_context(self, layer: Any) -> bool:
+        """
+        Return True if a Points layer has enough context for DLC annotation saving.
+
+        The minimal current save context is root + paths, either already present
+        on the layer or available from the active lifecycle image context.
+        """
+        if layer is None or not isinstance(layer, Points):
+            return False
+
+        md = layer.metadata or {}
+
+        root = md.get("root") or self._image_meta.root
+        paths = md.get("paths") or self._image_meta.paths
+
+        return bool(root and paths)
+
+    def config_placeholder_has_save_context(self, layer: Any) -> bool:
+        """
+        Return True if a config placeholder has enough context to become an
+        annotation layer for labeling from scratch.
+        """
+        if not self.is_config_placeholder_points_layer(layer):
+            return False
+
+        return self.points_layer_has_save_context(layer)
+
+    def _maybe_promote_config_placeholder_points_layer(self, layer: Any) -> bool:
+        """
+        Promote a config placeholder to a regular DLC annotation layer once it
+        has concrete save context.
+
+        Returns
+        -------
+        bool
+            True if the layer was promoted, else False.
+        """
+        if layer is None or not isinstance(layer, Points):
+            return False
+
+        if not self.config_placeholder_has_save_context(layer):
+            return False
+
+        layer.metadata = promote_config_placeholder_to_annotation_metadata(layer.metadata or {})
+
+        logger.debug(
+            "Promoted config placeholder layer=%r to DLC annotation root=%r paths_count=%s",
+            getattr(layer, "name", layer),
+            (layer.metadata or {}).get("root"),
+            len((layer.metadata or {}).get("paths") or []),
+        )
+        return True
+
     def _sync_points_layers_from_image_meta(self) -> None:
         """Sync managed/all points metadata from lifecycle-owned image context."""
         if self._image_meta is None:
@@ -588,6 +663,9 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                     getattr(ly, "name", ly),
                     out,
                 )
+                continue
+
+            self._maybe_promote_config_placeholder_points_layer(ly)
 
     def _cache_project_path_from_image_layer(self, layer: Image) -> None:
         """Best-effort lifecycle-owned cache of project path from an image/video layer."""
@@ -706,6 +784,8 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if not layer.metadata.get("paths") and self._image_meta.paths:
             layer.metadata["paths"] = self._image_meta.paths
 
+        self._maybe_promote_config_placeholder_points_layer(layer)
+
         if root := layer.metadata.get("root"):
             update_save_history(root)
 
@@ -774,6 +854,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         store = self._wire_points_layer(layer)
         if store is None:
             return PointsInsertResult.SKIPPED
+        self._maybe_promote_config_placeholder_points_layer(layer)
 
         logger.debug(
             "Setup points layer=%r allow_merge=%s metadata_keys=%s",
@@ -942,7 +1023,11 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if not self.is_empty_config_placeholder_points_layer(layer):
             return None
 
-        managed = list(self.iter_managed_points())
+        managed = [
+            (managed_ly, store)
+            for managed_ly, store in self.iter_managed_points()
+            if managed_ly is not layer and self.is_config_metadata_merge_target(managed_ly)
+        ]
         if not managed:
             return None
 

@@ -3,7 +3,6 @@ from .layer_identity import (
     LayerSaveBehavior,
     get_layer_role_from_metadata,
     get_save_behavior_from_metadata,
-    save_behavior_disallows_deletions,
     set_layer_identity_metadata,
     set_layer_role_metadata,
 )
@@ -27,7 +26,6 @@ __all__ = [
     "LayerSaveBehavior",
     "get_layer_role_from_metadata",
     "get_save_behavior_from_metadata",
-    "save_behavior_disallows_deletions",
     "set_layer_identity_metadata",
     "set_layer_role_metadata",
 ]
