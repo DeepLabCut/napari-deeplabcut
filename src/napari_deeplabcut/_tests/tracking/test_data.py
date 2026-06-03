@@ -6,6 +6,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from napari_deeplabcut.core.layer_lifecycle.identity import (
+    DLC_LAYER_ROLE_KEY,
+    DLC_SAVE_BEHAVIOR_KEY,
+    LayerRole,
+)
 from napari_deeplabcut.tracking.core.data import (
     TRACKING_LAYER_METADATA_KEY,
     TRACKING_SCHEMA_VERSION,
@@ -357,10 +362,11 @@ def test_build_tracking_result_metadata_preserves_existing_metadata_and_adds_tra
     assert out["header"] == {"columns": ["dummy"]}
 
     info = out[TRACKING_LAYER_METADATA_KEY]
+    tracker = "Cotracker 3"
     assert info == {
         "schema_version": TRACKING_SCHEMA_VERSION,
-        "kind": "cotracker-result",
-        "tracker_name": "Cotracker 3",
+        "kind": f"{tracker}-result",
+        "tracker_name": tracker,
         "source_layer_name": "CollectedData_me",
         "query_frame": 5,
     }
@@ -386,16 +392,17 @@ def test_build_tracking_result_metadata_returns_deep_copy():
 
 
 def test_build_tracking_result_metadata_handles_none_source_metadata():
+    tracker = "cotracker"
     out = build_tracking_result_metadata(
         None,
-        tracker_name="Cotracker 3",
+        tracker_name=tracker,
         source_layer_name="CollectedData_me",
         query_frame=0,
     )
 
     assert isinstance(out, dict)
     assert TRACKING_LAYER_METADATA_KEY in out
-    assert out[TRACKING_LAYER_METADATA_KEY]["kind"] == "cotracker-result"
+    assert out[TRACKING_LAYER_METADATA_KEY]["kind"] == f"{tracker}-result"
 
 
 # -----------------------------------------------------------------------------#
@@ -404,11 +411,12 @@ def test_build_tracking_result_metadata_handles_none_source_metadata():
 
 
 def test_is_tracking_result_points_layer_returns_true_for_expected_metadata():
+    tracker = "cotracker"
     layer = SimpleNamespace(
         metadata={
             TRACKING_LAYER_METADATA_KEY: {
-                "kind": "cotracker-result",
-                "tracker_name": "Cotracker 3",
+                "kind": f"{tracker}-result",
+                "tracker_name": tracker,
             }
         }
     )
@@ -426,3 +434,26 @@ def test_is_tracking_result_points_layer_returns_false_when_metadata_missing_or_
     assert is_tracking_result_points_layer(wrong_kind) is False
     assert is_tracking_result_points_layer(wrong_type) is False
     assert is_tracking_result_points_layer(no_metadata) is False
+
+
+def test_build_tracking_result_metadata_tags_tracking_identity():
+    tracker = "cotracker"
+    md = build_tracking_result_metadata(
+        {
+            DLC_LAYER_ROLE_KEY: LayerRole.DLC_ANNOTATION.value,
+            "source_field": "kept",
+        },
+        tracker_name=tracker,
+        source_layer_name="CollectedData_scorer",
+        query_frame=5,
+    )
+
+    assert md["source_field"] == "kept"
+    assert md[DLC_LAYER_ROLE_KEY] == LayerRole.TRACKING_RESULT.value
+    assert DLC_SAVE_BEHAVIOR_KEY not in md
+
+    info = md[TRACKING_LAYER_METADATA_KEY]
+    assert info["kind"] == f"{tracker}-result"
+    assert info["tracker_name"] == tracker
+    assert info["source_layer_name"] == "CollectedData_scorer"
+    assert info["query_frame"] == 5
