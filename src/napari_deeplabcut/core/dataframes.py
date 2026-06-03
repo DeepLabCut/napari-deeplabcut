@@ -581,28 +581,22 @@ def keypoint_deletions(df_old: pd.DataFrame, df_new: pd.DataFrame) -> pd.DataFra
     Return a keypoint-level boolean table for destructive deletions.
 
     True means:
-
         old keypoint has at least one stored value,
         new save-scope keypoint has no stored value.
-
-    Important
-    ---------
-    df_new should already be expanded with complete_df_for_save().
-
-    That means absent napari Points inside the editable save scope are represented
-    as explicit NaN. Rows outside df_new's scope are ignored, so labels from
-    other frames/images are not incorrectly reported as deletions.
     """
     scoped_new = harmonize_keypoint_column_index(df_new.copy())
     guarantee_multiindex_rows(scoped_new)
 
-    old_scoped, new_scoped = align_old_new(df_old, scoped_new)
+    new_scope, old_scope = harmonize_keypoint_row_index(scoped_new, df_old)
 
-    # Restrict deletion detection to exactly the new save scope.
-    # This avoids falsely treating old rows outside the loaded/current scope
-    # as deleted.
-    old_scoped = old_scoped.loc[scoped_new.index, scoped_new.columns]
-    new_scoped = new_scoped.loc[scoped_new.index, scoped_new.columns]
+    new_scope = harmonize_keypoint_column_index(new_scope)
+    old_scope = harmonize_keypoint_column_index(old_scope)
+
+    scope_index = new_scope.index
+    scope_columns = new_scope.columns
+
+    old_scoped = old_scope.reindex(index=scope_index, columns=scope_columns)
+    new_scoped = new_scope.reindex(index=scope_index, columns=scope_columns)
 
     key_levels = _keypoint_group_levels(old_scoped.columns)
 
