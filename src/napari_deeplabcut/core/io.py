@@ -63,6 +63,7 @@ from napari_deeplabcut.core.dataframes import (
     set_df_scorer,
 )
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
+from napari_deeplabcut.core.layer_lifecycle.identity import tag_config_placeholder_metadata
 from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
 from napari_deeplabcut.core.metadata import attach_source_and_io_to_layer_kwargs, parse_points_metadata
 from napari_deeplabcut.core.project_paths import (
@@ -123,6 +124,8 @@ def read_config(configname: str) -> list[LayerData]:
     if conversion_tables is not None:
         super_animal, table = conversion_tables.popitem()
         layer_props["metadata"]["tables"] = {super_animal: table}
+
+    layer_props["metadata"] = tag_config_placeholder_metadata(layer_props["metadata"], config_path=configname)
     return [(None, layer_props, "points")]
 
 

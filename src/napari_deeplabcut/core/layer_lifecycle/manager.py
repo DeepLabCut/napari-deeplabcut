@@ -34,6 +34,13 @@ from ...tracking.core.data import TRACKING_LAYER_METADATA_KEY, is_tracking_resul
 from ...ui.base_widget._qt_timers import OwnedTimersMixin
 from ...ui.cropping import resolve_project_path_from_image_layer
 from ...utils.debug import log_timing
+from .identity import (
+    FrameLayerType,
+    LayerRole,
+    LayerSaveBehavior,
+    get_layer_role_from_metadata,
+    get_save_behavior_from_metadata,
+)
 from .merge import PlaceholderConfigAction, PlaceholderConfigDecisionProvider
 from .registry import (
     ClearedRegistryEntry,
@@ -221,23 +228,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         """Schedule adoption of existing layers after the event loop starts."""
         self._schedule_once("initial_adopt", 0, self.adopt_existing_layers)
 
-    def _dlc_meta_for_layer(self, layer: Layer) -> dict | None:
-        md = layer.metadata or {}
-        if not isinstance(md, dict):
-            return None
-        payload = md.get("dlc", None)
-        return payload if isinstance(payload, dict) else None
-
-    def is_dlc_session_image_layer(self, layer: Image) -> bool:
-        payload = self._dlc_meta_for_layer(layer)
-        if not payload:
-            return False
-
-        role = payload.get("session_role", None)
-        ctx = payload.get("project_context", None)
-
-        return role in {"image", "video"} and isinstance(ctx, dict) and bool(ctx)
-
     def is_plottable_traj_layer(self, layer: Any) -> bool:
         """
         Return True if a Points layer should be offered to the trajectory plot.
@@ -396,6 +386,39 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         except Exception:
             return None
 
+    # ---- Layer identity helpers ------------------------------------------------------------
+    @staticmethod
+    def layer_role_from_metadata(layer: Any) -> LayerRole | None:
+        if layer is None:
+            return None
+        return get_layer_role_from_metadata(getattr(layer, "metadata", {}) or {})
+
+    @staticmethod
+    def save_behavior_for_points_layer(layer: Any) -> LayerSaveBehavior:
+        """
+        Return save behavior for a Points layer.
+
+        Explicit metadata wins. Legacy config-placeholder heuristic remains as
+        fallback.
+        """
+        if layer is None or not isinstance(layer, Points):
+            return LayerSaveBehavior.REGULAR
+
+        md = layer.metadata or {}
+
+        behavior = get_save_behavior_from_metadata(md)
+        if behavior is not None:
+            return behavior
+
+        if LayerLifecycleManager.is_config_placeholder_points_layer(layer):
+            return LayerSaveBehavior.NO_DELETIONS
+
+        return LayerSaveBehavior.REGULAR
+
+    @staticmethod
+    def point_layer_disallows_deletions_on_save(layer: Any) -> bool:
+        return LayerLifecycleManager.save_behavior_for_points_layer(layer) is LayerSaveBehavior.NO_DELETIONS
+
     @staticmethod
     def is_multianimal(layer) -> bool:
         """Return True if this layer looks like a multi-animal Points layer."""
@@ -416,21 +439,28 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
     @staticmethod
     def is_config_placeholder_points_layer(layer: Points) -> bool:
-        """Return True if this looks like the temporary config placeholder layer.
+        """
+        Return True if this layer originated from config.yaml as a config placeholder.
 
-        - must be a Points layer
-        - must carry a project hint
-        - must not already be tied to image/root/paths context
-        - must not contain actual point data
+        Prefer explicit identity metadata. Fall back to the legacy empty-layer
+        heuristic for layers created before identity tagging existed.
         """
         if layer is None or not isinstance(layer, Points):
             return False
 
         md = layer.metadata or {}
+
+        if get_layer_role_from_metadata(md) is LayerRole.CONFIG_PLACEHOLDER:
+            return True
+
+        # Legacy fallback.
+        logger.warning(
+            "Using legacy fallback checks for config placeholder layer identity."
+            "Please update such that callers use the explicit identity tagging."
+        )
         if not md.get("project"):
             return False
 
-        # Real labeled/prediction layers usually carry image/root/paths context.
         if md.get("root") or md.get("paths"):
             return False
 
@@ -440,6 +470,37 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             data = np.empty((0, 3))
 
         return data.size == 0
+
+    @staticmethod
+    def dlc_meta_for_layer(layer: Layer) -> dict | None:
+        md = layer.metadata or {}
+        if not isinstance(md, dict):
+            return None
+        payload = md.get("dlc", None)
+        return payload if isinstance(payload, dict) else None
+
+    @staticmethod
+    def is_dlc_session_image_layer(layer: Image) -> bool:
+        payload = LayerLifecycleManager.dlc_meta_for_layer(layer)
+        if not payload:
+            return False
+
+        layer_role = get_layer_role_from_metadata(payload)
+        session_role = payload.get("session_role", None)
+        ctx = payload.get("project_context", None)
+
+        valid_frame_roles = {FrameLayerType.IMAGES.value, FrameLayerType.VIDEO.value}
+
+        if layer_role is not None:
+            return (
+                layer_role is LayerRole.FRAMES
+                and session_role in valid_frame_roles
+                and isinstance(ctx, dict)
+                and bool(ctx)
+            )
+
+        # Legacy fallback for layers created before explicit identity tagging.
+        return session_role in valid_frame_roles and isinstance(ctx, dict) and bool(ctx)
 
     def validate_header(self, layer: Points) -> bool:
         res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
@@ -1114,7 +1175,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         return resources
 
     # ------------------------------------------------------------------ #
-    # Tracking-result layer support                                      #
+    # Tracking results layer                                      #
     # ------------------------------------------------------------------ #
 
     def tracking_result_metadata(self, layer: Any) -> dict | None:

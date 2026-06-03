@@ -19,6 +19,11 @@ from napari_deeplabcut.core.io import (
     read_images,
     read_video,
 )
+from napari_deeplabcut.core.layer_lifecycle.identity import (
+    FrameLayerType,
+    LayerRole,
+    set_layer_role_metadata,
+)
 from napari_deeplabcut.core.project_paths import (
     infer_dlc_project_from_labeled_folder,
     infer_dlc_project_from_video_path,
@@ -31,27 +36,34 @@ logger = logging.getLogger(__name__)
 
 def _build_dlc_layer_meta(
     *,
-    session_role: str | None,
+    session_role: FrameLayerType | str | None,
     project_context: DLCProjectContext | None,
 ) -> dict:
     """
-    Build explicit DLC lifecycle metadata for image/video layers.
+    Build explicit DLC lifecycle metadata for image/video frame layers.
 
     If session_role is None or project_context is None, the layer should be
     treated as a non-session image/video by lifecycle code.
     """
-    if session_role is None or project_context is None:
+    if isinstance(session_role, FrameLayerType):
+        session_role_value = session_role.value
+    else:
+        session_role_value = session_role
+
+    if session_role_value is None or project_context is None:
         return {
             "session_role": None,
             "project_context": None,
             "session_key": None,
         }
 
-    return {
-        "session_role": session_role,
+    meta = {
+        "session_role": session_role_value,
         "project_context": project_context.model_dump(mode="python", exclude_none=True),
         "session_key": session_key_from_project_context(project_context),
     }
+
+    return set_layer_role_metadata(meta, role=LayerRole.FRAMES)
 
 
 def get_hdf_reader(path):
@@ -90,7 +102,7 @@ def get_video_reader(path):
     return partial(
         read_video,
         dlc_meta=_build_dlc_layer_meta(
-            session_role="video",
+            session_role=FrameLayerType.VIDEO,
             project_context=ctx,
         ),
     )
@@ -144,7 +156,7 @@ def get_folder_parser(path):
         read_images(
             images,
             dlc_meta=_build_dlc_layer_meta(
-                session_role="image",
+                session_role=FrameLayerType.IMAGES,
                 project_context=ctx,
             ),
         )
