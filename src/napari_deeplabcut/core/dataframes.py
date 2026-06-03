@@ -477,24 +477,19 @@ def complete_df_for_save(
     *,
     pts_meta: PointsMetadata,
     header: DLCHeaderModel,
+    allow_deletions: bool = True,
 ) -> pd.DataFrame:
     """
-    Napari Points.data contains only present/finite keypoints. If a user deletes
-    a point, that point disappears from Points.data and layer.properties. For
-    save semantics, absence inside the current editable scope must become NaN,
-    otherwise merge-on-save will preserve the old on-disk value.
+    Complete a points-derived dataframe for save.
 
-    This reindexes the dataframe to:
+    If allow_deletions=True:
+        Expand to the full editable DLC save scope. Missing keypoints become
+        explicit NaN and may clear old values during merge.
 
-    - all editable rows from pts_meta.paths, when available
-    - all expected keypoint columns from the DLC header
-
-    Goal:
-
-    - present keypoint -> finite x/y
-    - deleted/missing keypoint inside save scope -> NaN
-    - rows outside save scope are not included and can be preserved separately
-      during merge.
+    If allow_deletions=False:
+        Keep only explicitly present keypoint columns. Missing keypoints are
+        not materialized as NaN, so old saved values outside this layer's
+        explicit scope are preserved.
     """
     df_copy = df.copy()
 
@@ -502,16 +497,17 @@ def complete_df_for_save(
     df_copy = harmonize_keypoint_column_index(df_copy)
     df_copy = drop_likelihood_columns(df_copy)
 
-    target_cols = canonical_keypoint_columns_from_header(header)
-
-    # Always drop likelihood
-    coords = target_cols.get_level_values("coords").astype(str)
-    target_cols = target_cols[coords != "likelihood"]
+    if allow_deletions:
+        target_cols = canonical_keypoint_columns_from_header(header)
+        coords = target_cols.get_level_values("coords").astype(str)
+        target_cols = target_cols[coords != "likelihood"]
+    else:
+        # Partial/no-deletions mode:
+        # Do not create NaN columns for unmentioned bodyparts.
+        target_cols = df_copy.columns
 
     target_index = save_index_from_points_metadata(pts_meta)
 
-    # If we have explicit paths, they define the editable frame/image scope.
-    # Otherwise, preserve the current dataframe rows and only complete columns.
     if target_index is not None:
         df_copy = df_copy.reindex(index=target_index, columns=target_cols)
     else:
