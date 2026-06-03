@@ -22,7 +22,9 @@ from napari_deeplabcut.core.project_paths import infer_dlc_project_from_points_m
 from napari_deeplabcut.core.provenance import (
     resolve_output_path_from_metadata,
 )
-from napari_deeplabcut.core.schemas.layer_identity import save_behavior_disallows_deletions
+from napari_deeplabcut.core.schemas.layer_identity import (
+    validate_save_behavior_from_metadata,
+)
 
 
 def compute_overwrite_report_for_points_save(
@@ -50,11 +52,11 @@ def compute_overwrite_report_for_points_save(
     -------
     OverwriteConflictReport | None
         - OverwriteConflictReport if the save target is an existing GT file and
-          at least one keypoint overwrite conflict would occur.
+          at least one keypoint overwrite conflict or deletion would occur.
         - None if:
             * there is no existing GT file to merge into,
             * the destination is not GT,
-            * or no overwrite conflicts are detected.
+            * or no overwrite conflicts/deletions are detected.
 
     Raises
     ------
@@ -70,6 +72,7 @@ def compute_overwrite_report_for_points_save(
     # - core.io imports dataframe helpers and metadata parsing
 
     attrs = dlc_schemas.PointsLayerAttributesModel.model_validate(attributes or {})
+    validate_save_behavior_from_metadata(attrs.metadata)
     pts_meta: PointsMetadata = parse_points_metadata(attrs.metadata, drop_header=False)
 
     if not pts_meta.header:
@@ -95,13 +98,12 @@ def compute_overwrite_report_for_points_save(
         df_new = set_df_scorer(df_new, target_scorer)
 
     header_for_save = pts_meta.header.with_scorer(target_scorer) if target_scorer else pts_meta.header
-    allow_dels = not save_behavior_disallows_deletions(attrs.metadata)
 
     df_new = complete_df_for_save(
         df_new,
         pts_meta=pts_meta,
         header=header_for_save,
-        allow_deletions=allow_dels,
+        # allow_deletions=allow_dels,
     )
 
     # Never write back to machine sources without an explicit promotion target
@@ -159,9 +161,7 @@ def compute_overwrite_report_for_points_save(
         df_old = pd.read_hdf(out)
 
     key_conflict = keypoint_conflicts(df_old, df_new)
-    deletion_conflict = None
-    if allow_dels:
-        deletion_conflict = keypoint_deletions(df_old, df_new)
+    deletion_conflict = keypoint_deletions(df_old, df_new)
 
     report = build_overwrite_conflict_report(
         key_conflict,

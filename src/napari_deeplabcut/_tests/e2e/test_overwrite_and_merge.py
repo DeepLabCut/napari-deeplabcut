@@ -61,8 +61,8 @@ def test_config_derived_direct_save_preserves_unmentioned_existing_labels(
     assert placeholder.data is None or len(placeholder.data) == 0
 
     # The config-created layer should carry no-deletions save behavior.
-    assert placeholder.metadata.get(DLC_SAVE_BEHAVIOR_KEY) == LayerSaveBehavior.PARTIAL_UPDATE.value
-    assert keypoint_controls.layer_manager.is_config_derived_points_layer(placeholder)
+    assert placeholder.metadata.get(DLC_SAVE_BEHAVIOR_KEY) == LayerSaveBehavior.NAPARI_MANAGED.value
+    assert keypoint_controls.layer_manager.is_config_placeholder_points_layer(placeholder)
     assert keypoint_controls.layer_manager.is_empty_config_placeholder_points_layer(placeholder)
 
     # Open folder -> images + GT points layer.
@@ -81,9 +81,9 @@ def test_config_derived_direct_save_preserves_unmentioned_existing_labels(
     placeholder.add(np.array([0.0, 33.0, 44.0], dtype=float))
 
     assert not keypoint_controls.layer_manager.is_empty_points_layer(placeholder)
-    assert keypoint_controls.layer_manager.is_config_derived_points_layer(placeholder)
+    assert keypoint_controls.layer_manager.is_config_placeholder_points_layer(placeholder)
     assert (
-        keypoint_controls.layer_manager.save_behavior_for_points_layer(placeholder) is LayerSaveBehavior.PARTIAL_UPDATE
+        keypoint_controls.layer_manager.save_behavior_for_points_layer(placeholder) is LayerSaveBehavior.NAPARI_MANAGED
     )
 
     # Direct writer regression: make sure selected=True really saves only the placeholder.

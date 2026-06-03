@@ -72,8 +72,9 @@ from napari_deeplabcut.core.project_paths import (
 )
 from napari_deeplabcut.core.provenance import resolve_output_path_from_metadata
 from napari_deeplabcut.core.schemas.layer_identity import (
-    save_behavior_disallows_deletions,
     tag_config_placeholder_metadata,
+    tag_dlc_annotation_metadata,
+    validate_plugin_managed_dlc_annotation_metadata,
 )
 from napari_deeplabcut.utils.debug import log_timing
 
@@ -255,6 +256,8 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     layer_props["metadata"]["root"] = str(file.parent)
     layer_props["metadata"]["name"] = layer_props["name"]
     layer_props["metadata"]["config_colormap"] = config_colormap
+    # Add layer identity tag
+    layer_props["metadata"] = tag_dlc_annotation_metadata(layer_props["metadata"])
 
     # Attach provenance. If explicit kind provided, we store it directly.
     if kind is not None:
@@ -433,8 +436,8 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     This function writes DLC keypoints to .h5 (and companion .csv).
     """
     attrs = dlc_schemas.PointsLayerAttributesModel.model_validate(attributes or {})
+    validate_plugin_managed_dlc_annotation_metadata(attrs.metadata)
     pts_meta: PointsMetadata = parse_points_metadata(attrs.metadata, drop_header=False)
-    disallow_dels = save_behavior_disallows_deletions(attrs.metadata)
     if not pts_meta.header:
         raise ValueError("Layer metadata must include a valid DLC header to write keypoints.")
 
@@ -478,7 +481,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     header_for_write = pts_meta.header.with_scorer(target_scorer) if target_scorer else pts_meta.header
     header_for_write = _drop_likelihood_from_header(header_for_write)
 
-    df_new = complete_df_for_save(df_new, pts_meta=pts_meta, header=header_for_write, allow_deletions=not disallow_dels)
+    df_new = complete_df_for_save(df_new, pts_meta=pts_meta, header=header_for_write)
 
     # Never write back to machine sources without an explicit promotion target
     if not out_path and source_kind == AnnotationKind.MACHINE:

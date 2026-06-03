@@ -42,6 +42,9 @@ from ...core.provenance import (
 )
 from ...core.schemas.layer_identity import (
     DLC_SAVE_BEHAVIOR_KEY,
+    LayerRole,
+    LayerSaveBehavior,
+    get_layer_role_from_metadata,
 )
 from ...core.sidecar import get_default_scorer, set_default_scorer
 from ...core.trails import safe_folder_anchor_from_points_layer
@@ -174,24 +177,22 @@ class PointsLayerSaveWorkflow:
         if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
             layer = selected_layers[0]
 
-            if self._is_tracking_result_points_layer(layer):
-                return self._save_multiple_layers(selected=selected, selected_layers=selected_layers)
-
-            if self.layer_manager.validate_header(layer):
+            if self._is_plugin_owned_dlc_points_layer(layer):
                 if self.layer_manager.is_empty_points_layer(layer):
                     QMessageBox.information(
                         self.parent,
                         "Nothing to save",
-                        "This layer is empty and has no annotations to save.",
+                        "This DLC annotation layer is empty and has nothing to save.",
                         QMessageBox.Ok,
                     )
                     return SaveOutcome(saved=False)
 
-            if self._is_saveable_dlc_points_layer(layer):
                 return self._save_single_points_layer(layer)
 
-        # Tracking-result or foreign/generic Points layer:
-        # do not force DLC save routing; use generic napari save instead.
+            # Tracking-result or foreign/generic Points layer:
+            # do not force DLC save routing; use generic napari save instead.
+            return self._save_multiple_layers(selected=selected, selected_layers=selected_layers)
+
         return self._save_multiple_layers(selected=selected, selected_layers=selected_layers)
 
     # ------------------------------------------------------------------ #
@@ -200,14 +201,15 @@ class PointsLayerSaveWorkflow:
     def _is_tracking_result_points_layer(self, layer) -> bool:
         return isinstance(layer, Points) and self.layer_manager.is_tracking_result_layer(layer)
 
-    def _is_saveable_dlc_points_layer(self, layer) -> bool:
+    def _is_plugin_owned_dlc_points_layer(self, layer) -> bool:
         """
-        Return True only for real DLC points layers that may be saved back
-        to a DeepLabCut project (.h5 / .csv workflow).
+        Return True only for Points layers whose DLC save workflow is owned by
+        napari-deeplabcut.
 
         Excludes:
         - tracking-result layers
-        - empty/invalid/non-DLC Points layers
+        - config-placeholder layers
+        - napari-managed / foreign / generic Points layers
         """
         if not isinstance(layer, Points):
             return False
@@ -215,7 +217,12 @@ class PointsLayerSaveWorkflow:
         if self.layer_manager.is_tracking_result_layer(layer):
             return False
 
-        if self.layer_manager.is_empty_points_layer(layer):
+        role = get_layer_role_from_metadata(layer.metadata or {})
+        if role is not LayerRole.DLC_ANNOTATION:
+            return False
+
+        behavior = self.layer_manager.save_behavior_for_points_layer(layer)
+        if behavior is not LayerSaveBehavior.PLUGIN_MANAGED:
             return False
 
         if not self.layer_manager.validate_header(layer):
@@ -241,10 +248,10 @@ class PointsLayerSaveWorkflow:
     # ------------------------------------------------------------------ #
     def _apply_layer_save_identity_to_metadata(self, layer: Points, metadata: dict) -> dict:
         """
-        Ensure save-time metadata carries the manager's save behavior decision.
+        Ensure save-time metadata carries the manager's save ownership decision.
 
         The writer and conflict preflight both consume this metadata, so this keeps
-        UI-preflight and actual write semantics aligned.
+        UI-preflight and actual write routing aligned.
         """
         md = dict(metadata or {})
 
@@ -342,7 +349,50 @@ class PointsLayerSaveWorkflow:
     # ------------------------------------------------------------------ #
     # Multi-layer / generic save                                         #
     # ------------------------------------------------------------------ #
+    def _layers_for_save_request(self, *, selected: bool, selected_layers: list) -> list:
+        if selected:
+            return list(selected_layers)
+        return list(self.viewer.layers)
+
+    def _plugin_owned_points_layers_in_save_request(
+        self,
+        *,
+        selected: bool,
+        selected_layers: list,
+    ) -> list[Points]:
+        layers = self._layers_for_save_request(
+            selected=selected,
+            selected_layers=selected_layers,
+        )
+        return [
+            layer for layer in layers if isinstance(layer, Points) and self._is_plugin_owned_dlc_points_layer(layer)
+        ]
+
     def _save_multiple_layers(self, *, selected: bool, selected_layers: list) -> SaveOutcome:
+        plugin_owned_points = self._plugin_owned_points_layers_in_save_request(
+            selected=selected,
+            selected_layers=selected_layers,
+        )
+        if plugin_owned_points:
+            names = ", ".join(getattr(layer, "name", "Unnamed layer") for layer in plugin_owned_points[:5])
+            if len(plugin_owned_points) > 5:
+                names += ", ..."
+
+            QMessageBox.information(
+                self.parent,
+                "DLC annotation layers require plugin save",
+                (
+                    "One or more selected layers are plugin-managed DLC annotation layers:\n\n"
+                    f"{names}\n\n"
+                    "These layers require the napari-deeplabcut save workflow so overwrite "
+                    "and deletion checks can run before writing.\n\n"
+                    "Please save DLC annotation layers one at a time. Tracking results and "
+                    "generic napari layers can still be saved with napari's generic save."
+                ),
+                QMessageBox.Ok,
+            )
+            return SaveOutcome(saved=False)
+
         dlg = QFileDialog()
         hist = get_save_history()
         dlg.setHistory(hist)
@@ -354,7 +404,7 @@ class PointsLayerSaveWorkflow:
 
         filename, _ = dlg.getSaveFileName(
             caption=f"Save {'selected' if selected else 'all'} layers",
-            dir=dir_hint,  # home dir by default
+            dir=dir_hint,
         )
 
         if not filename:
@@ -366,7 +416,11 @@ class PointsLayerSaveWorkflow:
         if selected:
             candidate_layers = [ly for ly in selected_layers if isinstance(ly, Points)]
         else:
-            candidate_layers = list(self.layer_manager.managed_points_layers())
+            candidate_layers = [
+                ly
+                for ly in self.viewer.layers
+                if isinstance(ly, Points) and not self._is_plugin_owned_dlc_points_layer(ly)
+            ]
 
         if candidate_layers:
             self._persist_folder_ui_state_for_layers(candidate_layers)
