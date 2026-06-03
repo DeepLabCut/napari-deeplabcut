@@ -17,6 +17,7 @@ from napari_deeplabcut.core.dataframes import (
 )
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.io import DLC_CANONICAL_H5_KEY
+from napari_deeplabcut.core.layer_lifecycle.identity import save_behavior_disallows_deletions
 from napari_deeplabcut.core.metadata import parse_points_metadata
 from napari_deeplabcut.core.project_paths import infer_dlc_project_from_points_meta
 from napari_deeplabcut.core.provenance import (
@@ -94,11 +95,13 @@ def compute_overwrite_report_for_points_save(
         df_new = set_df_scorer(df_new, target_scorer)
 
     header_for_save = pts_meta.header.with_scorer(target_scorer) if target_scorer else pts_meta.header
+    allow_dels = not save_behavior_disallows_deletions(attrs.metadata)
 
     df_new = complete_df_for_save(
         df_new,
         pts_meta=pts_meta,
         header=header_for_save,
+        allow_deletions=allow_dels,
     )
 
     # Never write back to machine sources without an explicit promotion target
@@ -156,7 +159,9 @@ def compute_overwrite_report_for_points_save(
         df_old = pd.read_hdf(out)
 
     key_conflict = keypoint_conflicts(df_old, df_new)
-    deletion_conflict = keypoint_deletions(df_old, df_new)
+    deletion_conflict = None
+    if allow_dels:
+        deletion_conflict = keypoint_deletions(df_old, df_new)
 
     report = build_overwrite_conflict_report(
         key_conflict,

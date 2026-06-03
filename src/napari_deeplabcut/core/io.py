@@ -63,7 +63,10 @@ from napari_deeplabcut.core.dataframes import (
     set_df_scorer,
 )
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
-from napari_deeplabcut.core.layer_lifecycle.identity import tag_config_placeholder_metadata
+from napari_deeplabcut.core.layer_lifecycle.identity import (
+    save_behavior_disallows_deletions,
+    tag_config_placeholder_metadata,
+)
 from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
 from napari_deeplabcut.core.metadata import attach_source_and_io_to_layer_kwargs, parse_points_metadata
 from napari_deeplabcut.core.project_paths import (
@@ -431,6 +434,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     """
     attrs = dlc_schemas.PointsLayerAttributesModel.model_validate(attributes or {})
     pts_meta: PointsMetadata = parse_points_metadata(attrs.metadata, drop_header=False)
+    disallow_dels = save_behavior_disallows_deletions(attrs.metadata)
     if not pts_meta.header:
         raise ValueError("Layer metadata must include a valid DLC header to write keypoints.")
 
@@ -474,7 +478,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
     header_for_write = pts_meta.header.with_scorer(target_scorer) if target_scorer else pts_meta.header
     header_for_write = _drop_likelihood_from_header(header_for_write)
 
-    df_new = complete_df_for_save(df_new, pts_meta=pts_meta, header=header_for_write)
+    df_new = complete_df_for_save(df_new, pts_meta=pts_meta, header=header_for_write, allow_deletions=not disallow_dels)
 
     # Never write back to machine sources without an explicit promotion target
     if not out_path and source_kind == AnnotationKind.MACHINE:

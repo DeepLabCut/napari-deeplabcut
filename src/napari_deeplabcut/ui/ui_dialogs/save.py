@@ -9,6 +9,7 @@ from html import escape
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 from napari.layers import Image, Points
 from napari.utils.history import get_save_history
 from qtpy.QtCore import Qt
@@ -17,6 +18,9 @@ from qtpy.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 from ...core.conflicts import compute_overwrite_report_for_points_save
 from ...core.errors import MissingProvenanceError
 from ...core.io import is_video
+from ...core.layer_lifecycle.identity import (
+    DLC_SAVE_BEHAVIOR_KEY,
+)
 from ...core.layers import is_machine_layer
 from ...core.metadata import (
     MergePolicy,
@@ -94,6 +98,21 @@ def _replace_layer_metadata_in_place(layer: Points, metadata: dict) -> None:
 
     current.clear()
     current.update(metadata or {})
+
+
+def _apply_layer_save_identity_to_metadata(self, layer: Points, metadata: dict) -> dict:
+    """
+    Ensure save-time metadata carries the manager's save behavior decision.
+
+    The writer and conflict preflight both consume this metadata, so this keeps
+    UI-preflight and actual write semantics aligned.
+    """
+    md = dict(metadata or {})
+
+    behavior = self.layer_manager.save_behavior_for_points_layer(layer)
+    md[DLC_SAVE_BEHAVIOR_KEY] = behavior.value
+
+    return md
 
 
 @contextmanager
@@ -200,7 +219,9 @@ class PointsLayerSaveWorkflow:
             return False
 
         if self.layer_manager.is_config_placeholder_points_layer(layer):
-            return False
+            data = np.asarray(layer.data) if layer.data is not None else np.empty((0, 3))
+            if data.size == 0:
+                return False
 
         if not self.layer_manager.validate_header(layer):
             return False
@@ -245,6 +266,7 @@ class PointsLayerSaveWorkflow:
 
             base_metadata = overridden_metadata if overridden_metadata is not None else dict(layer.metadata or {})
             save_metadata = self._enrich_points_metadata_for_save(layer, base_metadata)
+            save_metadata = _apply_layer_save_identity_to_metadata(layer, save_metadata)
 
             if self._is_unsupported_direct_video_label_save(layer, save_metadata):
                 self.logger.debug(
