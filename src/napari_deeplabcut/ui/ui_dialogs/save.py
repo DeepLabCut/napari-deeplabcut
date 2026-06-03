@@ -40,7 +40,7 @@ from ...core.provenance import (
     requires_gt_promotion,
     suggest_human_placeholder,
 )
-from ...core.schemas.identity import (
+from ...core.schemas.layer_identity import (
     DLC_SAVE_BEHAVIOR_KEY,
 )
 from ...core.sidecar import get_default_scorer, set_default_scorer
