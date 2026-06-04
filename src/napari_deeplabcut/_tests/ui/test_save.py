@@ -52,6 +52,15 @@ class DummyLayerManager:
     def managed_points_layers(self):
         return tuple(self._managed_points)
 
+    def prepare_points_layer_for_plugin_save(self, layer):
+        return False
+
+    def is_config_placeholder_points_layer(self, layer):
+        return False
+
+    def is_tracking_result_layer(self, layer):
+        return False
+
 
 class DummyTrailsController:
     def __init__(self):

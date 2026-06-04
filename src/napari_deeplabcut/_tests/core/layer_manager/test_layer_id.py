@@ -134,7 +134,6 @@ def test_config_placeholder_without_save_context_is_not_promoted(
 
 def test_frames_first_then_config_placeholder_promotes_after_wiring(
     qtbot,
-    fake_store,
     monkeypatch,
     make_real_header_factory,
 ):
@@ -167,7 +166,6 @@ def test_frames_first_then_config_placeholder_promotes_after_wiring(
 
 def test_config_placeholder_first_then_frames_promotes_after_image_sync(
     qtbot,
-    fake_store,
     monkeypatch,
     make_real_header_factory,
 ):

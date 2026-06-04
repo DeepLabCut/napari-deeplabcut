@@ -10,6 +10,7 @@ from napari_deeplabcut.core.schemas.layer_identity import (
     DLC_LAYER_ROLE_KEY,
     DLC_SAVE_BEHAVIOR_KEY,
     LayerRole,
+    LayerSaveBehavior,
 )
 from napari_deeplabcut.tracking.core.data import (
     TRACKING_LAYER_METADATA_KEY,
@@ -451,7 +452,7 @@ def test_build_tracking_result_metadata_tags_tracking_identity():
 
     assert md["source_field"] == "kept"
     assert md[DLC_LAYER_ROLE_KEY] == LayerRole.TRACKING_RESULT.value
-    assert DLC_SAVE_BEHAVIOR_KEY not in md
+    assert md[DLC_SAVE_BEHAVIOR_KEY] == LayerSaveBehavior.NAPARI_MANAGED.value
 
     info = md[TRACKING_LAYER_METADATA_KEY]
     assert info["kind"] == TRACKING_RESULT_TYPE
