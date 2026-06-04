@@ -17,7 +17,7 @@ from napari_deeplabcut.core.io import (
 from napari_deeplabcut.core.schemas.layer_identity import tag_dlc_annotation_metadata
 
 
-def _tag_plugin_managed_dlc_annotation(attrs: dict) -> None:
+def _tag_plugin_managed_dlc_annotation(attrs: dict) -> dict:
     """Tag attrs['metadata'] as eligible for the plugin DLC annotation writer."""
     tagged = tag_dlc_annotation_metadata(attrs.get("metadata"))
     return tagged

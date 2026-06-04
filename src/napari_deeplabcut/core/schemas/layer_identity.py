@@ -259,8 +259,8 @@ def tag_config_placeholder_metadata(
     """
     md = set_layer_role_metadata(metadata, role=LayerRole.CONFIG_PLACEHOLDER)
 
-    # Do not write PARTIAL_UPDATE here by default. Config-placeholder specialness
-    # should be lifecycle/session interpretation, not a sticky save behavior.
+    # Config-placeholder special case should be lifecycle/session interpretation,
+    # not a sticky save behavior.
     md.pop(DLC_SAVE_BEHAVIOR_KEY, None)
 
     md[DLC_SOURCE_CONFIG_KEY] = str(Path(config_path).expanduser().resolve(strict=False))

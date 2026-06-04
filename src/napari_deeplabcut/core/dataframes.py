@@ -503,9 +503,6 @@ def complete_df_for_save(
         target_cols = target_cols[coords != "likelihood"]
         target_index = save_index_from_points_metadata(pts_meta)
     else:
-        # PARTIAL_UPDATE:
-        # Do not materialize non-existent bodyparts or rows.
-        # Missing keypoints/images mean "not provided by this layer", not deletion.
         target_cols = df_copy.columns
         target_index = None
 
