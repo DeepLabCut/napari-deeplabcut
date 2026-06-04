@@ -382,9 +382,7 @@ class PointsLayerSaveWorkflow:
             selected_layers=selected_layers,
         )
         return [
-            layer
-            for layer in layers
-            if isinstance(layer, Points) and self.layer_manager.prepare_points_layer_for_plugin_save(layer)
+            layer for layer in layers if isinstance(layer, Points) and self._is_plugin_owned_dlc_points_layer(layer)
         ]
 
     def _save_multiple_layers(self, *, selected: bool, selected_layers: list) -> SaveOutcome:
