@@ -318,8 +318,13 @@ def test_deletion_warning_triggers_when_existing_keypoint_is_removed(
     keypoint_controls._save_layers_dialog(selected=True)
     qtbot.wait(200)
 
-    assert len(overwrite_confirm.calls) == 1
-    assert overwrite_confirm.calls[0].get("n_deletions", 0) >= 1
+    call = overwrite_confirm.calls[0]
+    assert call["n_deletions"] >= 1
+
+    deleted = []
+    for entry in call["entries"]:
+        deleted.extend(getattr(entry, "deleted_keypoints", ()) or ())
+    assert "bodypart1" in deleted
 
     post = pd.read_hdf(h5_path, key="df_with_missing")
     assert np.isnan(_get_coord_from_df(post, "bodypart1", "x"))
