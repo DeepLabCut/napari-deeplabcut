@@ -7,7 +7,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from napari_deeplabcut.core.schemas.layer_identity import (
+    LayerRole,
+    get_layer_role_from_metadata,
+    tag_tracking_result_metadata,
+)
+
 TRACKING_LAYER_METADATA_KEY = "ndlc_tracking"
+TRACKING_RESULT_TYPE = "tracking-result"
 TRACKING_SCHEMA_VERSION = 1
 
 
@@ -172,9 +179,10 @@ def build_tracking_result_metadata(
     metadata around as much as possible.
     """
     md = deepcopy(source_metadata or {})
+    md = tag_tracking_result_metadata(md)
     md[TRACKING_LAYER_METADATA_KEY] = {
         "schema_version": TRACKING_SCHEMA_VERSION,
-        "kind": "cotracker-result",
+        "kind": TRACKING_RESULT_TYPE,
         "tracker_name": str(tracker_name),
         "source_layer_name": str(source_layer_name),
         "query_frame": int(query_frame),
@@ -184,5 +192,10 @@ def build_tracking_result_metadata(
 
 def is_tracking_result_points_layer(layer) -> bool:
     md = getattr(layer, "metadata", {}) or {}
+
+    if get_layer_role_from_metadata(md) is LayerRole.TRACKING_RESULT:
+        return True
+
+    # Legacy fallback.
     info = md.get(TRACKING_LAYER_METADATA_KEY)
-    return isinstance(info, dict) and info.get("kind") == "cotracker-result"
+    return isinstance(info, dict) and info.get("kind") == TRACKING_RESULT_TYPE

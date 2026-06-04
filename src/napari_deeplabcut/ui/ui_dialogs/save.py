@@ -40,6 +40,12 @@ from ...core.provenance import (
     requires_gt_promotion,
     suggest_human_placeholder,
 )
+from ...core.schemas.layer_identity import (
+    DLC_SAVE_BEHAVIOR_KEY,
+    LayerRole,
+    LayerSaveBehavior,
+    get_layer_role_from_metadata,
+)
 from ...core.sidecar import get_default_scorer, set_default_scorer
 from ...core.trails import safe_folder_anchor_from_points_layer
 from ..dialogs import (
@@ -170,28 +176,57 @@ class PointsLayerSaveWorkflow:
 
         if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
             layer = selected_layers[0]
-            if self._is_saveable_dlc_points_layer(layer):
+
+            if self.layer_manager.prepare_points_layer_for_plugin_save(layer):
+                # Do not reject empty plugin-owned DLC annotation layers here.
+                # Empty plugin-owned annotation layers may represent a
+                # delete-all operation in the layer. The overwrite/deletion
+                # preflight must decide whether this is safe and ask the user before writing.
                 return self._save_single_points_layer(layer)
 
-        # Tracking-result or foreign/generic Points layer:
-        # do not force DLC save routing; use generic napari save instead.
+            if self.layer_manager.is_config_placeholder_points_layer(layer):
+                placeholder_metadata = dict(layer.metadata or {})
+                placeholder_metadata = self._enrich_points_metadata_for_save(layer, placeholder_metadata)
+
+                if not self.layer_manager.is_empty_points_layer(layer) and self._is_unsupported_direct_video_label_save(
+                    layer, placeholder_metadata
+                ):
+                    self.logger.debug(
+                        "Save aborted due to unsupported direct video + config placeholder case. Layer=%r",
+                        getattr(layer, "name", layer),
+                    )
+                    self._warn_unsupported_direct_video_label_save(layer, placeholder_metadata)
+                    return SaveOutcome(saved=False)
+
+                QMessageBox.information(
+                    self.parent,
+                    "Nothing to save",
+                    (
+                        "This config-created keypoints layer is still an empty placeholder "
+                        "or does not have enough frame/save context to be saved as DLC annotations."
+                    ),
+                    QMessageBox.Ok,
+                )
+                return SaveOutcome(saved=False)
+
+            # Tracking-result or foreign/generic Points layer:
+            # do not force DLC save routing; use generic napari save instead.
+            return self._save_multiple_layers(selected=selected, selected_layers=selected_layers)
+
         return self._save_multiple_layers(selected=selected, selected_layers=selected_layers)
 
     # ------------------------------------------------------------------ #
     # Pre-save checks of layer identity                                  #
     # ------------------------------------------------------------------ #
-    def _is_tracking_result_points_layer(self, layer) -> bool:
-        return isinstance(layer, Points) and self.layer_manager.is_tracking_result_layer(layer)
-
-    def _is_saveable_dlc_points_layer(self, layer) -> bool:
+    def _is_plugin_owned_dlc_points_layer(self, layer) -> bool:
         """
-        Return True only for real DLC points layers that may be saved back
-        to a DeepLabCut project (.h5 / .csv workflow).
+        Return True only for Points layers whose DLC save workflow is owned by
+        napari-deeplabcut.
 
         Excludes:
         - tracking-result layers
-        - config placeholder layers
-        - invalid/non-DLC Points layers
+        - config-placeholder layers
+        - napari-managed / foreign / generic Points layers
         """
         if not isinstance(layer, Points):
             return False
@@ -199,7 +234,12 @@ class PointsLayerSaveWorkflow:
         if self.layer_manager.is_tracking_result_layer(layer):
             return False
 
-        if self.layer_manager.is_config_placeholder_points_layer(layer):
+        role = get_layer_role_from_metadata(layer.metadata or {})
+        if role is not LayerRole.DLC_ANNOTATION:
+            return False
+
+        behavior = self.layer_manager.save_behavior_for_points_layer(layer)
+        if behavior is not LayerSaveBehavior.PLUGIN_MANAGED:
             return False
 
         if not self.layer_manager.validate_header(layer):
@@ -223,6 +263,19 @@ class PointsLayerSaveWorkflow:
     # ------------------------------------------------------------------ #
     # Single-layer points save                                           #
     # ------------------------------------------------------------------ #
+    def _apply_layer_save_identity_to_metadata(self, layer: Points, metadata: dict) -> dict:
+        """
+        Ensure save-time metadata carries the manager's save ownership decision.
+
+        The writer and conflict preflight both consume this metadata, so this keeps
+        UI-preflight and actual write routing aligned.
+        """
+        md = dict(metadata or {})
+
+        behavior = self.layer_manager.save_behavior_for_points_layer(layer)
+        md[DLC_SAVE_BEHAVIOR_KEY] = behavior.value
+
+        return md
 
     def _save_single_points_layer(self, layer: Points) -> SaveOutcome:
         ok = self._ensure_promotion_save_target(layer)
@@ -245,6 +298,7 @@ class PointsLayerSaveWorkflow:
 
             base_metadata = overridden_metadata if overridden_metadata is not None else dict(layer.metadata or {})
             save_metadata = self._enrich_points_metadata_for_save(layer, base_metadata)
+            save_metadata = self._apply_layer_save_identity_to_metadata(layer, save_metadata)
 
             if self._is_unsupported_direct_video_label_save(layer, save_metadata):
                 self.logger.debug(
@@ -312,7 +366,77 @@ class PointsLayerSaveWorkflow:
     # ------------------------------------------------------------------ #
     # Multi-layer / generic save                                         #
     # ------------------------------------------------------------------ #
+    def _layers_for_save_request(self, *, selected: bool, selected_layers: list) -> list:
+        if selected:
+            return list(selected_layers)
+        return list(self.viewer.layers)
+
+    def _plugin_owned_points_layers_in_save_request(
+        self,
+        *,
+        selected: bool,
+        selected_layers: list,
+    ) -> list[Points]:
+        layers = self._layers_for_save_request(
+            selected=selected,
+            selected_layers=selected_layers,
+        )
+        return [
+            layer for layer in layers if isinstance(layer, Points) and self._is_plugin_owned_dlc_points_layer(layer)
+        ]
+
     def _save_multiple_layers(self, *, selected: bool, selected_layers: list) -> SaveOutcome:
+        plugin_owned_points = self._plugin_owned_points_layers_in_save_request(
+            selected=selected,
+            selected_layers=selected_layers,
+        )
+        if plugin_owned_points:
+            names = ", ".join(getattr(layer, "name", "Unnamed layer") for layer in plugin_owned_points[:5])
+            if len(plugin_owned_points) > 5:
+                names += ", ..."
+
+            QMessageBox.information(
+                self.parent,
+                "DLC annotation layers require plugin save",
+                (
+                    "One or more selected layers are plugin-managed DLC annotation layers:\n\n"
+                    f"{names}\n\n"
+                    "These layers require the napari-deeplabcut save workflow so overwrite "
+                    "and deletion checks can run before writing.\n\n"
+                    "Please save DLC annotation layers one at a time. Tracking results and "
+                    "generic napari layers can still be saved with napari's generic save."
+                ),
+                QMessageBox.Ok,
+            )
+            return SaveOutcome(saved=False)
+
+        config_placeholders = [
+            layer
+            for layer in self._layers_for_save_request(
+                selected=selected,
+                selected_layers=selected_layers,
+            )
+            if isinstance(layer, Points) and self.layer_manager.is_config_placeholder_points_layer(layer)
+        ]
+        if config_placeholders:
+            names = ", ".join(getattr(layer, "name", "Unnamed layer") for layer in config_placeholders[:5])
+            if len(config_placeholders) > 5:
+                names += ", ..."
+
+            QMessageBox.information(
+                self.parent,
+                "Config placeholder layers cannot be saved generically",
+                (
+                    "One or more selected layers are config-created DLC placeholder layers:\n\n"
+                    f"{names}\n\n"
+                    "These layers are part of the DLC annotation workflow. Empty placeholders "
+                    "are not save targets. Placeholders with annotations and valid frame/save "
+                    "context must be promoted and saved through the napari-deeplabcut save workflow."
+                ),
+                QMessageBox.Ok,
+            )
+            return SaveOutcome(saved=False)
+
         dlg = QFileDialog()
         hist = get_save_history()
         dlg.setHistory(hist)
@@ -324,7 +448,7 @@ class PointsLayerSaveWorkflow:
 
         filename, _ = dlg.getSaveFileName(
             caption=f"Save {'selected' if selected else 'all'} layers",
-            dir=dir_hint,  # home dir by default
+            dir=dir_hint,
         )
 
         if not filename:
@@ -336,7 +460,11 @@ class PointsLayerSaveWorkflow:
         if selected:
             candidate_layers = [ly for ly in selected_layers if isinstance(ly, Points)]
         else:
-            candidate_layers = list(self.layer_manager.managed_points_layers())
+            candidate_layers = [
+                ly
+                for ly in self.viewer.layers
+                if isinstance(ly, Points) and not self._is_plugin_owned_dlc_points_layer(ly)
+            ]
 
         if candidate_layers:
             self._persist_folder_ui_state_for_layers(candidate_layers)
@@ -746,12 +874,54 @@ class PointsLayerSaveWorkflow:
             dataset_name=dataset_name,
         )
 
+        if unresolved:
+            unresolved_paths: list[str] = []
+
+            for item in unresolved:
+                # coerce_paths_to_dlc_row_keys currently reports unresolved entries
+                # as indexes into the original paths sequence. Convert those indexes
+                # back to user-facing paths for the warning message.
+                if isinstance(item, int):
+                    try:
+                        unresolved_paths.append(str(paths[item]))
+                    except Exception:
+                        unresolved_paths.append(str(item))
+                    continue
+
+                try:
+                    unresolved_paths.append(str(item))
+                except Exception:
+                    unresolved_paths.append(repr(item))
+
+            sample = "\n".join(f"• {p}" for p in unresolved_paths[:5])
+            more = ""
+            if len(unresolved_paths) > 5:
+                more = f"\n… and {len(unresolved_paths) - 5} more path(s)"
+
+            QMessageBox.warning(
+                self.parent,
+                "Cannot associate folder with DLC project",
+                (
+                    "This layer contains one or more image paths that are outside the "
+                    "folder being associated with the DLC project.\n\n"
+                    "DLC annotation files can only contain dataset row keys of the form:\n\n"
+                    "  labeled-data/<dataset>/<image>\n\n"
+                    "The save was cancelled because these path(s) could not be safely "
+                    "rewritten into that form:\n\n"
+                    f"{sample}{more}\n\n"
+                    "Move/copy those images into the folder being associated, or remove "
+                    "them from the layer before saving."
+                ),
+                QMessageBox.Ok,
+            )
+            return None, True
+
         if not maybe_confirm_dataset_path_rewrite(
             self.parent,
             project_root=project_root,
             dataset_name=dataset_name,
             n_paths=len(paths),
-            n_unresolved=len(unresolved),
+            n_unresolved=0,
         ):
             return None, True
 

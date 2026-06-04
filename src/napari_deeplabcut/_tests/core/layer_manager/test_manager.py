@@ -8,11 +8,24 @@ import pytest
 from napari.layers import Image, Points
 
 from napari_deeplabcut.core.layer_lifecycle import LayerLifecycleManager
+from napari_deeplabcut.core.layer_lifecycle.manager import PointsInsertResult
+from napari_deeplabcut.core.schemas.layer_identity import (
+    DLC_LAYER_ROLE_KEY,
+    DLC_SAVE_BEHAVIOR_KEY,
+    LayerRole,
+    LayerSaveBehavior,
+    tag_config_placeholder_metadata,
+    tag_dlc_annotation_metadata,
+    tag_tracking_result_metadata,
+)
 
 
 def mark_as_dlc_session_image(layer, *, role="image"):
     layer.metadata = dict(layer.metadata or {})
+    layer.metadata["root"] = "C:/project/labeled-data/test"
+    layer.metadata["paths"] = ["img001.png", "img002.png"]
     layer.metadata["dlc"] = {
+        "dlc_layer_role": LayerRole.FRAMES.value,
         "session_role": role,
         "project_context": {
             "root_anchor": "C:/project/labeled-data/test",
@@ -57,9 +70,18 @@ class DummyLayerList(list):
         self.events = DummyLayerEvents()
 
 
+class DummyDims:
+    def __init__(self):
+        self.set_current_step_calls = []
+
+    def set_current_step(self, axis: int, value: int):
+        self.set_current_step_calls.append((axis, value))
+
+
 class DummyViewer:
     def __init__(self, layers=()):
         self.layers = DummyLayerList(layers)
+        self.dims = DummyDims()
 
 
 class DummyImageMeta:
@@ -436,3 +458,271 @@ def test_manager_resolve_inserted_layer_prefers_value_then_index_then_source(qtb
 
     assert layer is pts
     assert layer.name == expected_name
+
+
+def make_dlc_points_with_header(
+    header,
+    *,
+    name="pts",
+    data=None,
+    project="C:/project",
+):
+    layer = Points(np.zeros((0, 3)) if data is None else data)
+    layer.name = name
+    layer.metadata = {
+        "header": header,
+        "project": project,
+    }
+    return layer
+
+
+def make_annotation_points_with_header(
+    header,
+    *,
+    name="annotation",
+    data=None,
+):
+    layer = make_dlc_points_with_header(
+        header,
+        name=name,
+        data=np.array([[0, 1, 2]], dtype=float) if data is None else data,
+    )
+    layer.metadata = tag_dlc_annotation_metadata(layer.metadata)
+    return layer
+
+
+def make_config_placeholder_points_with_header(
+    header,
+    *,
+    name="config",
+):
+    layer = make_dlc_points_with_header(
+        header,
+        name=name,
+        data=np.zeros((0, 3)),
+    )
+    layer.metadata = tag_config_placeholder_metadata(
+        layer.metadata,
+        config_path="C:/project/config.yaml",
+    )
+    return layer
+
+
+def make_tracking_points_with_header(
+    header,
+    *,
+    name="tracking",
+    data=None,
+):
+    layer = make_dlc_points_with_header(
+        header,
+        name=name,
+        data=np.array([[0, 1, 2]], dtype=float) if data is None else data,
+    )
+    layer.metadata = tag_tracking_result_metadata(layer.metadata)
+    return layer
+
+
+def test_manager_save_behavior_defaults_to_napari_managed_for_generic_points(qtbot):
+    viewer = DummyViewer()
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    pts = make_points("generic")
+
+    assert manager.save_behavior_for_points_layer(pts) is LayerSaveBehavior.NAPARI_MANAGED
+
+
+def test_manager_save_behavior_for_dlc_annotation_is_plugin_managed(
+    qtbot,
+    make_real_header_factory,
+):
+    viewer = DummyViewer()
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    header = make_real_header_factory(bodyparts=("nose", "tail"))
+    pts = make_annotation_points_with_header(header)
+
+    assert manager.save_behavior_for_points_layer(pts) is LayerSaveBehavior.PLUGIN_MANAGED
+
+
+def test_manager_save_behavior_for_config_placeholder_is_napari_managed_until_promoted(
+    qtbot,
+    make_real_header_factory,
+):
+    viewer = DummyViewer()
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    header = make_real_header_factory(bodyparts=("nose", "tail"))
+    pts = make_config_placeholder_points_with_header(header)
+
+    assert manager.save_behavior_for_points_layer(pts) is LayerSaveBehavior.NAPARI_MANAGED
+
+
+def test_config_placeholder_without_save_context_is_not_promoted(
+    qtbot,
+    make_real_header_factory,
+):
+    viewer = DummyViewer()
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    header = make_real_header_factory(bodyparts=("nose", "tail"))
+    pts = make_config_placeholder_points_with_header(header)
+
+    promoted = manager._maybe_promote_config_placeholder_points_layer(pts)
+
+    assert promoted is False
+    assert pts.metadata[DLC_LAYER_ROLE_KEY] == LayerRole.CONFIG_PLACEHOLDER.value
+    assert DLC_SAVE_BEHAVIOR_KEY not in pts.metadata
+
+
+def test_frames_first_then_config_placeholder_promotes_after_wiring(
+    qtbot,
+    fake_store,
+    monkeypatch,
+    make_real_header_factory,
+):
+    img = mark_as_dlc_session_image(make_image("frames"))
+
+    header = make_real_header_factory(bodyparts=("nose", "tail"))
+    pts = make_config_placeholder_points_with_header(header)
+
+    viewer = DummyViewer([img, pts])
+    manager = LayerLifecycleManager(viewer=viewer)
+    rec = connect_signal_recorders(manager)
+
+    monkeypatch.setattr(manager, "validate_header", lambda layer: True)
+
+    manager.on_insert(SimpleNamespace(value=img, index=0, source=viewer.layers))
+    manager.on_insert(SimpleNamespace(value=pts, index=1, source=viewer.layers))
+
+    assert manager.is_managed(pts) is True
+    assert pts.metadata["root"] == "C:/project/labeled-data/test"
+    assert pts.metadata["paths"] == ["img001.png", "img002.png"]
+
+    assert pts.metadata[DLC_LAYER_ROLE_KEY] == LayerRole.DLC_ANNOTATION.value
+    assert pts.metadata[DLC_SAVE_BEHAVIOR_KEY] == LayerSaveBehavior.PLUGIN_MANAGED.value
+
+    assert rec.setup_points.count == 1
+    req = rec.setup_points.calls[0][0]
+    assert req.layer is pts
+    assert req.layer.metadata[DLC_LAYER_ROLE_KEY] == LayerRole.DLC_ANNOTATION.value
+
+
+def test_config_placeholder_first_then_frames_promotes_after_image_sync(
+    qtbot,
+    fake_store,
+    monkeypatch,
+    make_real_header_factory,
+):
+    header = make_real_header_factory(bodyparts=("nose", "tail"))
+    pts = make_config_placeholder_points_with_header(header)
+
+    img = mark_as_dlc_session_image(make_image("frames"))
+
+    viewer = DummyViewer([pts, img])
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    monkeypatch.setattr(manager, "validate_header", lambda layer: True)
+
+    manager.on_insert(SimpleNamespace(value=pts, index=0, source=viewer.layers))
+
+    assert manager.is_managed(pts) is True
+    assert pts.metadata[DLC_LAYER_ROLE_KEY] == LayerRole.CONFIG_PLACEHOLDER.value
+    assert DLC_SAVE_BEHAVIOR_KEY not in pts.metadata
+
+    manager.on_insert(SimpleNamespace(value=img, index=1, source=viewer.layers))
+
+    assert pts.metadata["root"] == "C:/project/labeled-data/test"
+    assert pts.metadata["paths"] == ["img001.png", "img002.png"]
+
+    assert pts.metadata[DLC_LAYER_ROLE_KEY] == LayerRole.DLC_ANNOTATION.value
+    assert pts.metadata[DLC_SAVE_BEHAVIOR_KEY] == LayerSaveBehavior.PLUGIN_MANAGED.value
+
+
+def test_config_placeholder_after_annotation_merges_and_removes_placeholder(
+    qtbot,
+    fake_store,
+    monkeypatch,
+    make_real_header_factory,
+):
+    header = make_real_header_factory(bodyparts=("nose", "tail"))
+
+    annotation = make_annotation_points_with_header(
+        header,
+        name="annotation",
+        data=np.array([[0, 1, 2]], dtype=float),
+    )
+    placeholder = make_config_placeholder_points_with_header(
+        header,
+        name="config",
+    )
+
+    viewer = DummyViewer([annotation, placeholder])
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    monkeypatch.setattr(manager, "validate_header", lambda layer: True)
+
+    manager.register_managed_points_layer(annotation, FakeStore(viewer, annotation))
+
+    removed = []
+
+    def remove_layer(layer):
+        removed.append(layer)
+        if layer in viewer.layers:
+            viewer.layers.remove(layer)
+
+    monkeypatch.setattr(manager, "_remove_layer_if_present", remove_layer)
+
+    outcome = manager._setup_points_layer(placeholder, allow_merge=True)
+
+    assert outcome is PointsInsertResult.CONFIG_PLACEHOLDER_MERGED
+    assert removed == [placeholder]
+    assert placeholder not in viewer.layers
+
+    assert manager.is_managed(annotation) is True
+    assert manager.is_managed(placeholder) is False
+
+
+def test_config_metadata_merge_target_accepts_only_real_annotation_layers(
+    qtbot,
+    monkeypatch,
+    make_real_header_factory,
+):
+    header = make_real_header_factory(bodyparts=("nose", "tail"))
+
+    annotation = make_annotation_points_with_header(header, name="annotation")
+    placeholder = make_config_placeholder_points_with_header(header, name="config")
+    generic = make_points("generic")
+    tracking = make_tracking_points_with_header(header, name="tracking")
+
+    viewer = DummyViewer([annotation, placeholder, generic, tracking])
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    monkeypatch.setattr(manager, "validate_header", lambda layer: True)
+
+    # Keep this monkeypatch if manager.is_tracking_result_layer still delegates
+    # to tracking-specific metadata instead of LayerRole.TRACKING_RESULT.
+    monkeypatch.setattr(manager, "is_tracking_result_layer", lambda layer: layer is tracking)
+
+    assert manager.is_config_metadata_merge_target(annotation) is True
+    assert manager.is_config_metadata_merge_target(placeholder) is False
+    assert manager.is_config_metadata_merge_target(tracking) is False
+    assert manager.is_config_metadata_merge_target(generic) is False
+
+
+def test_tracking_result_is_napari_managed_and_not_config_merge_target(
+    qtbot,
+    monkeypatch,
+    make_real_header_factory,
+):
+    header = make_real_header_factory(bodyparts=("nose", "tail"))
+    tracking = make_tracking_points_with_header(header)
+
+    viewer = DummyViewer([tracking])
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    monkeypatch.setattr(manager, "is_tracking_result_layer", lambda layer: layer is tracking)
+
+    assert manager.save_behavior_for_points_layer(tracking) is LayerSaveBehavior.NAPARI_MANAGED
+    assert manager.is_tracking_result_layer(tracking)
+    assert not manager.is_config_metadata_merge_target(tracking)

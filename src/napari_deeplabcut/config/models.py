@@ -553,6 +553,7 @@ class PointsMetadata(BaseModel):
 class ConflictEntry:
     frame_label: str
     keypoints: tuple[str, ...]
+    deleted_keypoints: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -580,6 +581,7 @@ class OverwriteConflictReport:
     """
 
     n_overwrites: int
+    n_deletions: int
     n_frames: int
     entries: tuple[ConflictEntry, ...]
     truncated_entries: int = 0
@@ -588,7 +590,7 @@ class OverwriteConflictReport:
 
     @property
     def has_conflicts(self) -> bool:
-        return self.n_overwrites > 0
+        return self.n_overwrites > 0 or self.n_deletions > 0
 
     @property
     def details_text(self) -> str:

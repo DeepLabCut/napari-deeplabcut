@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,6 +9,8 @@ import pytest
 from napari.layers import Image, Points
 
 import napari_deeplabcut.ui.ui_dialogs.save as save_mod
+from napari_deeplabcut.core.layer_lifecycle.manager import LayerLifecycleManager
+from napari_deeplabcut.core.schemas.layer_identity import tag_config_placeholder_metadata
 
 # ---------------------------------------------------------------------
 # Lightweight test doubles
@@ -51,6 +54,32 @@ class DummyLayerManager:
 
     def managed_points_layers(self):
         return tuple(self._managed_points)
+
+    def prepare_points_layer_for_plugin_save(self, layer):
+        # Default dummy behavior: generic Points are not plugin-saveable.
+        # Individual tests can monkeypatch this if they need to assert it is not called.
+        return False
+
+    @staticmethod
+    def is_config_placeholder_points_layer(layer):
+        # Delegate to the real production predicate instead of maintaining
+        # dummy-only marker state.
+        return LayerLifecycleManager.is_config_placeholder_points_layer(layer)
+
+    @staticmethod
+    def is_empty_points_layer(layer):
+        return LayerLifecycleManager.is_empty_points_layer(layer)
+
+    @staticmethod
+    def is_tracking_result_layer(layer):
+        return LayerLifecycleManager.is_tracking_result_layer(layer)
+
+    @staticmethod
+    def save_behavior_for_points_layer(layer):
+        return LayerLifecycleManager.save_behavior_for_points_layer(layer)
+
+    def validate_header(self, layer):
+        return True
 
 
 class DummyTrailsController:
@@ -436,3 +465,51 @@ def test_enrich_metadata_falls_back_to_project_labeled_data_image_name_folder(
 
     assert out["project"] == str(project_root)
     assert out["root"] == str(dataset_dir)
+
+
+def test_save_multiple_layers_does_not_prepare_or_promote_config_placeholders(
+    workflow_factory,
+    points_layer,
+    monkeypatch,
+):
+    viewer = DummyViewer([points_layer])
+    lm = DummyLayerManager()
+
+    cfg_path = Path("/path/to/config.yaml")
+    points_layer.metadata = tag_config_placeholder_metadata(
+        points_layer.metadata or {},
+        config_path=cfg_path,
+    )
+
+    assert lm.is_config_placeholder_points_layer(points_layer)
+
+    def _unexpected_prepare(layer):
+        raise AssertionError(
+            "prepare_points_layer_for_plugin_save must not be called during generic/multi-save detection"
+        )
+
+    lm.prepare_points_layer_for_plugin_save = _unexpected_prepare
+
+    class UnexpectedFileDialog:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("QFileDialog must not be opened for config placeholder multi-save.")
+
+    monkeypatch.setattr(save_mod, "QFileDialog", UnexpectedFileDialog)
+
+    wf, viewer, _lm, trails = workflow_factory(viewer=viewer, layer_manager=lm)
+
+    info_calls = []
+    monkeypatch.setattr(
+        save_mod.QMessageBox,
+        "information",
+        lambda *args, **kwargs: info_calls.append((args, kwargs)),
+    )
+
+    outcome = wf._save_multiple_layers(selected=True, selected_layers=[points_layer])
+
+    assert outcome.saved is False
+    assert viewer.layers.save_calls == []
+    assert trails.persist_calls == []
+
+    assert info_calls
+    assert info_calls[0][0][1] == "Config placeholder layers cannot be saved generically"
