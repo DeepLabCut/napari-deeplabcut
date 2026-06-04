@@ -524,6 +524,49 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         return LayerSaveBehavior.NAPARI_MANAGED
 
+    def prepare_points_layer_for_plugin_save(self, layer: Any) -> bool:
+        """
+        Reconcile a Points layer immediately before DLC plugin save routing.
+
+        Returns
+        -------
+        bool
+            True if the layer is, or was promoted to, a plugin-managed DLC
+            annotation layer. False if the layer should not enter the DLC
+            annotation save workflow.
+
+        """
+        if layer is None or not isinstance(layer, Points):
+            return False
+
+        if self.is_tracking_result_layer(layer):
+            return False
+
+        if self.is_config_placeholder_points_layer(layer):
+            # Empty config placeholders are scaffolds, not save targets.
+            if self.is_empty_points_layer(layer):
+                logger.debug(
+                    "Config placeholder layer=%r is empty; not routing to plugin save",
+                    getattr(layer, "name", layer),
+                )
+                return False
+
+            if not self._maybe_promote_config_placeholder_points_layer(layer):
+                logger.debug(
+                    "Config placeholder layer=%r lacks save context; not routing to plugin save",
+                    getattr(layer, "name", layer),
+                )
+                return False
+
+        role = get_layer_role_from_metadata(layer.metadata or {})
+        if role is not LayerRole.DLC_ANNOTATION:
+            return False
+
+        if self.save_behavior_for_points_layer(layer) is not LayerSaveBehavior.PLUGIN_MANAGED:
+            return False
+
+        return self.validate_header(layer)
+
     def validate_header(self, layer: Points) -> bool:
         res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
         if hasattr(res, "errors") or getattr(res, "header", None) is None:
@@ -612,6 +655,20 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         """
         if layer is None or not isinstance(layer, Points):
             return False
+
+        if not self.is_config_placeholder_points_layer(layer):
+            return False
+
+        if layer.metadata is None:
+            layer.metadata = {}
+
+        # points_layer_has_save_context may be true because context
+        # exists on the manager, but plugin save/write code needs the promoted
+        # layer metadata itself to carry root/paths.
+        if not layer.metadata.get("root") and self._image_meta.root:
+            layer.metadata["root"] = self._image_meta.root
+        if not layer.metadata.get("paths") and self._image_meta.paths:
+            layer.metadata["paths"] = self._image_meta.paths
 
         if not self.config_placeholder_has_save_context(layer):
             return False
@@ -740,6 +797,23 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if not self.validate_header(layer):
             return None
 
+        if layer.metadata is None:
+            layer.metadata = {}
+
+        proj = layer.metadata.get("project")
+        if proj:
+            self._project_path = proj
+
+        if not layer.metadata.get("root") and self._image_meta.root:
+            layer.metadata["root"] = self._image_meta.root
+        if not layer.metadata.get("paths") and self._image_meta.paths:
+            layer.metadata["paths"] = self._image_meta.paths
+
+        self._maybe_promote_config_placeholder_points_layer(layer)
+
+        if root := layer.metadata.get("root"):
+            update_save_history(root)
+
         existing = getattr(layer, "_dlc_store", None)
         if existing is not None:
             self.register_managed_points_layer(layer, existing)
@@ -774,21 +848,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         self.register_managed_points_layer(layer, store)
 
         layer._dlc_store = store
-
-        proj = layer.metadata.get("project")
-        if proj:
-            self._project_path = proj
-
-        if not layer.metadata.get("root") and self._image_meta.root:
-            layer.metadata["root"] = self._image_meta.root
-        if not layer.metadata.get("paths") and self._image_meta.paths:
-            layer.metadata["paths"] = self._image_meta.paths
-
-        self._maybe_promote_config_placeholder_points_layer(layer)
-
-        if root := layer.metadata.get("root"):
-            update_save_history(root)
-
         layer.text.visible = False
 
         req = PointsLayerSetupRequest(layer=layer, store=store)
@@ -854,7 +913,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         store = self._wire_points_layer(layer)
         if store is None:
             return PointsInsertResult.SKIPPED
-        self._maybe_promote_config_placeholder_points_layer(layer)
 
         logger.debug(
             "Setup points layer=%r allow_merge=%s metadata_keys=%s",
@@ -1311,7 +1369,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if layer is None or not isinstance(layer, Points):
             return False
 
-        if self.is_empty_config_placeholder_points_layer(layer):
+        if self.is_config_placeholder_points_layer(layer):
             return False
 
         try:

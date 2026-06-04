@@ -177,17 +177,24 @@ class PointsLayerSaveWorkflow:
         if len(selected_layers) == 1 and isinstance(selected_layers[0], Points):
             layer = selected_layers[0]
 
-            if self._is_plugin_owned_dlc_points_layer(layer):
-                if self.layer_manager.is_empty_points_layer(layer):
-                    QMessageBox.information(
-                        self.parent,
-                        "Nothing to save",
-                        "This DLC annotation layer is empty and has nothing to save.",
-                        QMessageBox.Ok,
-                    )
-                    return SaveOutcome(saved=False)
-
+            if self.layer_manager.prepare_points_layer_for_plugin_save(layer):
+                # Do not reject empty plugin-owned DLC annotation layers here.
+                # Empty plugin-owned annotation layers may represent a
+                # delete-all operation in the layer. The overwrite/deletion
+                # preflight must decide whether this is safe and ask the user before writing.
                 return self._save_single_points_layer(layer)
+
+            if self.layer_manager.is_config_placeholder_points_layer(layer):
+                QMessageBox.information(
+                    self.parent,
+                    "Nothing to save",
+                    (
+                        "This config-created keypoints layer is still an empty placeholder "
+                        "or does not have enough frame/save context to be saved as DLC annotations."
+                    ),
+                    QMessageBox.Ok,
+                )
+                return SaveOutcome(saved=False)
 
             # Tracking-result or foreign/generic Points layer:
             # do not force DLC save routing; use generic napari save instead.
@@ -198,9 +205,6 @@ class PointsLayerSaveWorkflow:
     # ------------------------------------------------------------------ #
     # Pre-save checks of layer identity                                  #
     # ------------------------------------------------------------------ #
-    def _is_tracking_result_points_layer(self, layer) -> bool:
-        return isinstance(layer, Points) and self.layer_manager.is_tracking_result_layer(layer)
-
     def _is_plugin_owned_dlc_points_layer(self, layer) -> bool:
         """
         Return True only for Points layers whose DLC save workflow is owned by
@@ -365,7 +369,9 @@ class PointsLayerSaveWorkflow:
             selected_layers=selected_layers,
         )
         return [
-            layer for layer in layers if isinstance(layer, Points) and self._is_plugin_owned_dlc_points_layer(layer)
+            layer
+            for layer in layers
+            if isinstance(layer, Points) and self.layer_manager.prepare_points_layer_for_plugin_save(layer)
         ]
 
     def _save_multiple_layers(self, *, selected: bool, selected_layers: list) -> SaveOutcome:
@@ -388,6 +394,33 @@ class PointsLayerSaveWorkflow:
                     "and deletion checks can run before writing.\n\n"
                     "Please save DLC annotation layers one at a time. Tracking results and "
                     "generic napari layers can still be saved with napari's generic save."
+                ),
+                QMessageBox.Ok,
+            )
+            return SaveOutcome(saved=False)
+
+        config_placeholders = [
+            layer
+            for layer in self._layers_for_save_request(
+                selected=selected,
+                selected_layers=selected_layers,
+            )
+            if isinstance(layer, Points) and self.layer_manager.is_config_placeholder_points_layer(layer)
+        ]
+        if config_placeholders:
+            names = ", ".join(getattr(layer, "name", "Unnamed layer") for layer in config_placeholders[:5])
+            if len(config_placeholders) > 5:
+                names += ", ..."
+
+            QMessageBox.information(
+                self.parent,
+                "Config placeholder layers cannot be saved generically",
+                (
+                    "One or more selected layers are config-created DLC placeholder layers:\n\n"
+                    f"{names}\n\n"
+                    "These layers are part of the DLC annotation workflow. Empty placeholders "
+                    "are not save targets. Placeholders with annotations and valid frame/save "
+                    "context must be promoted and saved through the napari-deeplabcut save workflow."
                 ),
                 QMessageBox.Ok,
             )
