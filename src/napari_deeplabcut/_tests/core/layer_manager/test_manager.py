@@ -715,4 +715,5 @@ def test_tracking_result_is_napari_managed_and_not_config_merge_target(
     monkeypatch.setattr(manager, "is_tracking_result_layer", lambda layer: layer is tracking)
 
     assert manager.save_behavior_for_points_layer(tracking) is LayerSaveBehavior.NAPARI_MANAGED
-    assert manager.is_config_metadata
+    assert manager.is_tracking_result_layer(tracking)
+    assert not manager.is_config_metadata_merge_target(tracking)
