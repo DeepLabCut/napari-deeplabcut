@@ -70,9 +70,18 @@ class DummyLayerList(list):
         self.events = DummyLayerEvents()
 
 
+class DummyDims:
+    def __init__(self):
+        self.set_current_step_calls = []
+
+    def set_current_step(self, axis: int, value: int):
+        self.set_current_step_calls.append((axis, value))
+
+
 class DummyViewer:
     def __init__(self, layers=()):
         self.layers = DummyLayerList(layers)
+        self.dims = DummyDims()
 
 
 class DummyImageMeta:
