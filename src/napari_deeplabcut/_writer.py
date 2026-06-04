@@ -23,7 +23,16 @@ def write_hdf_napari_dlc(path: str, data, attributes: dict) -> list[str]:
             "are refined by a human (as we do not want to overwrite machine labels),"
             "but that case is handled separately."
         )
-    return write_hdf(path, data, attributes)
+    try:
+        return write_hdf(path, data, attributes)
+    except Exception:
+        logger.exception(
+            "napari-deeplabcut HDF writer failed for path=%r layer=%r metadata_keys=%s",
+            path,
+            attributes.get("name") if isinstance(attributes, dict) else None,
+            sorted((attributes.get("metadata") or {}).keys()) if isinstance(attributes, dict) else None,
+        )
+        raise
 
 
 # TODO rewrite explicitly as napari-facing func
