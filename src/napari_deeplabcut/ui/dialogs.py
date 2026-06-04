@@ -952,6 +952,10 @@ class OverwriteConflictsDialog(QDialog):
         details_label_text: str = "Conflicts (frame/image → keypoints):",
         confirm_button_text: str = "Overwrite",
         dangerous_default_cancel: bool = False,
+        # useful for testing
+        n_overwrites: int = 0,
+        n_deletions: int = 0,
+        n_images: int = 0,
     ) -> bool:
         dlg = OverwriteConflictsDialog(
             parent,
@@ -979,6 +983,9 @@ def maybe_confirm_overwrite(
         return True
 
     n_deletions = int(getattr(report, "n_deletions", 0) or 0)
+    n_overwrites = int(getattr(report, "n_overwrites", 0) or 0)
+    n_images = int(getattr(report, "n_frames", 0) or 0)
+
     has_deletions = n_deletions > 0
 
     title = "Confirm keypoint deletions" if has_deletions else "Overwrite warning"
@@ -1002,4 +1009,7 @@ def maybe_confirm_overwrite(
         details_label_text=details_label_text,
         confirm_button_text=confirm_button_text,
         dangerous_default_cancel=has_deletions,
+        n_overwrites=n_overwrites,
+        n_deletions=n_deletions,
+        n_images=n_images,
     )

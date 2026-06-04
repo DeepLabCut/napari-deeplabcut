@@ -863,12 +863,36 @@ class PointsLayerSaveWorkflow:
             dataset_name=dataset_name,
         )
 
+        if unresolved:
+            sample = "\n".join(f"• {p}" for p in unresolved[:5])
+            more = ""
+            if len(unresolved) > 5:
+                more = f"\n… and {len(unresolved) - 5} more path(s)"
+
+            QMessageBox.warning(
+                self.parent,
+                "Cannot associate folder with DLC project",
+                (
+                    "This layer contains one or more image paths that are outside the "
+                    "folder being associated with the DLC project.\n\n"
+                    "DLC annotation files can only contain dataset row keys of the form:\n\n"
+                    "  labeled-data/<dataset>/<image>\n\n"
+                    "The save was cancelled because these path(s) could not be safely "
+                    "rewritten into that form:\n\n"
+                    f"{sample}{more}\n\n"
+                    "Move/copy those images into the folder being associated, or remove "
+                    "them from the layer before saving."
+                ),
+                QMessageBox.Ok,
+            )
+            return None, True
+
         if not maybe_confirm_dataset_path_rewrite(
             self.parent,
             project_root=project_root,
             dataset_name=dataset_name,
             n_paths=len(paths),
-            n_unresolved=len(unresolved),
+            n_unresolved=0,
         ):
             return None, True
 
