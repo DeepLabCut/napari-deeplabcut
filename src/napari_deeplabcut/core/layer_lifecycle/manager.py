@@ -1330,7 +1330,8 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         payload = md.get(TRACKING_LAYER_METADATA_KEY, None)
         return payload if isinstance(payload, dict) else None
 
-    def is_tracking_result_layer(self, layer: Any) -> bool:
+    @staticmethod
+    def is_tracking_result_layer(layer: Any) -> bool:
         """
         Authoritative viewer/session-facing predicate for tracking-result layers.
 
