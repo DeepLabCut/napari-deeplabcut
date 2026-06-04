@@ -394,8 +394,16 @@ def test_maybe_confirm_overwrite_delegates_to_confirm(monkeypatch, dialog_parent
         layer_name="pose-layer",
         destination_path="/tmp/labels.h5",
         n_overwrites=3,
+        n_deletions=0,
         n_frames=2,
-        details_text="img001.png -> nose, tail",
+        entries=(
+            SimpleNamespace(
+                frame_label="img001.png",
+                keypoints=("nose", "tail"),
+                deleted_keypoints=(),
+            ),
+        ),
+        truncated_entries=0,
     )
 
     monkeypatch.setattr(
@@ -420,11 +428,18 @@ def test_maybe_confirm_overwrite_delegates_to_confirm(monkeypatch, dialog_parent
     assert result is False
     assert captured["parent"] is dialog_parent
     assert captured["kwargs"] == {
+        "title": "Overwrite warning",
         "summary": "Saving will overwrite existing keypoints in the destination file.",
         "layer_text": "pose-layer",
         "dest_text": "/tmp/labels.h5",
         "affected_text": "3 keypoint overwrite(s) across 2 frame(s)/image(s).",
-        "details": "img001.png -> nose, tail",
+        "details": "img001.png\n  Modified: nose, tail",
+        "details_label_text": "<i>Conflicts (frame/image → keypoints):</i>",
+        "confirm_button_text": "Save (overwrite) keypoints",
+        "dangerous_default_cancel": False,
+        "n_overwrites": 3,
+        "n_deletions": 0,
+        "n_images": 2,
     }
 
 

@@ -185,6 +185,19 @@ class PointsLayerSaveWorkflow:
                 return self._save_single_points_layer(layer)
 
             if self.layer_manager.is_config_placeholder_points_layer(layer):
+                placeholder_metadata = dict(layer.metadata or {})
+                placeholder_metadata = self._enrich_points_metadata_for_save(layer, placeholder_metadata)
+
+                if not self.layer_manager.is_empty_points_layer(layer) and self._is_unsupported_direct_video_label_save(
+                    layer, placeholder_metadata
+                ):
+                    self.logger.debug(
+                        "Save aborted due to unsupported direct video + config placeholder case. Layer=%r",
+                        getattr(layer, "name", layer),
+                    )
+                    self._warn_unsupported_direct_video_label_save(layer, placeholder_metadata)
+                    return SaveOutcome(saved=False)
+
                 QMessageBox.information(
                     self.parent,
                     "Nothing to save",
@@ -864,10 +877,28 @@ class PointsLayerSaveWorkflow:
         )
 
         if unresolved:
-            sample = "\n".join(f"• {p}" for p in unresolved[:5])
+            unresolved_paths: list[str] = []
+
+            for item in unresolved:
+                # coerce_paths_to_dlc_row_keys currently reports unresolved entries
+                # as indexes into the original paths sequence. Convert those indexes
+                # back to user-facing paths for the warning message.
+                if isinstance(item, int):
+                    try:
+                        unresolved_paths.append(str(paths[item]))
+                    except Exception:
+                        unresolved_paths.append(str(item))
+                    continue
+
+                try:
+                    unresolved_paths.append(str(item))
+                except Exception:
+                    unresolved_paths.append(repr(item))
+
+            sample = "\n".join(f"• {p}" for p in unresolved_paths[:5])
             more = ""
-            if len(unresolved) > 5:
-                more = f"\n… and {len(unresolved) - 5} more path(s)"
+            if len(unresolved_paths) > 5:
+                more = f"\n… and {len(unresolved_paths) - 5} more path(s)"
 
             QMessageBox.warning(
                 self.parent,
