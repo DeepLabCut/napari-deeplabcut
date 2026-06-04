@@ -9,6 +9,7 @@ import pytest
 from napari_deeplabcut import _writer
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 from napari_deeplabcut.core.errors import MissingProvenanceError
+from napari_deeplabcut.core.schemas.layer_identity import tag_dlc_annotation_metadata
 from napari_deeplabcut.ui import dialogs
 
 
@@ -38,6 +39,7 @@ def _make_minimal_points_metadata(
     }
     if save_target is not None:
         md["metadata"]["save_target"] = save_target
+    md["metadata"] = tag_dlc_annotation_metadata(md["metadata"])
     return md
 
 

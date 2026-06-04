@@ -14,6 +14,13 @@ from napari_deeplabcut.core.io import (
     resolve_output_path_from_metadata,
     write_hdf,
 )
+from napari_deeplabcut.core.schemas.layer_identity import tag_dlc_annotation_metadata
+
+
+def _tag_plugin_managed_dlc_annotation(attrs: dict) -> None:
+    """Tag attrs['metadata'] as eligible for the plugin DLC annotation writer."""
+    tagged = tag_dlc_annotation_metadata(attrs.get("metadata"))
+    return tagged
 
 
 def test_resolve_output_path_returns_none_for_machine_without_save_target():
@@ -28,6 +35,7 @@ def test_resolve_output_path_returns_none_for_machine_without_save_target():
             }
         }
     }
+    md["metadata"] = _tag_plugin_managed_dlc_annotation(md)
     out_path, scorer, kind = resolve_output_path_from_metadata(md)
     assert out_path is None
     assert scorer is None
@@ -54,6 +62,7 @@ def test_write_hdf_refuses_machine_without_promotion(tmp_path: Path):
         },
         "properties": {"label": ["bp1"], "id": [""], "likelihood": [1.0]},
     }
+    attrs["metadata"] = _tag_plugin_managed_dlc_annotation(attrs)
 
     with pytest.raises(MissingProvenanceError):
         write_hdf("__dlc__.h5", data, attrs)
@@ -75,7 +84,7 @@ def test_write_hdf_raises_ambiguous_when_multiple_gt_candidates_and_no_provenanc
         },
         "properties": {"label": ["bp1"], "id": [""], "likelihood": [1.0]},
     }
-
+    attrs["metadata"] = _tag_plugin_managed_dlc_annotation(attrs)
     with pytest.raises(AmbiguousSaveError):
         write_hdf("__dlc__.h5", data, attrs)
 
@@ -96,6 +105,7 @@ def test_write_hdf_aborts_machine_without_promotion_target(tmp_path: Path):
         },
         "properties": {"label": ["bp1"], "id": [""], "likelihood": [1.0]},
     }
+    attrs["metadata"] = _tag_plugin_managed_dlc_annotation(attrs)
 
     with pytest.raises(MissingProvenanceError):
         write_hdf("__dlc__.h5", data, attrs)
