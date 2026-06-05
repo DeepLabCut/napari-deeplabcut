@@ -78,23 +78,35 @@ def overwrite_confirm(monkeypatch):
     state = {"mode": "always_true", "result": True}
 
     def _patched_maybe_confirm_overwrite(parent, report):
-        n_pairs = getattr(report, "n_overwrites", 0)
-        n_images = getattr(report, "n_frames", None)
+        n_overwrites = int(getattr(report, "n_overwrites", 0) or 0)
+        n_deletions = int(getattr(report, "n_deletions", 0) or 0)
+        n_frames = getattr(report, "n_frames", None)
+        entries = tuple(getattr(report, "entries", ()) or ())
 
         calls.append(
             {
                 "parent_type": type(parent).__name__ if parent is not None else None,
                 "layer_name": getattr(report, "layer_name", None),
                 "destination_path": getattr(report, "destination_path", None),
-                "n_pairs": n_pairs,
-                "n_images": n_images,
+                # New canonical names
+                "n_overwrites": n_overwrites,
+                "n_deletions": n_deletions,
+                "n_frames": n_frames,
+                "entries": entries,
                 "details_text": getattr(report, "details_text", None),
+                "report": report,
+                # Backwards-compatible aliases for existing tests
+                "n_pairs": n_overwrites,
+                "n_images": n_frames,
             }
         )
 
-        # In "forbid" mode: only fail if there is a real overwrite.
-        if state["mode"] == "forbid" and n_pairs > 0:
-            raise AssertionError("maybe_confirm_overwrite was called unexpectedly for a real overwrite (n_pairs > 0).")
+        # In "forbid" mode: fail if confirmation is requested for any destructive change.
+        if state["mode"] == "forbid" and (n_overwrites > 0 or n_deletions > 0):
+            raise AssertionError(
+                "maybe_confirm_overwrite was called unexpectedly for a destructive save "
+                f"(n_overwrites={n_overwrites}, n_deletions={n_deletions})."
+            )
 
         return state["result"]
 
