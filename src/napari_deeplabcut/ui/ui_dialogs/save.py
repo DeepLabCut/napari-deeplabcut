@@ -746,6 +746,39 @@ class PointsLayerSaveWorkflow:
             dataset_name=dataset_name,
         )
 
+        if unresolved:
+
+            def _unresolved_path_label(item) -> str:
+                # coerce_paths_to_dlc_row_keys may return unresolved path indexes.
+                # Convert those back to the original path for user-facing diagnostics.
+                if isinstance(item, int) and not isinstance(item, bool) and 0 <= item < len(paths):
+                    return str(paths[item])
+                return str(item)
+
+            unresolved_labels = [_unresolved_path_label(p) for p in unresolved]
+            unresolved_preview = "\n".join(f"  {p}" for p in unresolved_labels[:10])
+            more = ""
+            if len(unresolved_labels) > 10:
+                more = f"\n  … and {len(unresolved_labels) - 10} more path(s)"
+
+            QMessageBox.warning(
+                self.parent,
+                "Cannot associate folder with DLC project",
+                (
+                    "Some image paths could not be safely rewritten to DLC dataset row keys.\n\n"
+                    "The save operation has been cancelled to avoid writing unrelated or "
+                    "ambiguous image paths into the destination CollectedData file.\n\n"
+                    "Please report the issue and share the debug log if this is unexpected.\n\n"
+                    f"Dataset: {dataset_name}\n"
+                    f"Source folder: {source_root_path}\n\n"
+                    "Unresolved path(s):\n"
+                    f"{unresolved_preview}"
+                    f"{more}"
+                ),
+                QMessageBox.Ok,
+            )
+            return None, True
+
         if not maybe_confirm_dataset_path_rewrite(
             self.parent,
             project_root=project_root,
