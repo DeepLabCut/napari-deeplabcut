@@ -670,6 +670,79 @@ def test_merge_save_df_preserves_old_columns_outside_new_columns():
     assert out.loc[idx[0], ("S", "", "tail", "y")] == 40.0
 
 
+def test_merge_save_df_nan_clears_old_value_after_row_harmonization():
+    """
+    Deletion semantics depend on row labels matching after harmonization.
+
+    Existing DLC files may use basename-only row keys while newly formed save
+    dataframes may use deeper DLC path keys. merge_save_df() should harmonize
+    those representations before assigning df_new into df_old, otherwise NaNs
+    in df_new would not clear the intended old values.
+    """
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+
+    # Existing on-disk row uses basename representation.
+    df_old = pd.DataFrame(
+        [[10.0, 20.0]],
+        index=["img000.png"],
+        columns=cols,
+    )
+    guarantee_multiindex_rows(df_old)
+
+    # New save-scope row uses deeper DLC path representation.
+    df_new = pd.DataFrame(
+        [[np.nan, np.nan]],
+        index=["labeled-data/test/img000.png"],
+        columns=cols,
+    )
+    guarantee_multiindex_rows(df_new)
+
+    out = merge_save_df(df_old, df_new)
+
+    # harmonize_keypoint_row_index() collapses the deep row to basename so the
+    # assignment hits the existing row and NaN clears the old value.
+    row = ("img000.png",)
+    assert row in out.index
+    assert pd.isna(out.loc[row, ("S", "", "nose", "x")])
+    assert pd.isna(out.loc[row, ("S", "", "nose", "y")])
+
+
+def test_merge_save_df_refuses_no_row_overlap_after_harmonization():
+    """
+    If row labels do not overlap after harmonization, df_new cannot overwrite or
+    delete existing values. merge_save_df() refuses this case rather than silently
+    preserving old labels when deletion/overwrite semantics were expected.
+    """
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+
+    old_idx = pd.MultiIndex.from_tuples([("labeled-data", "test", "img000.png")])
+    new_idx = pd.MultiIndex.from_tuples([("labeled-data", "other", "img999.png")])
+
+    df_old = pd.DataFrame(
+        [[10.0, 20.0]],
+        index=old_idx,
+        columns=cols,
+    )
+    df_new = pd.DataFrame(
+        [[np.nan, np.nan]],
+        index=new_idx,
+        columns=cols,
+    )
+
+    with pytest.raises(ValueError, match="no row-index overlap after harmonization"):
+        merge_save_df(df_old, df_new)
+
+
 # -----------------------------------------------------------------------------
 # 10) keypoint_deletions and keypoint_conflicts(include_deletions=True)
 # -----------------------------------------------------------------------------

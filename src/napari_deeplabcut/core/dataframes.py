@@ -536,6 +536,14 @@ def merge_save_df(
     df_new2 = harmonize_keypoint_column_index(df_new2)
     df_old2 = harmonize_keypoint_column_index(df_old2)
 
+    if len(df_old2.index) and len(df_new2.index):
+        overlap = df_old2.index.intersection(df_new2.index)
+        if overlap.empty:
+            raise ValueError(
+                "Cannot merge save dataframe: no row-index overlap after harmonization. "
+                "Existing labels would be preserved instead of overwritten/deleted."
+            )
+
     idx = df_old2.index.union(df_new2.index)
     cols = df_old2.columns.union(df_new2.columns)
 
