@@ -248,30 +248,20 @@ def form_df_from_validated(ctx: PointsWriteInputModel) -> pd.DataFrame:
     df = df.unstack(["scorer", "individuals", "bodyparts", "coords"])
     df.index.name = None
 
-    hdr_cols = ctx.meta.header.as_multiindex()  # pandas-only helper; raises if pandas missing
-
     logger.debug("Before reindex: cols nlevels %s, names %s", df.columns.nlevels, df.columns.names)
+
+    df = harmonize_keypoint_column_index(df)
+    hdr_cols = canonical_keypoint_columns_from_header(ctx.meta.header)
+
     logger.debug("header cols nlevels %s, names %s", hdr_cols.nlevels, hdr_cols.names)
-
-    # If df columns dropped individuals, drop it from header too (if present)
-    # if df.columns.nlevels == 3 and isinstance(hdr_cols, pd.MultiIndex) and hdr_cols.nlevels == 4:
-    #     if "individuals" in hdr_cols.names:
-    #         hdr_cols = hdr_cols.droplevel("individuals")
-
-    # If df columns kept individuals but header doesn't have it, add it (single-animal)
-    if df.columns.nlevels == 4 and isinstance(hdr_cols, pd.MultiIndex) and hdr_cols.nlevels == 3:
-        # Insert empty individuals level into header tuples
-        frame = hdr_cols.to_frame(index=False)
-        frame.insert(1, "individuals", "")
-        hdr_cols = pd.MultiIndex.from_frame(frame, names=["scorer", "individuals", "bodyparts", "coords"])
 
     df = df.reindex(hdr_cols, axis=1)
 
     logger.debug("After reindex: cols nlevels %s, names %s", df.columns.nlevels, df.columns.names)
     logger.debug(
         "header cols nlevels %s, names %s",
-        ctx.meta.header.as_multiindex().nlevels,
-        ctx.meta.header.as_multiindex().names,
+        hdr_cols.nlevels,
+        hdr_cols.names,
     )
 
     # Replace integer frame index with path keys if available
