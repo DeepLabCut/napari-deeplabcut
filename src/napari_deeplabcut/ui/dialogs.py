@@ -755,42 +755,6 @@ def warn_existing_dataset_folder_conflict(
 # --------------------------------------------------------------------------------------
 # Conflict resolution dialog for overwriting existing keypoints when saving annotations.
 # --------------------------------------------------------------------------------------
-def _conflict_details_text(report: OverwriteConflictReport) -> str:
-    """
-    Build plain-text conflict details for the scrollable details box.
-
-    Expected report entry fields:
-    - frame_label
-    - keypoints: modified/overwritten keypoints
-    - deleted_keypoints: cleared/deleted keypoints
-    """
-    lines: list[str] = []
-
-    for entry in report.entries:
-        lines.append(str(entry.frame_label))
-
-        modified = tuple(getattr(entry, "keypoints", ()) or ())
-        deleted = tuple(getattr(entry, "deleted_keypoints", ()) or ())
-
-        if modified:
-            lines.append(f"  Modified: {', '.join(modified)}")
-
-        if deleted:
-            lines.append(f"  Deleted / cleared: {', '.join(deleted)}")
-
-        lines.append("")
-
-    if report.truncated_entries:
-        lines.append(f"... and {report.truncated_entries} more frame/image(s).")
-
-    text = "\n".join(lines).rstrip()
-    if text:
-        return text
-
-    # Backwards compatibility with older report models.
-    return getattr(report, "details_text", "") or "No detailed conflicts available."
-
-
 def _conflict_summary_text(report: OverwriteConflictReport) -> str:
     n_deletions = int(getattr(report, "n_deletions", 0) or 0)
     n_overwrites = int(getattr(report, "n_overwrites", 0) or 0)
@@ -998,7 +962,7 @@ def maybe_confirm_overwrite(
         layer_text=html.escape(report.layer_name or "Unknown layer"),
         dest_text=html.escape(report.destination_path or "Unknown destination"),
         affected_text=_conflict_affected_text(report),
-        details=_conflict_details_text(report),
+        details=report.details_text,
         details_label_text=details_label_text,
         confirm_button_text=confirm_button_text,
         dangerous_default_cancel=has_deletions,
