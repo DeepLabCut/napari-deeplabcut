@@ -111,7 +111,10 @@ class CycleEnum(Enum, metaclass=CycleEnumMeta):
 
 def _is_nan_value(x) -> bool:
     try:
-        return bool(np.isnan(x))
+        # Handle non-numeric types (e.g., strings, tuples) gracefully
+        if isinstance(x, (int, float, np.floating, np.integer)):
+            return bool(np.isnan(x))
+        return False
     except Exception:
         return False
 
