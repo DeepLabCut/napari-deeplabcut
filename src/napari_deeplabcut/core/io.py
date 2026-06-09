@@ -420,11 +420,19 @@ def _resolve_multianimalproject_for_write(
 def _atomic_to_hdf(df: pd.DataFrame, out_path: Path, key: str = DLC_CANONICAL_H5_KEY) -> None:
     """Best-effort atomic write: write to temp and replace."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
-    # Write temp
-    df.to_hdf(tmp, key=key, mode="w")
-    # Replace
-    tmp.replace(out_path)
+
+    tmp = out_path.parent / f".{out_path.stem}.tmp{out_path.suffix}"
+
+    try:
+        df.to_hdf(tmp, key=key, mode="w")
+        tmp.replace(out_path)
+    except Exception:
+        logger.exception("Failed atomic HDF write tmp=%s out=%s", tmp, out_path)
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            logger.debug("Failed to remove temporary HDF file %s", tmp, exc_info=True)
+        raise
 
 
 def write_hdf(path: str, data, attributes: dict) -> list[str]:
@@ -592,12 +600,33 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             list(dict.fromkeys(df_out.columns.get_level_values("individuals").astype(str))),
         )
 
-    # Write .h5 and .csv
-    _atomic_to_hdf(df_out, out, key=DLC_CANONICAL_H5_KEY)
-    csv_path = out.with_suffix(".csv")
-    df_out.to_csv(csv_path)
+    cols = df_out.columns
+    logger.debug("FINAL WRITE columns count=%d unique_count=%d", len(cols), len(cols.unique()))
 
-    return [str(out), str(csv_path)]
+    if cols.has_duplicates:
+        dup = cols[cols.duplicated(keep=False)]
+        logger.error(
+            "FINAL WRITE duplicate columns sample=%s",
+            list(dict.fromkeys(map(str, dup)))[:50],
+        )
+        raise ValueError(f"Duplicate columns detected in output DataFrame: {list(dict.fromkeys(map(str, dup)))}")
+
+    # Write .h5 and .csv
+    try:
+        logger.debug("Writing HDF to %s", out)
+        _atomic_to_hdf(df_out, out, key=DLC_CANONICAL_H5_KEY)
+
+        csv_path = out.with_suffix(".csv")
+        logger.debug("Writing CSV to %s", csv_path)
+        df_out.to_csv(csv_path)
+
+        written = [str(out), str(csv_path)]
+        logger.debug("write_hdf returning %r exists=%r", written, [(p, Path(p).exists()) for p in written])
+        return written
+
+    except Exception:
+        logger.exception("write_hdf failed during final disk write")
+        raise
 
 
 # =============================================================================

@@ -333,6 +333,16 @@ class DLCHeaderModel(BaseModel):
         # stable unique preserving first seen order
         return list(dict.fromkeys(pairs))
 
+    @staticmethod
+    def _find_duplicates(values: list[str]):
+        seen = set()
+        dupl = []
+        for v in values:
+            if v in seen and v not in dupl:
+                dupl.append(v)
+            seen.add(v)
+        return dupl
+
     @classmethod
     def from_config(cls, config: dict) -> DLCHeaderModel:
         """
@@ -348,6 +358,25 @@ class DLCHeaderModel(BaseModel):
         if multi:
             inds = [str(x) for x in config["individuals"]]
             bps = [str(x) for x in config["multianimalbodyparts"]]
+            unique_bps = [str(x) for x in config.get("uniquebodyparts", [])]
+
+            dup_inds = DLCHeaderModel._find_duplicates(inds)
+            dup_bps = DLCHeaderModel._find_duplicates(bps)
+            dup_unique = DLCHeaderModel._find_duplicates(unique_bps)
+
+            if dup_inds:
+                raise ValueError(f"Duplicate individuals in config.yaml: {dup_inds}")
+            if dup_bps:
+                raise ValueError(f"Duplicate multianimalbodyparts in config.yaml: {dup_bps}")
+            if dup_unique:
+                raise ValueError(f"Duplicate uniquebodyparts in config.yaml: {dup_unique}")
+
+            if "single" in inds and set(bps) & set(unique_bps):
+                raise ValueError(
+                    "Invalid config.yaml: 'single' individual conflicts with uniquebodyparts. "
+                    "Do not use 'single' as an individual name if you have uniquebodyparts."
+                )
+
             coords = ["x", "y"]
             for i in inds:
                 for bp in bps:
@@ -360,6 +389,9 @@ class DLCHeaderModel(BaseModel):
             names = ["scorer", "individuals", "bodyparts", "coords"]
         else:
             bps = [str(x) for x in config["bodyparts"]]
+            dup_bps = DLCHeaderModel._find_duplicates(bps)
+            if dup_bps:
+                raise ValueError(f"Duplicate bodyparts in config.yaml: {dup_bps}")
             coords = ["x", "y"]
             for bp in bps:
                 for c in coords:
