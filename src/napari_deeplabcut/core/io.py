@@ -609,6 +609,7 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             "FINAL WRITE duplicate columns sample=%s",
             list(dict.fromkeys(map(str, dup)))[:50],
         )
+        raise ValueError(f"Duplicate columns detected in output DataFrame: {list(dict.fromkeys(map(str, dup)))}")
 
     # Write .h5 and .csv
     try:
