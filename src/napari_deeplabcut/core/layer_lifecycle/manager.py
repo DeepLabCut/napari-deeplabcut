@@ -14,7 +14,7 @@ from napari.utils.history import update_save_history
 from qtpy.QtCore import QObject, Signal
 
 from ...config.keybinds import install_points_layer_keybindings
-from ...config.models import DLCHeaderModel, ImageMetadata, PointsMetadata
+from ...config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, PointsMetadata
 from ...core import keypoints
 from ...core.io import is_video
 from ...core.layer_versioning import mark_layer_presentation_changed
@@ -34,6 +34,7 @@ from ...tracking.core.data import TRACKING_LAYER_METADATA_KEY, is_tracking_resul
 from ...ui.base_widget._qt_timers import OwnedTimersMixin
 from ...ui.cropping import resolve_project_path_from_image_layer
 from ...utils.debug import log_timing
+from .display_settings import PointsDisplaySource, apply_points_display_role
 from .merge import PlaceholderConfigAction, PlaceholderConfigDecisionProvider
 from .registry import (
     ClearedRegistryEntry,
@@ -267,7 +268,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if data.ndim != 2 or len(data) == 0:
             return False
 
-        if self.is_tracking_result_layer(layer):
+        if LayerLifecycleManager.is_tracking_result_layer(layer):
             return True
 
         return self.is_managed(layer) and self.validate_header(layer)
@@ -298,7 +299,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             return active
 
         for layer, _store in self.iter_managed_points():
-            if self.is_plottable_traj_layer(layer) and not self.is_tracking_result_layer(layer):
+            if self.is_plottable_traj_layer(layer) and not LayerLifecycleManager.is_tracking_result_layer(layer):
                 return layer
 
         for layer in self.iter_tracking_result_layers():
@@ -440,6 +441,69 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             data = np.empty((0, 3))
 
         return data.size == 0
+
+    @staticmethod
+    def is_machine_label_layer(layer: Any) -> bool:
+        """Return True if this Points layer represents loaded machine labels.
+
+        The source of truth is IO provenance:
+            layer.metadata["io"]["kind"] == AnnotationKind.MACHINE
+
+        This is better than detecting from the layer name because users may
+        rename layers.
+        """
+        if layer is None or not isinstance(layer, Points):
+            return False
+
+        if LayerLifecycleManager.is_tracking_result_layer(layer):
+            return False
+
+        md = getattr(layer, "metadata", {}) or {}
+        if not isinstance(md, dict):
+            return False
+
+        io_payload = md.get("io", None)
+        if not isinstance(io_payload, dict):
+            return False
+
+        kind = io_payload.get("kind", None)
+
+        if kind is AnnotationKind.MACHINE:
+            return True
+
+        # Be tolerant if metadata has been serialized/deserialized.
+        try:
+            return AnnotationKind(kind) is AnnotationKind.MACHINE
+        except Exception:
+            pass
+
+        return str(kind).lower() in {
+            "machine",
+            "annotationkind.machine",
+        }
+
+    def points_display_role(self, layer: Any) -> PointsDisplaySource | None:
+        """Resolve the semantic display role for a Points layer, if any."""
+        if LayerLifecycleManager.is_tracking_result_layer(layer):
+            return PointsDisplaySource.TRACKING_RESULT
+
+        if LayerLifecycleManager.is_machine_label_layer(layer):
+            return PointsDisplaySource.MACHINE_LABELS
+
+        return None
+
+    def apply_points_display_settings(
+        self,
+        layer: Points,
+        *,
+        source: Points | None = None,
+    ) -> Points:
+        """Apply centralized role-based display settings for known Points layers."""
+        role = self.points_display_role(layer)
+        if role is None:
+            return layer
+
+        return apply_points_display_role(layer, role, source=source)
 
     def validate_header(self, layer: Points) -> bool:
         res = read_points_meta(layer, migrate_legacy=True, drop_controls=True, drop_header=False)
@@ -714,6 +778,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if store is None:
             return PointsInsertResult.SKIPPED
 
+        self.apply_points_display_settings(layer)
         logger.debug(
             "Setup points layer=%r allow_merge=%s metadata_keys=%s",
             getattr(layer, "name", layer),
@@ -1126,7 +1191,8 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         payload = md.get(TRACKING_LAYER_METADATA_KEY, None)
         return payload if isinstance(payload, dict) else None
 
-    def is_tracking_result_layer(self, layer: Any) -> bool:
+    @staticmethod
+    def is_tracking_result_layer(layer: Any) -> bool:
         """
         Authoritative viewer/session-facing predicate for tracking-result layers.
 
@@ -1178,7 +1244,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         # Tracking-result targets are allowed, but they are never "managed DLC"
         # for the managed-only pass.
-        if self.is_tracking_result_layer(layer):
+        if LayerLifecycleManager.is_tracking_result_layer(layer):
             return not require_managed
 
         if not self.validate_header(layer):
@@ -1192,7 +1258,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
     def iter_tracking_result_layers(self) -> Iterator[Points]:
         """Iterate live tracking-result Points layers in current viewer order."""
         for layer in self.viewer.layers:
-            if isinstance(layer, Points) and self.is_tracking_result_layer(layer):
+            if isinstance(layer, Points) and LayerLifecycleManager.is_tracking_result_layer(layer):
                 yield layer
 
     def iter_mergeable_dlc_points_layers(
