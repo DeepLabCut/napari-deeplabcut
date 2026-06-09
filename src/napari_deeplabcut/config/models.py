@@ -373,7 +373,7 @@ class DLCHeaderModel(BaseModel):
 
             if "single" in inds and set(bps) & set(unique_bps):
                 raise ValueError(
-                    "Invalid config.yaml: 'single' individual conflicts with uniquebodyparts."
+                    "Invalid config.yaml: 'single' individual conflicts with uniquebodyparts. "
                     "Do not use 'single' as an individual name if you have uniquebodyparts."
                 )
 
