@@ -585,6 +585,7 @@ class PointsMetadata(BaseModel):
 class ConflictEntry:
     frame_label: str
     keypoints: tuple[str, ...]
+    deleted_keypoints: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -612,6 +613,7 @@ class OverwriteConflictReport:
     """
 
     n_overwrites: int
+    n_deletions: int
     n_frames: int
     entries: tuple[ConflictEntry, ...]
     truncated_entries: int = 0
@@ -620,17 +622,41 @@ class OverwriteConflictReport:
 
     @property
     def has_conflicts(self) -> bool:
-        return self.n_overwrites > 0
+        return self.n_overwrites > 0 or self.n_deletions > 0
 
     @property
     def details_text(self) -> str:
+        """
+        Build plain-text conflict details for the scrollable details box.
+
+        Expected report entry fields:
+        - frame_label
+        - keypoints: modified/overwritten keypoints
+        - deleted_keypoints: cleared/deleted keypoints
+        """
         if not self.entries:
             return "No detailed conflicts."
-        lines = [f"{entry.frame_label} → {', '.join(entry.keypoints)}" for entry in self.entries]
-        if self.truncated_entries:
+
+        lines: list[str] = []
+
+        for entry in self.entries:
+            lines.append(str(entry.frame_label))
+
+            modified = tuple(getattr(entry, "keypoints", ()) or ())
+            deleted = tuple(getattr(entry, "deleted_keypoints", ()) or ())
+
+            if modified:
+                lines.append(f"  Modified: {', '.join(modified)}")
+
+            if deleted:
+                lines.append(f"  Deleted / cleared: {', '.join(deleted)}")
+
             lines.append("")
+
+        if self.truncated_entries:
             lines.append(f"… and {self.truncated_entries} more frame/image entries.")
-        return "\n".join(lines)
+
+        return "\n".join(lines).rstrip()
 
 
 # -----------------------------------------------------------------------------

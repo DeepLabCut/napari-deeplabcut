@@ -7,12 +7,17 @@ import pytest
 from napari_deeplabcut.config.models import DLCHeaderModel, PointsMetadata
 from napari_deeplabcut.core.dataframes import (
     align_old_new,
+    build_overwrite_conflict_report,
+    complete_df_for_save,
+    drop_likelihood_columns,
     form_df_from_validated,
     guarantee_multiindex_rows,
     harmonize_keypoint_column_index,
     harmonize_keypoint_row_index,
     keypoint_conflicts,
+    keypoint_deletions,
     merge_multiple_scorers,
+    merge_save_df,
 )
 from napari_deeplabcut.core.schemas import PointsWriteInputModel
 
@@ -435,3 +440,591 @@ def test_form_df_from_validated_raises_when_header_reindex_drops_all_finite_poin
 
     with pytest.raises(RuntimeError, match="Writer produced no finite coordinates"):
         _ = form_df_from_validated(ctx)
+
+
+# -----------------------------------------------------------------------------
+# 8) complete_df_for_save: expand sparse napari data to full editable save scope
+# -----------------------------------------------------------------------------
+
+
+def test_complete_df_for_save_expands_all_paths_and_bodyparts_with_nan_for_missing():
+    header = DLCHeaderModel(
+        columns=cols_4level(
+            scorer="S",
+            individuals=("animal1",),
+            bodyparts=("nose", "tail"),
+            coords=("x", "y"),
+        )
+    )
+    pts_meta = PointsMetadata(
+        header=header,
+        paths=[
+            "labeled-data/test/img000.png",
+            "labeled-data/test/img001.png",
+        ],
+    )
+
+    # Sparse df contains only img000 / nose.
+    sparse = pd.DataFrame(
+        [[10.0, 20.0]],
+        columns=cols_4level(
+            scorer="S",
+            individuals=("animal1",),
+            bodyparts=("nose",),
+            coords=("x", "y"),
+        ),
+        index=["labeled-data/test/img000.png"],
+    )
+
+    out = complete_df_for_save(
+        sparse,
+        pts_meta=pts_meta,
+        header=header,
+    )
+
+    assert isinstance(out.index, pd.MultiIndex)
+    assert out.index.to_list() == [
+        ("labeled-data", "test", "img000.png"),
+        ("labeled-data", "test", "img001.png"),
+    ]
+
+    assert out.columns.equals(
+        cols_4level(
+            scorer="S",
+            individuals=("animal1",),
+            bodyparts=("nose", "tail"),
+            coords=("x", "y"),
+        )
+    )
+
+    row0 = ("labeled-data", "test", "img000.png")
+    row1 = ("labeled-data", "test", "img001.png")
+
+    assert out.loc[row0, ("S", "animal1", "nose", "x")] == 10.0
+    assert out.loc[row0, ("S", "animal1", "nose", "y")] == 20.0
+
+    # Missing bodypart in loaded frame becomes explicit NaN.
+    assert pd.isna(out.loc[row0, ("S", "animal1", "tail", "x")])
+    assert pd.isna(out.loc[row0, ("S", "animal1", "tail", "y")])
+
+    # Entire second frame is in save scope but has no points.
+    assert pd.isna(out.loc[row1, ("S", "animal1", "nose", "x")])
+    assert pd.isna(out.loc[row1, ("S", "animal1", "tail", "y")])
+
+
+def test_complete_df_for_save_drops_likelihood_columns():
+    header = DLCHeaderModel(
+        columns=cols_4level(
+            scorer="S",
+            individuals=("animal1",),
+            bodyparts=("nose",),
+            coords=("x", "y", "likelihood"),
+        )
+    )
+    pts_meta = PointsMetadata(
+        header=header,
+        paths=["labeled-data/test/img000.png"],
+    )
+
+    sparse = pd.DataFrame(
+        [[10.0, 20.0, 0.7]],
+        columns=cols_4level(
+            scorer="S",
+            individuals=("animal1",),
+            bodyparts=("nose",),
+            coords=("x", "y", "likelihood"),
+        ),
+        index=["labeled-data/test/img000.png"],
+    )
+
+    out = complete_df_for_save(
+        sparse,
+        pts_meta=pts_meta,
+        header=header,
+    )
+
+    assert "likelihood" not in set(out.columns.get_level_values("coords").astype(str))
+    assert out.columns.to_list() == [
+        ("S", "animal1", "nose", "x"),
+        ("S", "animal1", "nose", "y"),
+    ]
+
+
+def test_complete_df_for_save_without_paths_preserves_existing_rows_and_completes_columns():
+    header = DLCHeaderModel(
+        columns=cols_4level(
+            scorer="S",
+            individuals=("",),
+            bodyparts=("nose", "tail"),
+            coords=("x", "y"),
+        )
+    )
+    pts_meta = PointsMetadata(header=header, paths=None)
+
+    sparse = pd.DataFrame(
+        [[10.0, 20.0]],
+        columns=cols_4level(
+            scorer="S",
+            individuals=("",),
+            bodyparts=("nose",),
+            coords=("x", "y"),
+        ),
+        index=["img000.png"],
+    )
+
+    out = complete_df_for_save(
+        sparse,
+        pts_meta=pts_meta,
+        header=header,
+    )
+
+    assert out.index.to_list() == [("img000.png",)]
+    assert ("S", "", "tail", "x") in out.columns
+    assert pd.isna(out.loc[("img000.png",), ("S", "", "tail", "x")])
+
+
+# -----------------------------------------------------------------------------
+# 9) merge_save_df: save-scope overlay preserves intentional NaN deletions
+# -----------------------------------------------------------------------------
+
+
+def test_merge_save_df_nan_in_new_clears_old_value():
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+    idx = pd.MultiIndex.from_tuples([("labeled-data", "test", "img000.png")])
+
+    df_old = pd.DataFrame([[10.0, 20.0]], index=idx, columns=cols)
+    df_new = pd.DataFrame([[np.nan, np.nan]], index=idx, columns=cols)
+
+    out = merge_save_df(df_old, df_new)
+
+    assert pd.isna(out.loc[idx[0], ("S", "", "nose", "x")])
+    assert pd.isna(out.loc[idx[0], ("S", "", "nose", "y")])
+
+
+def test_merge_save_df_preserves_rows_outside_new_save_scope():
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+    old_idx = pd.MultiIndex.from_tuples(
+        [
+            ("labeled-data", "test", "img000.png"),
+            ("labeled-data", "test", "img999.png"),
+        ]
+    )
+    new_idx = pd.MultiIndex.from_tuples([("labeled-data", "test", "img000.png")])
+
+    df_old = pd.DataFrame(
+        [
+            [10.0, 20.0],
+            [30.0, 40.0],
+        ],
+        index=old_idx,
+        columns=cols,
+    )
+    df_new = pd.DataFrame(
+        [[np.nan, np.nan]],
+        index=new_idx,
+        columns=cols,
+    )
+
+    out = merge_save_df(df_old, df_new)
+
+    assert pd.isna(out.loc[("labeled-data", "test", "img000.png"), ("S", "", "nose", "x")])
+    assert out.loc[("labeled-data", "test", "img999.png"), ("S", "", "nose", "x")] == 30.0
+    assert out.loc[("labeled-data", "test", "img999.png"), ("S", "", "nose", "y")] == 40.0
+
+
+def test_merge_save_df_preserves_old_columns_outside_new_columns():
+    old_cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose", "tail"),
+        coords=("x", "y"),
+    )
+    new_cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+    idx = pd.MultiIndex.from_tuples([("labeled-data", "test", "img000.png")])
+
+    df_old = pd.DataFrame([[10.0, 20.0, 30.0, 40.0]], index=idx, columns=old_cols)
+    df_new = pd.DataFrame([[11.0, 22.0]], index=idx, columns=new_cols)
+
+    out = merge_save_df(df_old, df_new)
+
+    assert out.loc[idx[0], ("S", "", "nose", "x")] == 11.0
+    assert out.loc[idx[0], ("S", "", "nose", "y")] == 22.0
+
+    # Old tail columns were outside df_new's column scope, so they remain.
+    assert out.loc[idx[0], ("S", "", "tail", "x")] == 30.0
+    assert out.loc[idx[0], ("S", "", "tail", "y")] == 40.0
+
+
+def test_merge_save_df_nan_clears_old_value_after_row_harmonization():
+    """
+    Deletion semantics depend on row labels matching after harmonization.
+
+    Existing DLC files may use basename-only row keys while newly formed save
+    dataframes may use deeper DLC path keys. merge_save_df() should harmonize
+    those representations before assigning df_new into df_old, otherwise NaNs
+    in df_new would not clear the intended old values.
+    """
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+
+    # Existing on-disk row uses basename representation.
+    df_old = pd.DataFrame(
+        [[10.0, 20.0]],
+        index=["img000.png"],
+        columns=cols,
+    )
+    guarantee_multiindex_rows(df_old)
+
+    # New save-scope row uses deeper DLC path representation.
+    df_new = pd.DataFrame(
+        [[np.nan, np.nan]],
+        index=["labeled-data/test/img000.png"],
+        columns=cols,
+    )
+    guarantee_multiindex_rows(df_new)
+
+    out = merge_save_df(df_old, df_new)
+
+    # harmonize_keypoint_row_index() collapses the deep row to basename so the
+    # assignment hits the existing row and NaN clears the old value.
+    row = ("img000.png",)
+    assert row in out.index
+    assert pd.isna(out.loc[row, ("S", "", "nose", "x")])
+    assert pd.isna(out.loc[row, ("S", "", "nose", "y")])
+
+
+def test_merge_save_df_refuses_no_row_overlap_after_harmonization():
+    """
+    If row labels do not overlap after harmonization, df_new cannot overwrite or
+    delete existing values. merge_save_df() refuses this case rather than silently
+    preserving old labels when deletion/overwrite semantics were expected.
+    """
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+
+    old_idx = pd.MultiIndex.from_tuples([("labeled-data", "test", "img000.png")])
+    new_idx = pd.MultiIndex.from_tuples([("labeled-data", "other", "img999.png")])
+
+    df_old = pd.DataFrame(
+        [[10.0, 20.0]],
+        index=old_idx,
+        columns=cols,
+    )
+    df_new = pd.DataFrame(
+        [[np.nan, np.nan]],
+        index=new_idx,
+        columns=cols,
+    )
+
+    with pytest.raises(ValueError, match="no row-index overlap after harmonization"):
+        merge_save_df(df_old, df_new)
+
+
+# -----------------------------------------------------------------------------
+# 10) keypoint_deletions and keypoint_conflicts(include_deletions=True)
+# -----------------------------------------------------------------------------
+
+
+def test_keypoint_deletions_detects_old_value_to_new_nan():
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+    idx = pd.MultiIndex.from_tuples([("labeled-data", "test", "img000.png")])
+
+    df_old = pd.DataFrame([[10.0, 20.0]], index=idx, columns=cols)
+    df_new = pd.DataFrame([[np.nan, np.nan]], index=idx, columns=cols)
+
+    deletions = keypoint_deletions(df_old, df_new)
+
+    assert deletions.loc[idx[0], ("", "nose")]
+
+
+def test_keypoint_deletions_does_not_flag_rows_outside_new_scope():
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+    old_idx = pd.MultiIndex.from_tuples(
+        [
+            ("labeled-data", "test", "img000.png"),
+            ("labeled-data", "test", "img999.png"),
+        ]
+    )
+    new_idx = pd.MultiIndex.from_tuples([("labeled-data", "test", "img000.png")])
+
+    df_old = pd.DataFrame(
+        [
+            [10.0, 20.0],
+            [30.0, 40.0],
+        ],
+        index=old_idx,
+        columns=cols,
+    )
+    df_new = pd.DataFrame(
+        [[np.nan, np.nan]],
+        index=new_idx,
+        columns=cols,
+    )
+
+    deletions = keypoint_deletions(df_old, df_new)
+
+    assert ("labeled-data", "test", "img000.png") in deletions.index
+    assert ("labeled-data", "test", "img999.png") not in deletions.index
+    assert deletions.loc[("labeled-data", "test", "img000.png"), ("", "nose")]
+
+
+def test_keypoint_conflicts_include_deletions_combines_overwrites_and_deletions():
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose", "tail"),
+        coords=("x", "y"),
+    )
+    idx = pd.MultiIndex.from_tuples([("labeled-data", "test", "img000.png")])
+
+    df_old = pd.DataFrame(
+        [[10.0, 20.0, 30.0, 40.0]],
+        index=idx,
+        columns=cols,
+    )
+    df_new = pd.DataFrame(
+        [[11.0, 20.0, np.nan, np.nan]],
+        index=idx,
+        columns=cols,
+    )
+
+    overwrites_only = keypoint_conflicts(df_old, df_new)
+    combined = keypoint_conflicts(df_old, df_new, include_deletions=True)
+
+    assert overwrites_only.loc[idx[0], ("", "nose")]
+    assert not overwrites_only.loc[idx[0], ("", "tail")]
+
+    assert combined.loc[idx[0], ("", "nose")]
+    assert combined.loc[idx[0], ("", "tail")]
+
+
+def test_keypoint_deletions_handles_basename_index_vs_deep_path_multiindex_regression():
+    """
+    Regression test for deletion detection with shallow old index and deep new save scope.
+
+    Old on-disk dataframe may use basename rows:
+        ("img00001.png",)
+
+    New save-scope dataframe may use DLC relative paths:
+        ("labeled-data", "test", "img00001.png")
+
+    keypoint_deletions() must harmonize before restricting to the new scope.
+    """
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+
+    df_old = pd.DataFrame(
+        [[10.0, 20.0]],
+        columns=cols,
+        index=["img00001.png"],
+    )
+    guarantee_multiindex_rows(df_old)
+
+    df_new = pd.DataFrame(
+        [[np.nan, np.nan]],
+        columns=cols,
+        index=["labeled-data/test/img00001.png"],
+    )
+    guarantee_multiindex_rows(df_new)
+
+    deletions = keypoint_deletions(df_old, df_new)
+
+    assert isinstance(deletions.index, pd.MultiIndex)
+    assert deletions.index.nlevels == 1
+    assert deletions.index.to_list() == [("img00001.png",)]
+    assert deletions.loc[("img00001.png",), ("", "nose")]
+
+
+# -----------------------------------------------------------------------------
+# 11) build_overwrite_conflict_report: separate modified vs deleted entries
+# -----------------------------------------------------------------------------
+
+
+def test_build_overwrite_conflict_report_counts_deletions_separately():
+    idx = pd.MultiIndex.from_tuples([("labeled-data", "test", "img000.png")])
+    cols = pd.MultiIndex.from_tuples(
+        [
+            ("", "nose"),
+            ("", "tail"),
+        ],
+        names=["individuals", "bodyparts"],
+    )
+
+    key_conflict = pd.DataFrame(
+        [[True, False]],
+        index=idx,
+        columns=cols,
+    )
+    deletion_conflict = pd.DataFrame(
+        [[False, True]],
+        index=idx,
+        columns=cols,
+    )
+
+    report = build_overwrite_conflict_report(
+        key_conflict,
+        deletion_conflict=deletion_conflict,
+        layer_name="CollectedData_S",
+        destination_path="/tmp/CollectedData_S.h5",
+    )
+
+    assert report.has_conflicts
+    assert report.n_overwrites == 1
+    assert report.n_deletions == 1
+    assert report.n_frames == 1
+    assert len(report.entries) == 1
+
+    entry = report.entries[0]
+    assert entry.frame_label == "labeled-data/test/img000.png"
+    assert entry.keypoints == ("nose",)
+    assert entry.deleted_keypoints == ("tail",)
+
+
+def test_build_overwrite_conflict_report_prefers_deleted_when_same_key_is_both_modified_and_deleted():
+    idx = pd.MultiIndex.from_tuples([("img000.png",)])
+    cols = pd.MultiIndex.from_tuples(
+        [("", "nose")],
+        names=["individuals", "bodyparts"],
+    )
+
+    key_conflict = pd.DataFrame([[True]], index=idx, columns=cols)
+    deletion_conflict = pd.DataFrame([[True]], index=idx, columns=cols)
+
+    report = build_overwrite_conflict_report(
+        key_conflict,
+        deletion_conflict=deletion_conflict,
+    )
+
+    assert report.n_overwrites == 0
+    assert report.n_deletions == 1
+    assert report.entries[0].keypoints == ()
+    assert report.entries[0].deleted_keypoints == ("nose",)
+
+
+# -----------------------------------------------------------------------------
+# 12) Regression: deleting a point clears it after completing + merging save df
+# -----------------------------------------------------------------------------
+
+
+def test_deleted_keypoint_roundtrip_complete_then_merge_clears_old_value():
+    header_cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose", "tail"),
+        coords=("x", "y"),
+    )
+    header = DLCHeaderModel(columns=header_cols)
+
+    pts_meta = PointsMetadata(
+        header=header,
+        paths=["labeled-data/test/img000.png"],
+    )
+
+    idx = pd.MultiIndex.from_tuples([("labeled-data", "test", "img000.png")])
+
+    df_old = pd.DataFrame(
+        [[10.0, 20.0, 30.0, 40.0]],
+        index=idx,
+        columns=header_cols,
+    )
+
+    # Current layer contains only tail. Nose was deleted from napari Points.
+    sparse_current = pd.DataFrame(
+        [[31.0, 41.0]],
+        index=idx,
+        columns=cols_4level(
+            scorer="S",
+            individuals=("",),
+            bodyparts=("tail",),
+            coords=("x", "y"),
+        ),
+    )
+
+    df_new = complete_df_for_save(
+        sparse_current,
+        pts_meta=pts_meta,
+        header=header,
+    )
+
+    out = merge_save_df(df_old, df_new)
+
+    # Deleted nose should be cleared.
+    assert pd.isna(out.loc[idx[0], ("S", "", "nose", "x")])
+    assert pd.isna(out.loc[idx[0], ("S", "", "nose", "y")])
+
+    # Existing/current tail should be saved.
+    assert out.loc[idx[0], ("S", "", "tail", "x")] == 31.0
+    assert out.loc[idx[0], ("S", "", "tail", "y")] == 41.0
+
+
+# -----------------------------------------------------------------------------
+# 13) drop_likelihood_columns
+# -----------------------------------------------------------------------------
+
+
+def test_drop_likelihood_columns_removes_multiindex_likelihood_coord():
+    cols = cols_4level(
+        scorer="S",
+        individuals=("",),
+        bodyparts=("nose",),
+        coords=("x", "y", "likelihood"),
+    )
+    df = pd.DataFrame([[1.0, 2.0, 0.9]], columns=cols)
+
+    out = drop_likelihood_columns(df)
+
+    assert out.columns.to_list() == [
+        ("S", "", "nose", "x"),
+        ("S", "", "nose", "y"),
+    ]
+
+
+def test_drop_likelihood_columns_removes_flat_likelihood_column():
+    df = pd.DataFrame(
+        {
+            "x": [1.0],
+            "y": [2.0],
+            "likelihood": [0.9],
+        }
+    )
+
+    out = drop_likelihood_columns(df)
+
+    assert list(out.columns) == ["x", "y"]

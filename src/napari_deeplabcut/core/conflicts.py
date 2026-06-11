@@ -7,7 +7,14 @@ import pandas as pd
 
 from napari_deeplabcut.config.models import AnnotationKind, OverwriteConflictReport, PointsMetadata
 from napari_deeplabcut.core import schemas as dlc_schemas
-from napari_deeplabcut.core.dataframes import set_df_scorer
+from napari_deeplabcut.core.dataframes import (
+    build_overwrite_conflict_report,
+    complete_df_for_save,
+    form_df_from_validated,
+    keypoint_conflicts,
+    keypoint_deletions,
+    set_df_scorer,
+)
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.io import DLC_CANONICAL_H5_KEY
 from napari_deeplabcut.core.metadata import parse_points_metadata
@@ -60,11 +67,6 @@ def compute_overwrite_report_for_points_save(
     # Local imports keep core.conflicts free of import cycles:
     # - core.dataframes imports ConflictEntry / OverwriteConflictReport
     # - core.io imports dataframe helpers and metadata parsing
-    from napari_deeplabcut.core.dataframes import (
-        build_overwrite_conflict_report,
-        form_df_from_validated,
-        keypoint_conflicts,
-    )
 
     attrs = dlc_schemas.PointsLayerAttributesModel.model_validate(attributes or {})
     pts_meta: PointsMetadata = parse_points_metadata(attrs.metadata, drop_header=False)
@@ -84,15 +86,20 @@ def compute_overwrite_report_for_points_save(
         }
     )
 
-    # Build the outgoing dataframe exactly like the writer
     df_new = form_df_from_validated(ctx)
 
-    # Resolve output path using the same provenance-first routing as write_hdf(...)
     out_path, target_scorer, source_kind = resolve_output_path_from_metadata(attributes)
 
-    # Promotion to GT may rewrite scorer level
     if target_scorer:
         df_new = set_df_scorer(df_new, target_scorer)
+
+    header_for_save = pts_meta.header.with_scorer(target_scorer) if target_scorer else pts_meta.header
+
+    df_new = complete_df_for_save(
+        df_new,
+        pts_meta=pts_meta,
+        header=header_for_save,
+    )
 
     # Never write back to machine sources without an explicit promotion target
     if not out_path and source_kind == AnnotationKind.MACHINE:
@@ -149,9 +156,11 @@ def compute_overwrite_report_for_points_save(
         df_old = pd.read_hdf(out)
 
     key_conflict = keypoint_conflicts(df_old, df_new)
+    deletion_conflict = keypoint_deletions(df_old, df_new)
 
     report = build_overwrite_conflict_report(
         key_conflict,
+        deletion_conflict=deletion_conflict,
         layer_name=attributes.get("name"),
         destination_path=str(out),
     )
@@ -184,10 +193,6 @@ def compute_overwrite_report_for_extracted_labels_row(
     OverwriteConflictReport | None
         Report if overwrites would occur, otherwise None.
     """
-    from napari_deeplabcut.core.dataframes import (
-        build_overwrite_conflict_report,
-        keypoint_conflicts,
-    )
 
     out = Path(destination_path)
     if not out.exists():

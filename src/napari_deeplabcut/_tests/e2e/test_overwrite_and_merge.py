@@ -13,57 +13,131 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_config_regression_no_silent_deletion(viewer, keypoint_controls, qtbot, tmp_path, caplog):
+def test_config_layer_then_h5_then_config_again_uses_plugin_save_checks(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    overwrite_confirm,
+    monkeypatch,
+):
     """
-    Regression for the original report:
-    Save the WRONG (placeholder) layer and still preserve previous labels due to merge-on-save.
+    Regression workflow:
+
+    1. Load config.yaml and use the config-created Points layer as a DLC
+       annotation layer once frame/save context exists.
+    2. Save annotations through the plugin workflow.
+    3. Reload the resulting H5/folder.
+    4. Add config.yaml again.
+    5. Saving the real DLC annotation layer must go through normal
+       overwrite/deletion preflight, not generic napari save and not
+       "Nothing to save".
     """
-    caplog.set_level(logging.DEBUG)
+    from napari_deeplabcut.core import keypoints
+
+    def fail_information(*args, **kwargs):
+        raise AssertionError("Unexpected QMessageBox.information; save should route through plugin DLC workflow.")
+
+    monkeypatch.setattr(
+        "napari_deeplabcut.ui.ui_dialogs.save.QMessageBox.information",
+        fail_information,
+    )
+
+    class FailFileDialog:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError(
+                "Unexpected QFileDialog; DLC config/annotation layers must not use generic napari save."
+            )
+
+    monkeypatch.setattr(
+        "napari_deeplabcut.ui.ui_dialogs.save.QFileDialog",
+        FailFileDialog,
+    )
 
     project, config_path, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
 
-    pre = pd.read_hdf(h5_path, key="df_with_missing")
-    assert np.isfinite(_get_coord_from_df(pre, "bodypart1", "x"))
-    assert np.isnan(_get_coord_from_df(pre, "bodypart2", "x"))
-
-    from napari_deeplabcut.core import keypoints
-
     viewer.window.add_dock_widget(keypoint_controls, name="Keypoint controls", area="right")
 
-    # Open config first -> placeholder Points layer exists
+    # ------------------------------------------------------------------
+    # Phase 1: config-created layer becomes a real annotation layer.
+    # ------------------------------------------------------------------
+
     viewer.open(str(config_path), plugin="napari-deeplabcut")
-    qtbot.waitUntil(lambda: len([ly for ly in viewer.layers if isinstance(ly, Points)]) >= 1, timeout=5_000)
+    qtbot.waitUntil(
+        lambda: len([ly for ly in viewer.layers if isinstance(ly, Points)]) >= 1,
+        timeout=5_000,
+    )
 
-    placeholder = next((ly for ly in viewer.layers if isinstance(ly, Points)), None)
-    assert placeholder is not None
-    assert placeholder.data is None or len(placeholder.data) == 0
+    config_layer = next(ly for ly in viewer.layers if isinstance(ly, Points))
+    assert keypoint_controls.layer_manager.is_config_placeholder_points_layer(config_layer)
 
-    # Open folder -> images + GT points layer
+    # Load frames/folder so the config layer can acquire save context.
+    # Depending on reader behavior this may also load an existing H5 annotation
+    # layer. The important thing is that the config-created layer should now
+    # be promotable once it has annotations/save context.
     viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
     qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
-    qtbot.wait(200)
+    qtbot.wait(300)
 
-    # Placeholder should still be present for this regression to apply
-    assert placeholder in viewer.layers
-
-    store = keypoint_controls.get_layer_store(placeholder)
+    store = keypoint_controls.get_layer_store(config_layer)
     assert store is not None
 
-    # Add a new bodypart2 point to placeholder using (frame, y, x)
-    store.current_keypoint = keypoints.Keypoint("bodypart2", "")
-    placeholder.add(np.array([0.0, 33.0, 44.0], dtype=float))
+    # Add concrete annotations to the config-created layer.
+    store.current_keypoint = keypoints.Keypoint("bodypart1", "")
+    config_layer.add(np.array([0.0, 10.0, 20.0], dtype=float))
 
-    viewer.layers.selection.active = placeholder
-    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
-    qtbot.wait(200)
+    store.current_keypoint = keypoints.Keypoint("bodypart2", "")
+    config_layer.add(np.array([0.0, 33.0, 44.0], dtype=float))
+
+    # NOTE: this kind of thing is why the layer identity system is useful
+    assert not keypoint_controls.layer_manager.is_config_placeholder_points_layer(config_layer)
+
+    viewer.layers.selection.clear()
+    viewer.layers.selection.add(config_layer)
+    viewer.layers.selection.active = config_layer
+
+    keypoint_controls._save_layers_dialog(selected=True)
+    qtbot.wait(300)
+
+    assert h5_path.exists()
+
+    # ------------------------------------------------------------------
+    # Phase 2: reload saved H5/folder, add config.yaml again, then save
+    # through overwrite/deletion-aware plugin workflow.
+    # ------------------------------------------------------------------
+
+    viewer.layers.clear()
+    qtbot.wait(300)
+
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
+    qtbot.wait(300)
+
+    points = _get_points_layer_with_data(viewer)
+
+    # Add config.yaml again. This should not create an invalid generic-save path.
+    viewer.open(str(config_path), plugin="napari-deeplabcut")
+    qtbot.wait(300)
+
+    store = keypoint_controls.get_layer_store(points)
+    assert store is not None
+
+    # Create an overwrite conflict to prove the save path runs preflight.
+    overwrite_confirm.capture().reset_calls()
+
+    _set_or_add_bodypart_xy(points, store, "bodypart1", x=99.0, y=88.0)
+
+    viewer.layers.selection.clear()
+    viewer.layers.selection.add(points)
+    viewer.layers.selection.active = points
+
+    keypoint_controls._save_layers_dialog(selected=True)
+    qtbot.wait(300)
+
+    assert len(overwrite_confirm.calls) == 1
 
     post = pd.read_hdf(h5_path, key="df_with_missing")
-    b1x_post = _get_coord_from_df(post, "bodypart1", "x")
-    b2x_post = _get_coord_from_df(post, "bodypart2", "x")
-
-    assert np.isfinite(b1x_post), "bodypart1 must be preserved (no silent deletion)."
-    assert np.isfinite(b2x_post), "bodypart2 must be saved."
-    assert b2x_post == 44.0
+    assert _get_coord_from_df(post, "bodypart1", "x") == 99.0
 
 
 @pytest.mark.usefixtures("qtbot")
@@ -126,7 +200,8 @@ def test_no_overwrite_warning_when_only_filling_nans(viewer, keypoint_controls, 
     _set_or_add_bodypart_xy(points, store, "bodypart2", x=44.0, y=33.0)
 
     viewer.layers.selection.active = points
-    viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+    # viewer.layers.save("__dlc__.h5", selected=True, plugin="napari-deeplabcut")
+    keypoint_controls._save_layers_dialog(selected=True)
     qtbot.wait(200)
 
     post = pd.read_hdf(h5_path, key="df_with_missing")
@@ -165,6 +240,68 @@ def test_overwrite_warning_triggers_on_conflict(viewer, keypoint_controls, qtbot
 
     post = pd.read_hdf(h5_path, key="df_with_missing")
     assert _get_coord_from_df(post, "bodypart1", "x") == 99.0
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_deletion_warning_triggers_when_existing_keypoint_is_removed(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    overwrite_confirm,
+    monkeypatch,
+):
+    """
+    Removing an existing saved keypoint from a real loaded DLC annotation layer
+    must trigger confirmation before the saved coordinate is cleared.
+    """
+    overwrite_confirm.capture().reset_calls()
+    monkeypatch.setattr(
+        "napari_deeplabcut.ui.ui_dialogs.save.QMessageBox.warning",
+        lambda *args, **kwargs: pytest.fail("Unexpected warning dialog; deletion preflight should run."),
+    )
+
+    _, _, labeled_folder, h5_path = _make_minimal_dlc_project(tmp_path)
+
+    pre = pd.read_hdf(h5_path, key="df_with_missing")
+    assert np.isfinite(_get_coord_from_df(pre, "bodypart1", "x"))
+
+    viewer.window.add_dock_widget(keypoint_controls, name="Keypoint controls", area="right")
+
+    viewer.open(str(labeled_folder), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len(viewer.layers) >= 2, timeout=10_000)
+    qtbot.wait(200)
+
+    points = _get_points_layer_with_data(viewer)
+    labels = np.asarray(points.properties.get("label"))
+    mask = labels != "bodypart1"
+
+    points.data = np.asarray(points.data)[mask]
+    for key, values in list(points.properties.items()):
+        try:
+            arr = np.asarray(values)
+            if len(arr) == len(mask):
+                points.properties[key] = arr[mask]
+        except Exception:
+            pass
+
+    viewer.layers.selection.clear()
+    viewer.layers.selection.add(points)
+    viewer.layers.selection.active = points
+
+    keypoint_controls._save_layers_dialog(selected=True)
+    qtbot.wait(200)
+
+    call = overwrite_confirm.calls[0]
+    assert call["n_deletions"] >= 1
+
+    deleted = []
+    for entry in call["entries"]:
+        deleted.extend(getattr(entry, "deleted_keypoints", ()) or ())
+    assert "bodypart1" in deleted
+
+    post = pd.read_hdf(h5_path, key="df_with_missing")
+    assert np.isnan(_get_coord_from_df(post, "bodypart1", "x"))
 
 
 @pytest.mark.usefixtures("qtbot")

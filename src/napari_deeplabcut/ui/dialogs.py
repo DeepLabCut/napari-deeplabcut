@@ -14,6 +14,7 @@ from pathlib import Path
 
 from napari.layers import Points
 from qtpy.QtCore import QPoint, Qt
+from qtpy.QtGui import QPalette
 from qtpy.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -33,8 +34,8 @@ from qtpy.QtWidgets import (
 
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut.config.keybinds import iter_shortcuts
+from napari_deeplabcut.config.models import OverwriteConflictReport
 from napari_deeplabcut.config.settings import get_overwrite_confirmation_enabled
-from napari_deeplabcut.core.conflicts import OverwriteConflictReport
 
 # from napari_deeplabcut.core.dataframes import summarize_keypoint_conflicts
 
@@ -516,6 +517,16 @@ class Tutorial(QDialog):
 # --------------------------------------------------------------------------------
 # Headless labeled data resolved to existing config.yaml project dialog
 # --------------------------------------------------------------------------------
+def _inverted_parent_bg_hex(widget: QWidget) -> str:
+    """Return inverse of the parent widget background color as #RRGGBB."""
+    ref = widget.parentWidget() or widget
+    bg = ref.palette().color(QPalette.Window)
+    inv_r = 255 - bg.red()
+    inv_g = 255 - bg.green()
+    inv_b = 255 - bg.blue()
+    return f"#{inv_r:02x}{inv_g:02x}{inv_b:02x}"
+
+
 class ProjectConfigPromptAction(str, Enum):
     ASSOCIATE = "associate"
     SKIP = "skip"
@@ -744,9 +755,43 @@ def warn_existing_dataset_folder_conflict(
 # --------------------------------------------------------------------------------------
 # Conflict resolution dialog for overwriting existing keypoints when saving annotations.
 # --------------------------------------------------------------------------------------
+def _conflict_summary_text(report: OverwriteConflictReport) -> str:
+    n_deletions = int(getattr(report, "n_deletions", 0) or 0)
+    n_overwrites = int(getattr(report, "n_overwrites", 0) or 0)
+
+    if n_deletions and n_overwrites:
+        return (
+            "Saving will modify existing annotations in the destination file.<br><br>"
+            "<b>Deletion warning:</b> Some keypoints will be deleted."
+        )
+
+    if n_deletions:
+        return "Saving will delete existing keypoints from the destination file.<br><br>"
+
+    return "Saving will overwrite existing keypoints in the destination file."
+
+
+def _conflict_affected_text(report: OverwriteConflictReport) -> str:
+    n_deletions = int(getattr(report, "n_deletions", 0) or 0)
+    n_overwrites = int(getattr(report, "n_overwrites", 0) or 0)
+
+    parts: list[str] = []
+
+    if n_overwrites:
+        parts.append(f"{n_overwrites} keypoint overwrite(s)")
+
+    if n_deletions:
+        parts.append(f"<b>{n_deletions} keypoint deletion(s)</b>")
+
+    if not parts:
+        parts.append("No keypoint changes")
+
+    return f"{' and '.join(parts)} across {report.n_frames} frame(s)/image(s)."
+
+
 class OverwriteConflictsDialog(QDialog):
     """
-    Warning dialog listing keypoints that will be overwritten.
+    Warning dialog listing keypoints that will be modified or deleted.
 
     Design goals:
     - compact initial size
@@ -765,6 +810,9 @@ class OverwriteConflictsDialog(QDialog):
         dest_text: str,
         affected_text: str,
         details: str,
+        details_label_text: str = "Conflicts (frame/image → keypoints):",
+        confirm_button_text: str = "Overwrite",
+        dangerous_default_cancel: bool = False,
     ):
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -775,14 +823,13 @@ class OverwriteConflictsDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        # Summary
         summary_label = QLabel(summary)
         summary_label.setWordWrap(True)
+        summary_label.setTextFormat(Qt.RichText)
         summary_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         summary_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         layout.addWidget(summary_label)
 
-        # Context block
         layer_label = QLabel(f"<b>Layer:</b> {layer_text}")
         layer_label.setWordWrap(True)
         layer_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -792,23 +839,29 @@ class OverwriteConflictsDialog(QDialog):
         dest_label = QLabel(f"<b>Destination:</b> {dest_text}")
         dest_label.setWordWrap(True)
         dest_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        dest_label.setToolTip(dest_text)  # helpful for long paths
+        dest_label.setToolTip(dest_text)
         dest_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         layout.addWidget(dest_label)
 
         affected_label = QLabel(f"<b>Affected:</b> {affected_text}")
         affected_label.setWordWrap(True)
+        affected_label.setTextFormat(Qt.RichText)
         affected_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         affected_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         layout.addWidget(affected_label)
 
-        # Detail section label
-        details_label = QLabel("Conflicts (frame/image → keypoints):")
+        details_label = QLabel(details_label_text)
         details_label.setWordWrap(True)
         details_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         layout.addWidget(details_label)
 
-        # Scrollable conflict list
+        separator = QFrame(self)
+        separator.setFrameShape(QFrame.NoFrame)
+        separator.setFixedHeight(1)
+        separator.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        separator.setStyleSheet(f"background-color: {_inverted_parent_bg_hex(self)}; border: none;")
+        layout.addWidget(separator)
+
         text = QPlainTextEdit(self)
         text.setReadOnly(True)
         text.setPlainText(details)
@@ -819,7 +872,6 @@ class OverwriteConflictsDialog(QDialog):
         text.setCenterOnScroll(False)
         self.text = text
 
-        # Keep default height compact, but allow the user to resize larger
         fm = text.fontMetrics()
         line_h = fm.lineSpacing()
         text.setMinimumHeight(line_h * 5 + 16)
@@ -827,29 +879,29 @@ class OverwriteConflictsDialog(QDialog):
 
         layout.addWidget(text)
 
-        # Buttons
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
 
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.reject)
 
-        self.overwrite_btn = QPushButton("Overwrite")
-        self.overwrite_btn.setDefault(True)
-        self.overwrite_btn.setAutoDefault(True)
+        self.overwrite_btn = QPushButton(confirm_button_text)
         self.overwrite_btn.clicked.connect(self.accept)
+
+        if dangerous_default_cancel:
+            self.cancel_btn.setDefault(True)
+            self.cancel_btn.setAutoDefault(True)
+            self.overwrite_btn.setDefault(False)
+            self.overwrite_btn.setAutoDefault(False)
+        else:
+            self.overwrite_btn.setDefault(True)
+            self.overwrite_btn.setAutoDefault(True)
 
         btn_row.addWidget(self.cancel_btn)
         btn_row.addWidget(self.overwrite_btn)
         layout.addLayout(btn_row)
 
-        # Let content drive the initial size instead of hardcoding a large minimum
         self.adjustSize()
-        self.sizeHint()
-        # self.resize(
-        #     min(max(hint.width(), 480), 820),
-        #     min(max(hint.height(), 240), 520),
-        # )
 
     @staticmethod
     def confirm(
@@ -861,6 +913,9 @@ class OverwriteConflictsDialog(QDialog):
         affected_text: str,
         details: str,
         title: str = "Overwrite warning",
+        details_label_text: str = "Conflicts (frame/image → keypoints):",
+        confirm_button_text: str = "Overwrite",
+        dangerous_default_cancel: bool = False,
     ) -> bool:
         dlg = OverwriteConflictsDialog(
             parent,
@@ -870,6 +925,9 @@ class OverwriteConflictsDialog(QDialog):
             dest_text=dest_text,
             affected_text=affected_text,
             details=details,
+            details_label_text=details_label_text,
+            confirm_button_text=confirm_button_text,
+            dangerous_default_cancel=dangerous_default_cancel,
         )
         return dlg.exec_() == QDialog.Accepted
 
@@ -884,11 +942,28 @@ def maybe_confirm_overwrite(
     if not get_overwrite_confirmation_enabled():
         return True
 
+    n_deletions = int(getattr(report, "n_deletions", 0) or 0)
+    has_deletions = n_deletions > 0
+
+    title = "Confirm keypoint deletions" if has_deletions else "Overwrite warning"
+
+    confirm_button_text = "Save keypoints" if has_deletions else "Save (overwrite) keypoints"
+
+    details_label_text = (
+        "<i>Conflicts (frame/image → modified or deleted keypoints):</i>"
+        if has_deletions
+        else "<i>Conflicts (frame/image → keypoints):</i>"
+    )
+
     return OverwriteConflictsDialog.confirm(
         parent,
-        summary="Saving will overwrite existing keypoints in the destination file.",
-        layer_text=report.layer_name or "Unknown layer",
-        dest_text=report.destination_path or "Unknown destination",
-        affected_text=f"{report.n_overwrites} keypoint overwrite(s) across {report.n_frames} frame(s)/image(s).",
+        title=title,
+        summary=_conflict_summary_text(report),
+        layer_text=html.escape(report.layer_name or "Unknown layer"),
+        dest_text=html.escape(report.destination_path or "Unknown destination"),
+        affected_text=_conflict_affected_text(report),
         details=report.details_text,
+        details_label_text=details_label_text,
+        confirm_button_text=confirm_button_text,
+        dangerous_default_cancel=has_deletions,
     )

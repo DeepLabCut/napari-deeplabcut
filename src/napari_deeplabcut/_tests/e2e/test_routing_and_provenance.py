@@ -75,6 +75,65 @@ def skip_project_config_dialog(monkeypatch, save_workflow_mod):
     return calls
 
 
+def _get_single_point_label_at_xy(
+    layer: Points,
+    *,
+    x: float,
+    y: float,
+    atol: float = 1e-6,
+) -> str:
+    """
+    Return the plugin-visible label for the unique point at x/y.
+
+    napari Points data is [frame, y, x], so:
+      data[:, 1] == y
+      data[:, 2] == x
+    """
+    labels = np.asarray(layer.properties.get("label", []), dtype=object)
+    data = np.asarray(layer.data)
+
+    assert data.ndim == 2 and data.shape[1] >= 3, data
+    assert len(labels) == len(data), f"Property/data length mismatch: labels={len(labels)} data={len(data)}"
+
+    mask = np.isclose(data[:, 2], x, atol=atol) & np.isclose(data[:, 1], y, atol=atol)
+
+    assert mask.any(), f"Expected a point at x={x}, y={y}. Observed data: {data}; labels: {list(labels)}"
+
+    matching_labels = labels[mask]
+    assert len(matching_labels) == 1, (
+        f"Expected exactly one point at x={x}, y={y}; got labels={list(matching_labels)} data={data[mask]}"
+    )
+
+    return str(matching_labels[0])
+
+
+def _assert_points_layer_has_label_xy(
+    layer: Points,
+    label: str,
+    *,
+    x: float,
+    y: float,
+    atol: float = 1e-6,
+):
+    """
+    Assert a plugin-visible Points layer contains `label` at x/y.
+
+    napari Points data is [frame, y, x].
+    """
+    labels = np.asarray(layer.properties.get("label", []), dtype=object)
+    data = np.asarray(layer.data)
+
+    assert data.ndim == 2 and data.shape[1] >= 3, data
+    assert len(labels) == len(data), f"Property/data length mismatch: labels={len(labels)} data={len(data)}"
+
+    mask = labels == label
+    assert mask.any(), f"Expected at least one point for {label!r}. Observed labels: {list(labels)}"
+
+    xy_match = np.isclose(data[mask, 2], x, atol=atol) & np.isclose(data[mask, 1], y, atol=atol)
+
+    assert xy_match.any(), f"Expected {label!r} at x={x}, y={y}. Observed data for label: {data[mask]}"
+
+
 @pytest.mark.usefixtures("qtbot")
 def test_save_routes_to_correct_gt_when_multiple_gt_exist(
     viewer, keypoint_controls, qtbot, tmp_path, overwrite_confirm
@@ -482,18 +541,28 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     Contract: a project-less labeled folder can be associated with a chosen DLC
     project at save time by rewriting safe paths to canonical DLC row keys.
 
-    Goals
-    -----
-    - Use current external folder name as the target dataset name.
-    - Save safe paths as labeled-data/<dataset>/<image>.
-    - Use the same normalized metadata for overwrite preflight and actual write.
+    E2E goals
+    ---------
+    - Use the current external folder name as the target dataset name.
+    - Save into the chosen DLC project's labeled-data/<dataset>/ folder.
+    - Use normalized DLC row-key metadata consistently for overwrite preflight
+      and actual write.
     - Persist the improved metadata on the live layer after successful save.
+    - Reopen the saved H5 through the plugin and recover the same plugin-visible
+      keypoint annotation.
 
     Non-goals
     ---------
-    - Do NOT require the current files to already be inside the selected project.
-    - Do NOT coerce nested/multi-folder layouts into DLC row keys.
-    - Do NOT rewrite unrelated outside paths.
+    - Do not assert the raw pandas/HDF row-index representation.
+      Mixed-depth paths may be represented internally as padded MultiIndex rows.
+      That is a lower-level writer/dataframe contract, not this E2E contract.
+    - Do not require the current files to already be inside the selected project.
+    - Do not move external image files on disk.
+    - Unrelated outside paths are invalid for a successful association save and
+        are covered by the refusal test.
+    - Do not test active-keypoint selection mechanics. This test records the
+      actual plugin-visible label assigned to the added point and verifies that
+      label survives save/readback.
     """
     overwrite_confirm.forbid()
 
@@ -512,29 +581,43 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     outside_img = outside_dir / "img999.png"
     outside_img.write_bytes(b"placeholder")
 
-    from napari_deeplabcut.core import keypoints
-
-    # Open config first -> placeholder points layer
+    # Open config first -> placeholder/config-derived Points layer.
     viewer.open(str(config_path), plugin="napari-deeplabcut")
-    qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5_000)
+    qtbot.waitUntil(
+        lambda: any(isinstance(ly, Points) for ly in viewer.layers),
+        timeout=5_000,
+    )
+    qtbot.wait(200)
 
     points = next(ly for ly in viewer.layers if isinstance(ly, Points))
     store = keypoint_controls.get_layer_store(points)
     assert store is not None
 
-    # Simulate project-less folder metadata:
+    # Simulate a project-less labeled folder association candidate.
+    #
+    # This mirrors a layer that has image/path context, but no known DLC project.
+    # The save workflow should ask the user to associate it with config.yaml.
     points.metadata = dict(points.metadata or {})
     points.metadata["root"] = str(external_folder)
     points.metadata["paths"] = [
         str(inside_abs),  # direct child of source_root -> should coerce
         "img002.png",  # basename -> should coerce
         f"labeled-data/{dataset}/img003.png",  # already canonical -> preserve
-        str(outside_img),  # unrelated absolute path -> preserve unchanged
     ]
     points.metadata.pop("project", None)
 
-    store.current_keypoint = keypoints.Keypoint("bodypart1", "")
-    points.add(np.array([0.0, 11.0, 22.0], dtype=float))
+    # Add one visible annotation using the plugin-facing helper.
+    #
+    # The plugin add wrapper owns keypoint assignment. In this E2E test we
+    # intentionally record the actual plugin-visible label assigned to the
+    # point, then assert that the same label/coordinate survives save + reopen.
+    _set_or_add_bodypart_xy(points, store, "bodypart1", x=22.0, y=11.0)
+
+    saved_label = _get_single_point_label_at_xy(
+        points,
+        x=22.0,
+        y=11.0,
+    )
 
     import napari_deeplabcut.core.conflicts as conflicts
     from napari_deeplabcut.ui import dialogs as ui_dialogs
@@ -546,6 +629,7 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
         captured["attributes"] = attributes
         return real_compute(data, attributes)
 
+    # Simulate the user choosing the project config.yaml.
     monkeypatch.setattr(
         save_workflow_mod,
         "prompt_for_project_config_for_save",
@@ -554,11 +638,15 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
             config_path=str(config_path),
         ),
     )
+
+    # Simulate accepting the metadata path rewrite confirmation.
     monkeypatch.setattr(
         save_workflow_mod,
         "maybe_confirm_dataset_path_rewrite",
         lambda *args, **kwargs: True,
     )
+
+    # Capture the exact metadata seen by overwrite preflight.
     monkeypatch.setattr(
         save_workflow_mod,
         "compute_overwrite_report_for_points_save",
@@ -573,15 +661,15 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     qtbot.wait(300)
 
     # After project association, save should route into the chosen project's
-    # labeled-data/<dataset>/ folder inferred from the rewritten metadata.
+    # labeled-data/<dataset>/ folder inferred from rewritten metadata.
     expected_dataset_dir = project / "labeled-data" / dataset
     expected_h5 = expected_dataset_dir / "CollectedData_John.h5"
     expected_csv = expected_dataset_dir / "CollectedData_John.csv"
 
-    assert expected_h5.exists()
-    assert expected_csv.exists()
+    assert expected_h5.exists(), f"Expected H5 to be created: {expected_h5}"
+    assert expected_csv.exists(), f"Expected CSV to be created: {expected_csv}"
 
-    # And it should NOT create a GT file next to the external source folder.
+    # It must not create GT files next to the external source folder.
     assert not (external_folder / "CollectedData_John.h5").exists()
     assert not (external_folder / "CollectedData_John.csv").exists()
 
@@ -589,28 +677,44 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
         f"labeled-data/{dataset}/{inside_abs.name}",
         f"labeled-data/{dataset}/img002.png",
         f"labeled-data/{dataset}/img003.png",
-        outside_img.as_posix(),
     ]
 
-    # Preflight saw normalized metadata
+    # Preflight saw normalized metadata.
     assert captured["attributes"]["metadata"]["project"] == str(project)
     assert captured["attributes"]["metadata"]["paths"] == expected_paths
 
-    # Live layer metadata persisted the successful normalization
+    # Live layer metadata persisted the successful normalization.
     assert points.metadata["project"] == str(project)
     assert points.metadata["paths"] == expected_paths
 
-    # H5 row index contains canonical DLC row keys for the safe cases
-    df = pd.read_hdf(expected_h5, key="df_with_missing")
-    if isinstance(df.index, pd.MultiIndex):
-        observed_rows = ["/".join(map(str, idx)) for idx in df.index]
-    else:
-        observed_rows = [str(idx).replace("\\", "/") for idx in df.index]
+    # E2E readback contract:
+    # the plugin should be able to reopen the saved H5 and recover the same
+    # plugin-visible annotation.
+    viewer.layers.clear()
+    qtbot.wait(200)
 
-    assert f"labeled-data/{dataset}/{inside_abs.name}" in observed_rows
-    assert f"labeled-data/{dataset}/img002.png" not in observed_rows
-    assert f"labeled-data/{dataset}/img003.png" not in observed_rows
-    assert outside_img.as_posix() not in observed_rows
+    viewer.open(str(expected_h5), plugin="napari-deeplabcut")
+    qtbot.waitUntil(
+        lambda: any(isinstance(ly, Points) for ly in viewer.layers),
+        timeout=10_000,
+    )
+    qtbot.wait(200)
+
+    reopened = next(ly for ly in viewer.layers if isinstance(ly, Points))
+
+    _assert_points_layer_has_label_xy(
+        reopened,
+        saved_label,
+        x=22.0,
+        y=11.0,
+    )
+
+    reopened_paths = [str(path).replace("\\", "/") for path in (reopened.metadata.get("paths") or [])]
+
+    expected_saved_path = f"labeled-data/{dataset}/{inside_abs.name}"
+    assert expected_saved_path in reopened_paths, (
+        f"Expected reopened layer metadata paths to include {expected_saved_path!r}. Observed paths: {reopened_paths}"
+    )
 
 
 @pytest.mark.usefixtures("qtbot")
@@ -955,3 +1059,117 @@ def test_direct_video_labeling_save_is_blocked_without_paths(
 
     # No GT file should have been created in the dataset folder
     assert not (labeled_folder / "CollectedData_John.h5").exists()
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_projectless_folder_save_refuses_unresolved_outside_paths(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    monkeypatch,
+    overwrite_confirm,
+    save_workflow_mod,
+):
+    """
+    Contract: when a project-less labeled folder is associated with an
+    existing DLC project via config.yaml, all image paths must be safely
+    rewritable to DLC project dataset row keys.
+
+    In this project-associated save mode, DLC annotation H5 row keys must be:
+
+        labeled-data/<dataset>/<image>
+
+    Unrelated absolute paths must never be kept as-is or written into the
+    destination CollectedData_*.h5. If any path cannot be safely rewritten,
+    the save must be refused before confirmation/overwrite preflight.
+    """
+    overwrite_confirm.forbid()
+
+    project, config_path, _project_dataset_folder = _make_project_config_and_frames_no_gt(tmp_path)
+
+    external_folder = tmp_path / "session_external"
+    external_folder.mkdir()
+
+    inside_abs = external_folder / "img001.png"
+    inside_abs.write_bytes(b"placeholder")
+    dataset = external_folder.name
+
+    outside_dir = tmp_path / "external-images"
+    outside_dir.mkdir()
+    outside_img = outside_dir / "img999.png"
+    outside_img.write_bytes(b"placeholder")
+
+    viewer.open(str(config_path), plugin="napari-deeplabcut")
+    qtbot.waitUntil(
+        lambda: any(isinstance(ly, Points) for ly in viewer.layers),
+        timeout=5_000,
+    )
+    qtbot.wait(200)
+
+    points = next(ly for ly in viewer.layers if isinstance(ly, Points))
+    store = keypoint_controls.get_layer_store(points)
+    assert store is not None
+
+    points.metadata = dict(points.metadata or {})
+    points.metadata["root"] = str(external_folder)
+    points.metadata["paths"] = [
+        str(inside_abs),
+        str(outside_img),
+    ]
+    points.metadata.pop("project", None)
+
+    _set_or_add_bodypart_xy(points, store, "bodypart1", x=22.0, y=11.0)
+
+    from napari_deeplabcut.ui import dialogs as ui_dialogs
+
+    monkeypatch.setattr(
+        save_workflow_mod,
+        "prompt_for_project_config_for_save",
+        lambda *args, **kwargs: ui_dialogs.ProjectConfigPromptResult(
+            action=ui_dialogs.ProjectConfigPromptAction.ASSOCIATE,
+            config_path=str(config_path),
+        ),
+    )
+
+    monkeypatch.setattr(
+        save_workflow_mod,
+        "maybe_confirm_dataset_path_rewrite",
+        lambda *args, **kwargs: pytest.fail(
+            "Dataset path rewrite confirmation must not be shown when unresolved paths exist."
+        ),
+    )
+
+    monkeypatch.setattr(
+        save_workflow_mod,
+        "compute_overwrite_report_for_points_save",
+        lambda *args, **kwargs: pytest.fail("Overwrite preflight must not run when unresolved outside paths exist."),
+    )
+
+    warned = {"called": False, "title": "", "text": ""}
+
+    def _warn(parent, title, text, *args, **kwargs):
+        warned["called"] = True
+        warned["title"] = title
+        warned["text"] = text
+        return save_workflow_mod.QMessageBox.Ok
+
+    monkeypatch.setattr(save_workflow_mod.QMessageBox, "warning", _warn)
+
+    keypoint_controls.viewer.layers.selection.active = points
+    keypoint_controls.viewer.layers.selection.select_only(points)
+
+    outcome = keypoint_controls._save_workflow.save_layers(selected=True)
+    qtbot.wait(200)
+
+    assert outcome.saved is False
+    assert warned["called"] is True
+    assert "could not be safely rewritten" in warned["text"]
+    assert outside_img.name in warned["text"]
+
+    expected_dataset_dir = project / "labeled-data" / dataset
+    assert not (expected_dataset_dir / "CollectedData_John.h5").exists()
+    assert not (expected_dataset_dir / "CollectedData_John.csv").exists()
+
+    assert not (external_folder / "CollectedData_John.h5").exists()
+    assert not (external_folder / "CollectedData_John.csv").exists()

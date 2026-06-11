@@ -7,9 +7,9 @@ import pandas as pd
 import pytest
 
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
+from napari_deeplabcut.core.dataframes import drop_likelihood_columns
 from napari_deeplabcut.core.errors import AmbiguousSaveError, MissingProvenanceError
 from napari_deeplabcut.core.io import (
-    _drop_likelihood_columns,
     _drop_likelihood_from_header,
     resolve_output_path_from_metadata,
     write_hdf,
@@ -133,8 +133,8 @@ def test_drop_likelihood_before_merge_prevents_machine_likelihood_from_leaking()
     )
 
     # Mimic writer behavior: strip likelihood on both sides before merge
-    df_old = _drop_likelihood_columns(df_old)
-    df_new = _drop_likelihood_columns(df_new)
+    df_old = drop_likelihood_columns(df_old)
+    df_new = drop_likelihood_columns(df_new)
 
     df_out = df_new.combine_first(df_old)
 
@@ -169,8 +169,8 @@ def test_drop_likelihood_cleans_existing_gt_columns_too():
         columns=cols_with_likelihood,
     )
 
-    df_old = _drop_likelihood_columns(df_old)
-    df_new = _drop_likelihood_columns(df_new)
+    df_old = drop_likelihood_columns(df_old)
+    df_new = drop_likelihood_columns(df_new)
     df_out = df_new.combine_first(df_old)
 
     coords = df_out.columns.get_level_values("coords")
@@ -188,7 +188,7 @@ def test_drop_likelihood_columns_removes_likelihood_from_empty_dataframe():
     )
     df = pd.DataFrame([], columns=cols, index=pd.Index([], name="image"))
 
-    out = _drop_likelihood_columns(df)
+    out = drop_likelihood_columns(df)
 
     assert out.empty
     assert "likelihood" not in out.columns.get_level_values("coords")

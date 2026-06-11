@@ -389,3 +389,81 @@ def test_write_hdf_promotion_creates_gt_when_missing(tmp_path, fake_keypoints, m
     assert not (root / "machinelabels-iter0.h5").exists(), (
         "Writer should not create/overwrite prediction files during promotion."
     )
+
+
+def test_write_hdf_gt_merge_persists_deleted_keypoint(tmp_path):
+    """
+    Regression test for the full writer path.
+
+    If an existing GT file contains a keypoint and the current Points layer no
+    longer contains that keypoint within the editable save scope, write_hdf()
+    must persist that deletion by writing NaN into CollectedData_*.h5.
+    """
+    root = tmp_path / "proj"
+    root.mkdir()
+
+    cols = pd.MultiIndex.from_product(
+        [["me"], ["nose", "tail"], ["x", "y"]],
+        names=["scorer", "bodyparts", "coords"],
+    )
+
+    header = DLCHeaderModel(columns=cols)
+
+    gt_path = root / "CollectedData_me.h5"
+
+    # Existing GT has both nose and tail.
+    df_gt = pd.DataFrame(
+        [[10.0, 20.0, 30.0, 40.0]],
+        index=["img000.png"],
+        columns=cols,
+    )
+    guarantee_multiindex_rows(df_gt)
+    df_gt.to_hdf(gt_path, key="df_with_missing", mode="w")
+
+    metadata = {
+        "name": "CollectedData_me",
+        "properties": {
+            # Current Points layer contains only tail.
+            # Nose was deleted from napari Points.
+            "label": ["tail"],
+            "id": [""],
+            "likelihood": [1.0],
+        },
+        "metadata": {
+            "header": header,
+            "paths": ["img000.png"],
+            "root": str(root),
+        },
+    }
+
+    # Explicit GT provenance routes the writer back to the existing GT file.
+    _add_source_io(
+        metadata,
+        root=root,
+        kind=AnnotationKind.GT,
+        source_name="CollectedData_me.h5",
+    )
+
+    # One napari point: [frame, y, x].
+    points = np.array(
+        [
+            [0.0, 41.0, 31.0],
+        ]
+    )
+
+    fnames = _writer.write_hdf_napari_dlc("ignored.h5", points, metadata)
+
+    assert Path(fnames[0]) == gt_path
+    assert gt_path.exists()
+
+    out = pd.read_hdf(gt_path, key="df_with_missing")
+
+    row = ("img000.png",)
+
+    # Deleted nose should be persisted as NaN.
+    assert pd.isna(out.loc[row, ("me", "nose", "x")])
+    assert pd.isna(out.loc[row, ("me", "nose", "y")])
+
+    # Present tail should be updated from napari [y, x] -> DLC [x, y].
+    assert out.loc[row, ("me", "tail", "x")] == 31.0
+    assert out.loc[row, ("me", "tail", "y")] == 41.0
