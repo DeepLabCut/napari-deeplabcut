@@ -245,7 +245,7 @@ def test_matplotlib_canvas_initialization_and_slider(viewer, points, qtbot):
 
     # Simulate adding a Points layer (triggers _load_dataframe)
     viewer.layers.selection.add(points)
-    canvas._load_dataframe()
+    canvas._load_dataframe(allow_fallback=True)
 
     # Ensure dataframe loaded and lines plotted
     assert canvas.df is not None
