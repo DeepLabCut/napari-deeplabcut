@@ -13,7 +13,7 @@ from napari.utils.events import Event
 from napari.utils.history import update_save_history
 from qtpy.QtCore import QObject, Signal
 
-from ...config.keybinds import install_points_layer_keybindings
+from ...config.keybinds import install_points_layer_keybindings, install_viewer_keybindings
 from ...config.models import AnnotationKind, DLCHeaderModel, ImageMetadata, PointsMetadata
 from ...core import keypoints
 from ...core.io import is_video
@@ -1173,7 +1173,8 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 pass
 
         if not resources.keybindings_installed:
-            install_points_layer_keybindings(layer, controls, store)
+            install_points_layer_keybindings(layer, controls, store, self.viewer)
+            install_viewer_keybindings(self.viewer)
             resources.keybindings_installed = True
 
         return resources
