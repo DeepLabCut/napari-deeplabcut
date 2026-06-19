@@ -283,6 +283,22 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             if isinstance(layer, Points) and self.is_plottable_traj_layer(layer):
                 yield layer
 
+    def active_plottable_traj_layer(self) -> Points | None:
+        """
+        Return the currently active plottable trajectory layer, without fallback.
+
+        Use this for selection-driven or removal-driven refreshes. During deletion,
+        napari may temporarily set active=None while the removed layer is still in
+        viewer.layers. Falling back to the first managed layer in that state can
+        resurrect a layer that is actively being removed.
+        """
+        active = getattr(self.viewer.layers.selection, "active", None)
+
+        if self.is_plottable_traj_layer(active):
+            return active
+
+        return None
+
     def suggest_plottable_traj_layer(self) -> Points | None:
         """
         Suggest the best Points layer to display in the trajectory plot.
