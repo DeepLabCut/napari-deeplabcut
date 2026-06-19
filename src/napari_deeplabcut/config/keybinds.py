@@ -65,14 +65,6 @@ _frame_repeat_timers: dict[tuple[int, str], QTimer] = {}
 
 def _viewer_from_callback_arg(ctx: BindingContext, obj):
     """
-    Viewer-scoped bindings receive viewer.
-    Points-layer passthrough bindings receive layer, so use ctx.viewer.
-    """
-    return ctx.viewer if ctx.viewer is not None else obj
-
-
-def _viewer_from_callback_arg(ctx: BindingContext, obj):
-    """
     Get the viewer either from context or from the callback argument itself.
     Requires a napari action that uses viewer as the callback argument.
     """
