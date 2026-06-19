@@ -19,7 +19,7 @@ import pandas as pd
 from matplotlib.backends.backend_qtagg import FigureCanvas, NavigationToolbar2QT
 from napari.layers import Points
 from napari.utils.events import Event
-from qtpy.QtCore import QSize, Qt, QTimer
+from qtpy.QtCore import QSize, Qt
 from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QSlider, QVBoxLayout, QWidget
 
@@ -34,6 +34,7 @@ from napari_deeplabcut.core.layers import (
     get_first_image_layer,
     get_first_video_image_layer,
 )
+from napari_deeplabcut.ui.base_widget import OwnedTimersMixin
 from napari_deeplabcut.utils.deprecations import deprecated
 
 from .plot_models import TrajectoryPlotState, TrajectorySeries
@@ -87,7 +88,7 @@ class NapariNavigationToolbar(NavigationToolbar2QT):
                 self._actions["zoom"].setIcon(self._qicon(Path(icon_dir) / "Zoom.png"))
 
 
-class TrajectoryMatplotlibCanvas(QWidget):
+class TrajectoryMatplotlibCanvas(QWidget, OwnedTimersMixin):
     """Trajectory plot using matplotlib for keypoints (t-y plot)."""
 
     def __init__(
@@ -99,6 +100,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
         get_color_mode: callable = None,
     ):
         super().__init__(parent=parent)
+        self._init_owned_timers()
 
         self.viewer = napari_viewer
         self._get_color_mode = get_color_mode or (lambda: "bodypart")
@@ -154,6 +156,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
         self.frames = []
         self.keypoints = []
         self._plot_state: TrajectoryPlotState | None = None
+        self._plot_layer: Points | None = None
         self.setMinimumSize(280, 350)
 
         self.viewer.dims.events.current_step.connect(self.update_plot_range)
@@ -164,9 +167,15 @@ class TrajectoryMatplotlibCanvas(QWidget):
         )
         self._apply_axis_theme()
 
-        self.viewer.layers.events.inserted.connect(lambda event=None: self.refresh_from_viewer_layers())
-        self.viewer.layers.events.removed.connect(lambda event=None: self.refresh_from_viewer_layers())
-        self.viewer.layers.selection.events.active.connect(lambda event=None: self.refresh_from_viewer_layers())
+        self.viewer.layers.events.inserted.connect(
+            lambda event=None: self.refresh_from_viewer_layers(allow_fallback=False)
+        )
+        self.viewer.layers.events.removed.connect(
+            lambda event=None: self.refresh_from_viewer_layers(allow_fallback=False)
+        )
+        self.viewer.layers.selection.events.active.connect(
+            lambda event=None: self.refresh_from_viewer_layers(allow_fallback=False)
+        )
         self.viewer.dims.events.range.connect(self._update_slider_max)
         self._lines: dict[tuple[str, str], list] = {}
 
@@ -175,7 +184,11 @@ class TrajectoryMatplotlibCanvas(QWidget):
         # If layers already existed before this widget was created
         # (e.g. drag-and-drop load before opening the plugin), populate
         # the plot from the current viewer state on the next event-loop turn.
-        QTimer.singleShot(0, self.refresh_from_viewer_layers)
+        self._schedule_once(
+            "initial_trajectory_refresh",
+            0,
+            lambda: self.refresh_from_viewer_layers(allow_fallback=True),
+        )
 
     @property
     def df(self) -> pd.DataFrame | None:
@@ -246,12 +259,23 @@ class TrajectoryMatplotlibCanvas(QWidget):
                     line.set_visible(not show)
             self._refresh_canvas(value=self._n)
 
-    def refresh_from_viewer_layers(self) -> None:
+    def refresh_from_viewer_layers(self, *, allow_fallback: bool = False) -> None:
         """
         Refresh the trajectory plot from the current viewer state.
+
+        Parameters
+        ----------
+        allow_fallback:
+            If True, choose a sensible plottable layer even when the active layer
+            is not plottable. This is appropriate for explicit plot initialization
+            or when the user opens the trajectory plot.
+
+            If False, use only the currently active plottable Points layer. This is
+            important for selection/layer-removal events, where napari may
+            transiently set active=None while a removed layer is still present.
         """
         try:
-            self._load_dataframe()
+            self._load_dataframe(allow_fallback=allow_fallback)
         except Exception:
             logger.debug("Trajectory plot: failed to load dataframe from viewer layers", exc_info=True)
 
@@ -265,15 +289,36 @@ class TrajectoryMatplotlibCanvas(QWidget):
         except Exception:
             logger.debug("Trajectory plot: failed to sync visible lines to point selection", exc_info=True)
 
-    def _get_plot_points_layer(self) -> Points | None:
+    def _get_plot_points_layer(self, *, allow_fallback: bool = False) -> Points | None:
         """
-        Return the manager-selected Points layer for the trajectory plot.
+        Return the Points layer to use for the trajectory plot.
+
+        Automatic refreshes should not fallback, because during layer deletion
+        napari temporarily has active=None while the removed layer may still be in
+        viewer.layers. Falling back in that state can rebuild the plot from a
+        tearing-down Points layer.
+
+        Explicit initialization/showing may allow fallback.
         """
-        return self.layer_manager.suggest_plottable_traj_layer()
+        if allow_fallback:
+            layer = self.layer_manager.suggest_plottable_traj_layer()
+        else:
+            layer = getattr(self.viewer.layers.selection, "active", None)
+            if not self.layer_manager.is_plottable_traj_layer(layer):
+                return None
+
+        if not isinstance(layer, Points):
+            return None
+
+        if layer not in self.viewer.layers:
+            return None
+
+        return layer
 
     def _clear_plot(self) -> None:
         """Clear plotted trajectories and reset axes."""
         self._plot_state = None
+        self._plot_layer = None
         self._lines = {}
 
         self._reset_axes()
@@ -521,9 +566,9 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
         self._apply_napari_theme()
 
-    def _load_dataframe(self, event=None) -> None:
+    def _load_dataframe(self, event=None, *, allow_fallback: bool = False) -> None:
         with mplstyle.context(self.mpl_style_sheet_path):
-            points_layer = self._get_plot_points_layer()
+            points_layer = self._get_plot_points_layer(allow_fallback=allow_fallback)
             logger.debug(f"Loading trajectory plot DataFrame from layer: {points_layer!r}")
             if points_layer is None:
                 # No plottable DLC points layer present -> clear the plot quietly.
@@ -669,9 +714,18 @@ class TrajectoryMatplotlibCanvas(QWidget):
             self._refresh_canvas(value=self._n)
 
     def _selected_line_keys_from_points_layer(self) -> set:
-        points_layer = self._get_plot_points_layer()
+        # Selection sync must be strict. If there is no active plottable Points
+        # layer, do not fallback to another managed Points layer, especially during
+        # layer removal.
+        points_layer = self._get_plot_points_layer(allow_fallback=False)
         logger.debug(f"Determining visible trajectory lines from points layer: {points_layer!r}")
+
         if points_layer is None:
+            return set()
+
+        # If the active layer is not the layer currently rendered, do not inspect
+        # its selected_data.
+        if self._plot_layer is not None and points_layer is not self._plot_layer:
             return set()
 
         selected = getattr(points_layer, "selected_data", None)
