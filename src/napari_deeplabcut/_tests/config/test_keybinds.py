@@ -36,7 +36,7 @@ def test_shortcuts_registry_points_layer_entries_have_callbacks():
         assert spec.keys
         assert spec.description
         assert spec.group
-        assert spec.scope in {"points-layer", "global-points"}
+        assert spec.scope in {"points-layer", "global-points", "viewer"}
 
         if spec.scope == "points-layer":
             assert spec.get_callback is not None
