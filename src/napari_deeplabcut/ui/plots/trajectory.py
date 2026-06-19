@@ -599,6 +599,7 @@ class TrajectoryMatplotlibCanvas(QWidget, OwnedTimersMixin):
                 return
 
             self._plot_state = state
+            self._plot_layer = points_layer
 
             logger.debug(
                 "Trajectory plot built: layer=%r df_shape=%s n_series=%d frame_bounds=(%s, %s)",
