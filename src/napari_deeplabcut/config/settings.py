@@ -11,6 +11,9 @@ DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP = "Set3"
 # UI settings
 _OVERWRITE_CONFIRM_ENABLED_KEY = "napari_deeplabcut/overwrite/confirm_enabled"
 AUTO_OPEN_KEYPOINT_CONTROLS_KEY = "napari_deeplabcut/ui/auto_open_keypoint_controls"
+## Trajectory plot
+_MIN_TRAJ_PLOT_WINDOW = 1
+_DEFAULT_TRAJ_PLOT_WINDOW = 50
 
 # Tracking settings
 TRACKING_SHORTCUTS_ENABLED = os.environ.get("NAPARI_DLC_TRACKING_SHORTCUTS_ENABLED", "1") == "1"

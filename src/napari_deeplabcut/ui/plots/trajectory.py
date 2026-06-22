@@ -25,6 +25,8 @@ from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QSlider, QVBoxLayou
 
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut.config.settings import (
+    _DEFAULT_TRAJ_PLOT_WINDOW,
+    _MIN_TRAJ_PLOT_WINDOW,
     DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP,
     DEFAULT_SINGLE_ANIMAL_CMAP,
 )
@@ -120,9 +122,9 @@ class TrajectoryMatplotlibCanvas(QWidget, OwnedTimersMixin):
         self.canvas.mpl_connect("button_press_event", self.on_doubleclick)
 
         self.slider = QSlider(Qt.Horizontal)
-        self.slider.setMinimum(50)
+        self.slider.setMinimum(_MIN_TRAJ_PLOT_WINDOW)
         self.slider.setMaximum(10000)
-        self.slider.setValue(50)
+        self.slider.setValue(_DEFAULT_TRAJ_PLOT_WINDOW)
         self.slider.setToolTip("Adjust the range of frames to display around the current frame")
         self.slider.setTickPosition(QSlider.TicksBelow)
         self.slider.setTickInterval(50)
@@ -248,6 +250,40 @@ class TrajectoryMatplotlibCanvas(QWidget, OwnedTimersMixin):
         if not text or text.lower() == "nan":
             return ""
         return text
+
+    @staticmethod
+    def _clamp(value: float, low: float, high: float) -> float:
+        """Clamp value to [low, high]."""
+        if high < low:
+            low, high = high, low
+        return max(low, min(high, value))
+
+    @staticmethod
+    def _small_span_padding(span: float) -> float:
+        """
+        Return padding for short trajectories.
+
+        For tiny frame ranges, a fixed half-frame padding keeps points and the
+        current-frame marker readable instead of pinned to the axes border.
+        """
+        if not np.isfinite(span) or span <= 0:
+            return 0.5
+        return max(0.5, 0.05 * span)
+
+    def _effective_window(self, state: TrajectoryPlotState) -> float:
+        """
+        Return a display window that is valid for the current frame extent.
+
+        The slider stores the requested window, but for short videos the actual
+        usable window cannot exceed the available frame span.
+        """
+        frame_span = float(state.frame_max - state.frame_min)
+
+        if not np.isfinite(frame_span) or frame_span <= 0:
+            return 1.0
+
+        requested = max(float(self._window), float(_MIN_TRAJ_PLOT_WINDOW))
+        return min(requested, frame_span)
 
     def on_doubleclick(self, event):
         if getattr(event, "dblclick", False):
@@ -610,6 +646,7 @@ class TrajectoryMatplotlibCanvas(QWidget, OwnedTimersMixin):
                 state.frame_max,
             )
 
+            self._update_slider_max()
             self._render_plot_state(state)
             self._refresh_canvas(value=self._n)
 
@@ -639,17 +676,52 @@ class TrajectoryMatplotlibCanvas(QWidget, OwnedTimersMixin):
             return
 
         with mplstyle.context(self.mpl_style_sheet_path):
-            half = self._window / 2.0
-            start = max(state.frame_min, value - half)
-            start = min(start, state.frame_max - self._window)
-            end = min(state.frame_max, value + half)
-            end = max(end, state.frame_min + self._window)
+            frame_min = float(state.frame_min)
+            frame_max = float(state.frame_max)
 
-            if end <= start:
-                end = start + 1.0
+            if frame_max < frame_min:
+                frame_min, frame_max = frame_max, frame_min
+
+            frame_span = frame_max - frame_min
+
+            if not np.isfinite(frame_span) or frame_span <= 0:
+                pad = 0.5
+                start = frame_min - pad
+                end = frame_max + pad
+            else:
+                window = self._effective_window(state)
+
+                if window >= frame_span:
+                    pad = self._small_span_padding(frame_span)
+                    start = frame_min - pad
+                    end = frame_max + pad
+                else:
+                    center = self._clamp(float(value), frame_min, frame_max)
+                    half = window / 2.0
+
+                    start = center - half
+                    end = center + half
+
+                    # Keep the window inside the available frame span
+                    if start < frame_min:
+                        end += frame_min - start
+                        start = frame_min
+
+                    if end > frame_max:
+                        start -= end - frame_max
+                        end = frame_max
+
+                    start = max(start, frame_min)
+                    end = min(end, frame_max)
+
+                    # Avoid visually collapsed limits for very small windows
+                    if end <= start:
+                        pad = self._small_span_padding(frame_span)
+                        start = center - pad
+                        end = center + pad
 
             self.ax.set_xlim(start, end)
-            self.vline.set_xdata([value])
+            self.vline.set_xdata([value, value])
             self.canvas.draw_idle()
 
     def set_window(self, value: int) -> None:
@@ -670,19 +742,51 @@ class TrajectoryMatplotlibCanvas(QWidget, OwnedTimersMixin):
         self._refresh_canvas(value)
 
     def _update_slider_max(self, event=None) -> None:
-        img = get_first_video_image_layer(self.viewer)
-        if img is None:
-            return
+        """
+        Update the trajectory window slider maximum.
 
+        Prefer the rendered plot state's frame bounds when available, because
+        the trajectory layer may cover fewer frames than the video layer.
+        """
+        max_window = None
+
+        if self._plot_state is not None:
+            try:
+                span = float(self._plot_state.frame_max - self._plot_state.frame_min)
+                if np.isfinite(span):
+                    max_window = max(_MIN_TRAJ_PLOT_WINDOW, int(np.ceil(span)))
+            except Exception:
+                logger.debug("Trajectory plot: failed to derive slider max from plot state", exc_info=True)
+
+        if max_window is None:
+            img = get_first_video_image_layer(self.viewer)
+            if img is None:
+                return
+
+            try:
+                n_frames = int(img.data.shape[0])
+            except Exception:
+                return
+
+            max_window = max(_MIN_TRAJ_PLOT_WINDOW, n_frames - 1)
+
+        self.slider.blockSignals(True)
         try:
-            n_frames = img.data.shape[0]
-        except Exception:
-            return
+            self.slider.setMinimum(_MIN_TRAJ_PLOT_WINDOW)
+            self.slider.setMaximum(max_window)
 
-        if n_frames < self.slider.minimum():
-            self.slider.setMaximum(self.slider.minimum())
-        else:
-            self.slider.setMaximum(n_frames - 1)
+            if self.slider.value() > max_window:
+                self.slider.setValue(max_window)
+                self._window = max_window
+                self.slider_value.setText(str(max_window))
+
+            tick_interval = max(1, max_window // 10)
+            self.slider.setTickInterval(tick_interval)
+        finally:
+            self.slider.blockSignals(False)
+
+        if self._plot_state is not None:
+            self._refresh_canvas(value=self._n)
 
     def _set_visible_keypoints(self, visible_keys: set) -> None:
         if not self._lines:
