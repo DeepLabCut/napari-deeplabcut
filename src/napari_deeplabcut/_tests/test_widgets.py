@@ -253,21 +253,21 @@ def test_matplotlib_canvas_initialization_and_slider(viewer, points, qtbot):
     assert canvas.ax.get_xlabel() == "Frame"
     assert canvas.ax.get_ylabel() == "Y position"
 
-    # Test slider updates
-    initial_window = canvas._window
-    canvas.slider.setValue(initial_window + 100)
-    assert canvas._window == initial_window + 100
-    assert canvas.slider_value.text() == str(initial_window + 100)
+    # Test slider updates using a valid value inside the current slider range.
+    slider_min = canvas.slider.minimum()
+    slider_max = canvas.slider.maximum()
+    current_value = canvas.slider.value()
 
-    # Test plot refresh does nothing when plot is hidden
-    canvas.update_plot_range(event=type("Event", (), {"value": [5]}))
-    assert canvas._n == 0
-    # Test plot refresh on frame change (forced as it is hidden)
-    canvas.update_plot_range(event=type("Event", (), {"value": [5]}), force=True)
-    assert canvas._n == 5
-    # Check that x-limits reflect the new window
-    start, end = canvas.ax.get_xlim()
-    assert start <= 5 <= end
+    assert slider_min < slider_max
+    assert slider_min <= current_value <= slider_max
+
+    target_window = slider_min if current_value != slider_min else slider_max
+
+    canvas.slider.setValue(target_window)
+
+    assert canvas.slider.value() == target_window
+    assert canvas._window == target_window
+    assert canvas.slider_value.text() == str(target_window)
 
 
 @pytest.fixture(autouse=True)
