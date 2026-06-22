@@ -253,16 +253,11 @@ def test_matplotlib_canvas_initialization_and_slider(viewer, points, qtbot):
     assert canvas.ax.get_xlabel() == "Frame"
     assert canvas.ax.get_ylabel() == "Y position"
 
-    # Test slider updates using a value inside the current slider range.
+    # Test slider updates
     initial_window = canvas._window
-    target_window = min(initial_window + 100, canvas.slider.maximum())
-
-    if target_window == initial_window:
-        target_window = max(canvas.slider.minimum(), initial_window - 1)
-    canvas.slider.setValue(target_window)
-
-    assert canvas._window == target_window
-    assert canvas.slider_value.text() == str(target_window)
+    canvas.slider.setValue(initial_window + 100)
+    assert canvas._window == initial_window + 100
+    assert canvas.slider_value.text() == str(initial_window + 100)
 
     # Test plot refresh does nothing when plot is hidden
     canvas.update_plot_range(event=type("Event", (), {"value": [5]}))

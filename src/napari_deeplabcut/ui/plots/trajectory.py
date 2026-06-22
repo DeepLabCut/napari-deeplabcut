@@ -743,26 +743,45 @@ class TrajectoryMatplotlibCanvas(QWidget, OwnedTimersMixin):
 
     def _update_slider_max(self, event=None) -> None:
         """
-        Keep the slider stable and backward-compatible.
+        Update the trajectory window slider maximum.
 
-        The slider value represents the requested frame window. The actual
-        displayed range is clamped in _refresh_canvas(), so short videos do not
-        need to shrink the slider maximum.
+        Prefer the rendered plot state's frame bounds when available, because
+        the trajectory layer may cover fewer frames than the video layer.
         """
+        max_window = None
+
+        if self._plot_state is not None:
+            try:
+                span = float(self._plot_state.frame_max - self._plot_state.frame_min)
+                if np.isfinite(span):
+                    max_window = max(_MIN_TRAJ_PLOT_WINDOW, int(np.ceil(span)))
+            except Exception:
+                logger.debug("Trajectory plot: failed to derive slider max from plot state", exc_info=True)
+
+        if max_window is None:
+            img = get_first_video_image_layer(self.viewer)
+            if img is None:
+                return
+
+            try:
+                n_frames = int(img.data.shape[0])
+            except Exception:
+                return
+
+            max_window = max(_MIN_TRAJ_PLOT_WINDOW, n_frames - 1)
+
         self.slider.blockSignals(True)
         try:
             self.slider.setMinimum(_MIN_TRAJ_PLOT_WINDOW)
-            self.slider.setMaximum(10000)
+            self.slider.setMaximum(max_window)
 
-            value = int(self.slider.value())
+            if self.slider.value() > max_window:
+                self.slider.setValue(max_window)
+                self._window = max_window
+                self.slider_value.setText(str(max_window))
 
-            if value < _MIN_TRAJ_PLOT_WINDOW:
-                value = _MIN_TRAJ_PLOT_WINDOW
-                self.slider.setValue(value)
-
-            self._window = value
-            self.slider_value.setText(str(value))
-            self.slider.setTickInterval(50)
+            tick_interval = max(1, max_window // 10)
+            self.slider.setTickInterval(tick_interval)
         finally:
             self.slider.blockSignals(False)
 
