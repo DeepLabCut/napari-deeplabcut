@@ -294,7 +294,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         """
         active = getattr(self.viewer.layers.selection, "active", None)
 
-        if self.is_plottable_traj_layer(active):
+        if self.is_plottable_traj_layer(active) and active in self.viewer.layers:
             return active
 
         return None
