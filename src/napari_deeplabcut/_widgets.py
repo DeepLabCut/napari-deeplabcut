@@ -1285,9 +1285,7 @@ class KeypointControls(ViewerSingletonWidget):
         """
         layer = getattr(event, "value", None)
 
-        with log_timing(
-            logger, f"on_active_layer_change value={getattr(layer, 'name', None)!r}", threshold_ms=0.0
-        ):
+        with log_timing(logger, f"on_active_layer_change value={getattr(layer, 'name', None)!r}", threshold_ms=0.0):
             self._color_grp.setVisible(self.layer_manager.is_multianimal(layer))
             # self._update_color_scheme() # if needed
             self._sync_dropdown_visibility()
