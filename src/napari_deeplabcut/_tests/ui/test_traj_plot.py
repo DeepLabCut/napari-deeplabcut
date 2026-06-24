@@ -222,5 +222,5 @@ def test_selected_line_keys_uses_strict_layer_resolution(viewer, qtbot, monkeypa
 
     monkeypatch.setattr(canvas, "_get_plot_points_layer", _fake_get_plot_points_layer)
 
-    assert canvas._selected_line_keys_from_points_layer() == set()
+    assert canvas._selected_line_keys_from_points_layer() is None
     assert calls == [False]
