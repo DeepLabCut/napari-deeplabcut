@@ -1,4 +1,12 @@
 # tools/launch_napari_debug.py
+"""This script launches napari with aggressive logging and crash diagnostics for debugging.
+
+While the logging is far too low level for most dev work,
+when segmentation faults or Qt-related C++ errors start surfacing,
+this script can help capture the events leading up to the crash,
+and potentially the stack trace of the crash directly.
+"""
+
 from __future__ import annotations
 
 import argparse
