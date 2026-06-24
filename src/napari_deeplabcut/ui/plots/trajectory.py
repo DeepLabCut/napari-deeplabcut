@@ -339,9 +339,7 @@ class TrajectoryMatplotlibCanvas(QWidget, OwnedTimersMixin):
         if allow_fallback:
             layer = self.layer_manager.suggest_plottable_traj_layer()
         else:
-            layer = getattr(self.viewer.layers.selection, "active", None)
-            if not self.layer_manager.is_plottable_traj_layer(layer):
-                return None
+            layer = self.layer_manager.active_plottable_traj_layer()
 
         if not isinstance(layer, Points):
             return None
