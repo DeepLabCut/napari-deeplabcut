@@ -12,7 +12,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Sequence
 
-from qtpy.QtCore import Qt, Signal
+from qtpy.QtCore import QEvent, Qt, Signal
 from qtpy.QtGui import QCursor
 from qtpy.QtWidgets import (
     QComboBox,
@@ -24,6 +24,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from napari_deeplabcut.config.settings import IGNORED_FOR_DROPDOWN_MENU_SEEKING_KEYS
 from napari_deeplabcut.core import keypoints
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,32 @@ class DropdownMenu(QComboBox):
     def __init__(self, labels: Sequence[str], parent: QWidget | None = None):
         super().__init__(parent)
         self.update_items(labels)
+
+        # Targets the opened dropdown list (when clicking)
+        self.view().installEventFilter(self)
+
+    def _do_skip_key(self, event) -> bool:
+        if event.type() != QEvent.KeyPress:
+            return False
+
+        if event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier):
+            return False
+
+        return event.key() in IGNORED_FOR_DROPDOWN_MENU_SEEKING_KEYS
+
+    def keyPressEvent(self, event):  # combo box is focused (clicked on last)
+        if self._do_skip_key(event):
+            event.ignore()
+            return
+        super().keyPressEvent(event)
+
+    def eventFilter(self, watched, event):  # opened dropdown list
+        # disabled for now as menu behaves correctly when focused
+        # if watched is self.view() and self._do_skip_key(event):
+        #     event.ignore()
+        #     return True
+
+        return super().eventFilter(watched, event)
 
     def update_to(self, text: str):
         index = self.findText(text)
