@@ -111,6 +111,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         self._project_path: str | None = None
 
         self._attached = False
+        self.viewer_keybinds_installed = False
 
         self._init_owned_timers()
 
@@ -1174,7 +1175,9 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         if not resources.keybindings_installed:
             install_points_layer_keybindings(layer, controls, store, self.viewer)
-            install_viewer_keybindings(self.viewer)
+            if not self.viewer_keybinds_installed:
+                install_viewer_keybindings(self.viewer)
+                self.viewer_keybinds_installed = True
             resources.keybindings_installed = True
 
         return resources
