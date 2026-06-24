@@ -824,7 +824,7 @@ class TrajectoryMatplotlibCanvas(QWidget, OwnedTimersMixin):
         logger.debug(f"Determining visible trajectory lines from points layer: {points_layer!r}")
 
         if points_layer is None:
-            return set()
+            return None
 
         # If the active layer is not the layer currently rendered, do not inspect
         # its selected_data.
@@ -894,6 +894,8 @@ class TrajectoryMatplotlibCanvas(QWidget, OwnedTimersMixin):
             return
 
         visible = self._selected_line_keys_from_points_layer()
+        if visible is None:
+            return
         if not visible:
             self._show_all_keypoints()
             return
