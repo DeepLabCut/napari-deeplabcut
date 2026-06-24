@@ -783,7 +783,7 @@ class KeypointControls(ViewerSingletonWidget):
         if Qt.CheckState(state) == Qt.CheckState.Checked:
             self._ensure_traj_canvas_docked()
             if self._mpl_docked:
-                self._traj_mpl_canvas.refresh_from_viewer_layers()
+                self._traj_mpl_canvas.refresh_from_viewer_layers(allow_fallback=True)
                 self._traj_mpl_canvas._apply_napari_theme()
                 self._traj_mpl_canvas.update_plot_range(
                     Event(type_name="", value=[self.viewer.dims.current_step[0]]),
