@@ -451,6 +451,118 @@ def test_compute_overwrite_report_passes_deletion_conflicts_to_report_builder(mo
     )
 
 
+def test_compute_overwrite_report_skips_deletions_for_machine_to_gt_promotion(
+    monkeypatch,
+    tmp_path,
+):
+    """
+    Machine-to-GT promotion uses non-deleting save semantics.
+
+    The completed machine dataframe may contain NaN values for existing GT
+    frames after remapping/save scope creation. Those NaNs are not applied as
+    deletions by the writer and therefore must not be reported as deletions by
+    the overwrite preflight.
+
+    Valid machine overwrites of GT keypoints must still be reported.
+    """
+    out = tmp_path / "CollectedData_target.h5"
+    out.touch()
+
+    old_df = pd.DataFrame({"old": [1]})
+    new_df = pd.DataFrame({"new": [1]})
+    completed_df = pd.DataFrame({"completed": [1]})
+
+    key_conflict = pd.DataFrame(
+        [[True]],
+        index=["img000.png"],
+        columns=["nose"],
+    )
+    report = SimpleNamespace(
+        has_conflicts=True,
+        n_overwrites=1,
+        n_deletions=0,
+    )
+
+    # The presence of save_target makes the destination GT, while io.kind
+    # identifies the selected source layer as MACHINE.
+    pts_meta = _make_points_meta(
+        io_kind=AnnotationKind.MACHINE,
+        save_target=object(),
+    )
+
+    _stub_validation_pipeline(
+        monkeypatch,
+        pts_meta=pts_meta,
+        df_new=new_df,
+        completed_df=completed_df,
+    )
+
+    monkeypatch.setattr(
+        conflicts_mod,
+        "resolve_output_path_from_metadata",
+        lambda attributes: (
+            str(out),
+            "target_scorer",
+            AnnotationKind.MACHINE,
+        ),
+    )
+    monkeypatch.setattr(
+        pd,
+        "read_hdf",
+        lambda path, key=None: old_df,
+    )
+    monkeypatch.setattr(
+        conflicts_mod,
+        "keypoint_conflicts",
+        lambda df_old, df_new: key_conflict,
+    )
+
+    def fail_keypoint_deletions(*args, **kwargs):
+        pytest.fail("keypoint_deletions() must not be called for machine-to-GT promotion.")
+
+    monkeypatch.setattr(
+        conflicts_mod,
+        "keypoint_deletions",
+        fail_keypoint_deletions,
+    )
+
+    seen = {}
+
+    def fake_build_report(
+        conflicts,
+        *,
+        deletion_conflict,
+        layer_name,
+        destination_path,
+    ):
+        seen["args"] = (
+            conflicts,
+            deletion_conflict,
+            layer_name,
+            destination_path,
+        )
+        return report
+
+    monkeypatch.setattr(
+        conflicts_mod,
+        "build_overwrite_conflict_report",
+        fake_build_report,
+    )
+
+    result = conflicts_mod.compute_overwrite_report_for_points_save(
+        data=[[0, 1, 2]],
+        attributes={"name": "machinelabels-iter0"},
+    )
+
+    assert result is report
+    assert seen["args"] == (
+        key_conflict,
+        None,
+        "machinelabels-iter0",
+        str(out),
+    )
+
+
 def test_compute_overwrite_report_raises_when_gt_fallback_has_no_root_and_no_dataset_dir(monkeypatch):
     pts_meta = _make_points_meta(io_kind=AnnotationKind.GT, root=None)
     _stub_validation_pipeline(monkeypatch, pts_meta=pts_meta)
