@@ -81,6 +81,11 @@ jobs:
     # github secrets (see readme for details)
     needs: [test]
     runs-on: ubuntu-latest
+
+    concurrency:
+      group: pypi-deploy
+      cancel-in-progress: false
+
     if: |
       always() && (
         (github.event_name == 'workflow_dispatch' && inputs.force_deploy) ||
