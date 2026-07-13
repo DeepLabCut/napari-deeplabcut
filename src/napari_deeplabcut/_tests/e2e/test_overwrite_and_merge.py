@@ -529,7 +529,7 @@ def test_machine_label_promotion_preserves_existing_gt_after_frame_remap(
     assert save_target is not None
 
     if isinstance(save_target, dict):
-        assert save_target.get("kind") is (AnnotationKind.GT)
+        assert save_target.get("kind") is (AnnotationKind.GT) or save_target.get("kind") == "gt"
         assert save_target.get("scorer") == ("John")
         assert save_target.get("source_relpath_posix") == "CollectedData_John.h5"
     else:

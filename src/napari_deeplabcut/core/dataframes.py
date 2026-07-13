@@ -521,9 +521,10 @@ def merge_save_df(
 
     Semantics:
     - rows/columns outside df_new scope are preserved from df_old
-    - rows/columns inside df_new scope replace df_old, including NaN
+    - rows/columns inside df_new scope replace df_old, including NaN, unless allow_deletions=False
+        - Notably, machine labels to GT save are not allowed deletions.
+          The GT layer itself is the only source of any deletions.
     - NaN in df_new therefore clears/deletes an old saved keypoint
-    - Machine labels to GT save are not allowed deletions.
     """
     df_new2, df_old2 = harmonize_keypoint_row_index(df_new, df_old)
     df_new2 = harmonize_keypoint_column_index(df_new2)
