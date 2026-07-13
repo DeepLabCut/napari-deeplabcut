@@ -517,14 +517,48 @@ def merge_save_df(
     allow_deletions: bool = True,
 ) -> pd.DataFrame:
     """
-    Merge an existing DLC dataframe with a new save dataframe.
+    Merge a new DLC save dataframe into an existing DLC dataframe.
 
-    Semantics:
-    - rows/columns outside df_new scope are preserved from df_old
-    - rows/columns inside df_new scope replace df_old, including NaN, unless allow_deletions=False
-        - Notably, machine labels to GT save are not allowed deletions.
-          The GT layer itself is the only source of any deletions.
-    - NaN in df_new therefore clears/deletes an old saved keypoint
+    Parameters
+    ----------
+    df_old:
+        Existing on-disk DLC annotations.
+    df_new:
+        Incoming annotations to save.
+    allow_deletions:
+        Controls how missing values in ``df_new`` are interpreted.
+
+        When True, ``df_new`` is authoritative within its row and column
+        scope. Incoming values, including NaN, replace existing values.
+        This supports intentional deletion when saving a directly edited
+        GT layer.
+
+        When False, ``df_new`` is treated as a non-deleting patch. Only
+        non-missing incoming values are applied. Incoming NaN values preserve
+        existing values. This is used when promoting machine annotations
+        into GT.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A dataframe containing the union of the old and new row and column
+        indexes, with ``df_new`` applied according to ``allow_deletions``.
+
+    Semantics
+    ---------
+    In both modes:
+
+    - rows and columns outside ``df_new``'s scope are preserved from ``df_old``
+    - non-missing values in ``df_new`` add or overwrite values in ``df_old``
+
+    With ``allow_deletions=True``:
+
+    - NaN values in ``df_new`` clear existing values in ``df_old``
+
+    With ``allow_deletions=False``:
+
+    - NaN values in ``df_new`` are no-ops and preserve existing values in
+      ``df_old``
     """
     df_new2, df_old2 = harmonize_keypoint_row_index(df_new, df_old)
     df_new2 = harmonize_keypoint_column_index(df_new2)
@@ -549,10 +583,7 @@ def merge_save_df(
     else:
         # Machine-to-GT promotion semantics: only actual machine annotations
         # may modify GT. Missing machine values are not deletion requests.
-        incoming = df_new2.reindex(index=idx, columns=cols)
-        incoming_has_value = incoming.notna()
-        df_out = df_out.where(~incoming_has_value, incoming)
-
+        df_out.update(df_new2, overwrite=True)
     return df_out
 
 
