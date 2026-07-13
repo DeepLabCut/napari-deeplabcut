@@ -542,7 +542,6 @@ def merge_save_df(
     cols = df_old2.columns.union(df_new2.columns)
 
     df_out = df_old2.reindex(index=idx, columns=cols)
-    incoming = df_new2.reindex(index=idx, columns=cols)
 
     if allow_deletions:
         # Critical: assign df_new values directly, including NaN.
@@ -550,6 +549,7 @@ def merge_save_df(
     else:
         # Machine-to-GT promotion semantics: only actual machine annotations
         # may modify GT. Missing machine values are not deletion requests.
+        incoming = df_new2.reindex(index=idx, columns=cols)
         incoming_has_value = incoming.notna()
         df_out = df_out.where(~incoming_has_value, incoming)
 
