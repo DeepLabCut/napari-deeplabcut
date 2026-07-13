@@ -563,6 +563,78 @@ def test_compute_overwrite_report_skips_deletions_for_machine_to_gt_promotion(
     )
 
 
+def test_compute_overwrite_report_returns_none_for_disjoint_machine_to_gt_promotion(
+    monkeypatch,
+    tmp_path,
+):
+    """
+    A disjoint machine-to-GT promotion has only additions.
+
+    Missing machine values are not deletions, so if there are no finite
+    overwrite conflicts the preflight must return None and show no warning.
+    """
+    out = tmp_path / "CollectedData_target.h5"
+    out.touch()
+
+    old_df = pd.DataFrame({"old": [1]})
+    new_df = pd.DataFrame({"new": [1]})
+    completed_df = pd.DataFrame({"completed": [1]})
+
+    no_overwrites = pd.DataFrame(
+        [[False]],
+        index=["img000.png"],
+        columns=["nose"],
+    )
+
+    pts_meta = _make_points_meta(
+        io_kind=AnnotationKind.MACHINE,
+        save_target=object(),
+    )
+
+    _stub_validation_pipeline(
+        monkeypatch,
+        pts_meta=pts_meta,
+        df_new=new_df,
+        completed_df=completed_df,
+    )
+
+    monkeypatch.setattr(
+        conflicts_mod,
+        "resolve_output_path_from_metadata",
+        lambda attributes: (
+            str(out),
+            "target_scorer",
+            AnnotationKind.MACHINE,
+        ),
+    )
+    monkeypatch.setattr(
+        pd,
+        "read_hdf",
+        lambda path, key=None: old_df,
+    )
+    monkeypatch.setattr(
+        conflicts_mod,
+        "keypoint_conflicts",
+        lambda df_old, df_new: no_overwrites,
+    )
+
+    def fail_keypoint_deletions(*args, **kwargs):
+        pytest.fail("Disjoint machine promotion must not calculate GT deletions.")
+
+    monkeypatch.setattr(
+        conflicts_mod,
+        "keypoint_deletions",
+        fail_keypoint_deletions,
+    )
+
+    result = conflicts_mod.compute_overwrite_report_for_points_save(
+        data=[[0, 1, 2]],
+        attributes={"name": "machinelabels-iter0"},
+    )
+
+    assert result is None
+
+
 def test_compute_overwrite_report_raises_when_gt_fallback_has_no_root_and_no_dataset_dir(monkeypatch):
     pts_meta = _make_points_meta(io_kind=AnnotationKind.GT, root=None)
     _stub_validation_pipeline(monkeypatch, pts_meta=pts_meta)
