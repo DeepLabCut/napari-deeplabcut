@@ -1212,6 +1212,59 @@ def test_machine_to_gt_merge_overwrites_finite_values_but_does_not_delete():
     )
 
 
+def test_merge_save_df_non_deleting_patch_adds_completely_disjoint_rows():
+    """
+    A non-deleting patch may safely add rows that do not overlap the existing
+    dataframe.
+
+    This represents machine annotations whose frames are entirely disjoint
+    from the existing GT dataset.
+    """
+    cols = cols_4level(
+        scorer="S",
+        individuals=("animal1",),
+        bodyparts=("nose",),
+        coords=("x", "y"),
+    )
+
+    old_index = pd.MultiIndex.from_tuples(
+        [
+            (
+                "labeled-data",
+                "test",
+                "img000.png",
+            )
+        ]
+    )
+    new_index = pd.MultiIndex.from_tuples(
+        [
+            (
+                "labeled-data",
+                "test",
+                "img001.png",
+            )
+        ]
+    )
+
+    df_old = pd.DataFrame(
+        [[10.0, 20.0]],
+        index=old_index,
+        columns=cols,
+    )
+    df_new = pd.DataFrame(
+        [[30.0, 40.0]],
+        index=new_index,
+        columns=cols,
+    )
+
+    with pytest.raises(ValueError, match="no row-index overlap after harmonization"):
+        merge_save_df(
+            df_old,
+            df_new,
+            allow_deletions=False,
+        )
+
+
 # -----------------------------------------------------------------------------
 # 13) drop_likelihood_columns
 # -----------------------------------------------------------------------------
