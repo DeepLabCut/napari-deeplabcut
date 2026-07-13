@@ -343,3 +343,211 @@ def _scheme_from_policy(layer, prop: str, names: list[str]) -> dict[str, str]:
     cycles = _cycles_from_policy(layer)
     mapping = cycles.get(prop, {})
     return {name: _to_hex(mapping[name]) for name in names if name in mapping}
+
+
+def _row_key_to_posix(row_key) -> str:
+    """Normalize a DLC dataframe row key to a POSIX-style string."""
+    if isinstance(row_key, tuple):
+        return "/".join(
+            str(part).replace("\\", "/").strip("/") for part in row_key if part is not None and str(part) != ""
+        )
+
+    return str(row_key).replace("\\", "/").strip("/")
+
+
+def _dataframe_rows_by_path(
+    df: pd.DataFrame,
+) -> dict[str, object]:
+    """
+    Map normalized DLC row paths to their original pandas index values.
+
+    The original values are retained so callers can safely use them with
+    df.loc regardless of whether the dataframe has an Index or MultiIndex.
+    """
+    rows: dict[str, object] = {}
+
+    for row_key in df.index:
+        normalized = _row_key_to_posix(row_key)
+
+        if normalized in rows:
+            raise AssertionError(f"Duplicate normalized DLC row key: {normalized}")
+
+        rows[normalized] = row_key
+
+    return rows
+
+
+def _seed_gt_and_machine_outlier_dataset(
+    labeled_folder: Path,
+    *,
+    scorer: str = "John",
+    model_scorer: str = "DLC_model",
+    bodypart: str = "bodypart1",
+    n_initial_frames: int = 30,
+    n_outlier_frames: int = 20,
+) -> tuple[
+    Path,
+    Path,
+    list[str],
+    list[str],
+    dict[str, tuple[float, float]],
+]:
+    """
+    Seed the exact disk layout involved in machine-to-GT refinement.
+
+    Creates
+    -------
+    CollectedData_<scorer>.h5
+        Finite manual GT annotations on the first ``n_initial_frames``.
+
+    machinelabels-iter0.h5
+        Finite machine annotations on the following ``n_outlier_frames``.
+
+    PNG files
+        One shared image set containing both groups of frames.
+
+    Returns
+    -------
+    gt_path
+    machine_path
+    initial_paths
+        Canonical DLC row paths for the initial GT frames.
+    outlier_paths
+        Canonical DLC row paths for the machine frames.
+    expected_outlier_xy
+        Expected promoted coordinates keyed by canonical DLC row path.
+    """
+    if n_initial_frames <= 0:
+        raise ValueError("n_initial_frames must be positive.")
+
+    if n_outlier_frames <= 0:
+        raise ValueError("n_outlier_frames must be positive.")
+
+    total_frames = n_initial_frames + n_outlier_frames
+
+    existing_images = sorted(labeled_folder.glob("*.png"))
+    assert existing_images, f"The project helper must create at least one readable PNG in {labeled_folder}."
+
+    # Reuse the bytes of an image created by the existing project fixture.
+    # This gives us 50 valid image files without introducing an image-writing
+    # dependency into this test.
+    template_image_bytes = existing_images[0].read_bytes()
+
+    for image in existing_images:
+        image.unlink()
+
+    image_names = [f"img{i:03d}.png" for i in range(total_frames)]
+
+    for image_name in image_names:
+        destination = labeled_folder / image_name
+        destination.write_bytes(template_image_bytes)
+
+    dataset_name = labeled_folder.name
+
+    initial_paths = [f"labeled-data/{dataset_name}/{image_name}" for image_name in image_names[:n_initial_frames]]
+    outlier_paths = [f"labeled-data/{dataset_name}/{image_name}" for image_name in image_names[n_initial_frames:]]
+
+    # ------------------------------------------------------------------
+    # Existing human ground truth: canonical single-animal DLC format.
+    # ------------------------------------------------------------------
+
+    gt_columns = pd.MultiIndex.from_product(
+        [
+            [scorer],
+            [bodypart],
+            ["x", "y"],
+        ],
+        names=[
+            "scorer",
+            "bodyparts",
+            "coords",
+        ],
+    )
+
+    gt_index = pd.MultiIndex.from_tuples([tuple(path.split("/")) for path in initial_paths])
+
+    gt_values = np.empty(
+        (n_initial_frames, len(gt_columns)),
+        dtype=float,
+    )
+
+    for frame_index in range(n_initial_frames):
+        gt_values[frame_index, 0] = 1000.0 + frame_index
+        gt_values[frame_index, 1] = 2000.0 + frame_index
+
+    gt_df = pd.DataFrame(
+        gt_values,
+        index=gt_index,
+        columns=gt_columns,
+    )
+
+    gt_path = labeled_folder / f"CollectedData_{scorer}.h5"
+
+    gt_df.to_hdf(
+        gt_path,
+        key="df_with_missing",
+        mode="w",
+    )
+    gt_df.to_csv(gt_path.with_suffix(".csv"))
+
+    # ------------------------------------------------------------------
+    # Machine labels: x/y/likelihood on the 20 outlier frames.
+    # ------------------------------------------------------------------
+
+    machine_columns = pd.MultiIndex.from_product(
+        [
+            [model_scorer],
+            [bodypart],
+            ["x", "y", "likelihood"],
+        ],
+        names=[
+            "scorer",
+            "bodyparts",
+            "coords",
+        ],
+    )
+
+    machine_index = pd.MultiIndex.from_tuples([tuple(path.split("/")) for path in outlier_paths])
+
+    machine_values = np.empty(
+        (n_outlier_frames, len(machine_columns)),
+        dtype=float,
+    )
+
+    expected_outlier_xy: dict[
+        str,
+        tuple[float, float],
+    ] = {}
+
+    for local_index, path in enumerate(outlier_paths):
+        x = 5000.0 + local_index
+        y = 6000.0 + local_index
+        likelihood = 0.95
+
+        machine_values[local_index, 0] = x
+        machine_values[local_index, 1] = y
+        machine_values[local_index, 2] = likelihood
+
+        expected_outlier_xy[path] = (x, y)
+
+    machine_df = pd.DataFrame(
+        machine_values,
+        index=machine_index,
+        columns=machine_columns,
+    )
+
+    machine_path = labeled_folder / "machinelabels-iter0.h5"
+
+    machine_df.to_hdf(
+        machine_path,
+        key="df_with_missing",
+        mode="w",
+    )
+
+    return (
+        gt_path,
+        machine_path,
+        initial_paths,
+        outlier_paths,
+        expected_outlier_xy,
+    )
