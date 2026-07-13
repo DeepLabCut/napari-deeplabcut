@@ -513,6 +513,8 @@ def complete_df_for_save(
 def merge_save_df(
     df_old: pd.DataFrame,
     df_new: pd.DataFrame,
+    *,
+    allow_deletions: bool = True,
 ) -> pd.DataFrame:
     """
     Merge an existing DLC dataframe with a new save dataframe.
@@ -521,6 +523,7 @@ def merge_save_df(
     - rows/columns outside df_new scope are preserved from df_old
     - rows/columns inside df_new scope replace df_old, including NaN
     - NaN in df_new therefore clears/deletes an old saved keypoint
+    - Machine labels to GT save are not allowed deletions.
     """
     df_new2, df_old2 = harmonize_keypoint_row_index(df_new, df_old)
     df_new2 = harmonize_keypoint_column_index(df_new2)
@@ -538,9 +541,16 @@ def merge_save_df(
     cols = df_old2.columns.union(df_new2.columns)
 
     df_out = df_old2.reindex(index=idx, columns=cols)
+    incoming = df_new2.reindex(index=idx, columns=cols)
 
-    # Critical: assign df_new values directly, including NaN.
-    df_out.loc[df_new2.index, df_new2.columns] = df_new2
+    if allow_deletions:
+        # Critical: assign df_new values directly, including NaN.
+        df_out.loc[df_new2.index, df_new2.columns] = df_new2
+    else:
+        # Machine-to-GT promotion semantics: only actual machine annotations
+        # may modify GT. Missing machine values are not deletion requests.
+        incoming_has_value = incoming.notna()
+        df_out = df_out.where(~incoming_has_value, incoming)
 
     return df_out
 

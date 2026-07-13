@@ -549,7 +549,18 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             )
             pass
 
-        df_out = merge_save_df(df_old, df_new)
+        allow_deletions = source_kind != AnnotationKind.MACHINE
+
+        logger.debug(
+            "Merging save dataframe source_kind=%s destination_kind=%s allow_deletions=%s old_rows=%d new_rows=%d",
+            source_kind,
+            destination_kind,
+            allow_deletions,
+            len(df_old.index),
+            len(df_new.index),
+        )
+
+        df_out = merge_save_df(df_old, df_new, allow_deletions=allow_deletions)
     else:
         df_out = df_new
 
