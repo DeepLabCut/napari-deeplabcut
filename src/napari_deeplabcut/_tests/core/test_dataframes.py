@@ -994,6 +994,224 @@ def test_deleted_keypoint_roundtrip_complete_then_merge_clears_old_value():
     assert out.loc[idx[0], ("S", "", "tail", "y")] == 41.0
 
 
+def test_remapped_machine_layer_does_not_clear_initial_gt_frames_outside_original_scope():
+    """
+    Regression test for destructive machine-to-GT promotion after frame remapping.
+
+    Real-world failure reproduced
+    -----------------------------
+    1. CollectedData_S contains manually labeled data for 30 frames.
+    2. A machine-label file contains corrected labels for 20 additional
+       outlier frames.
+    3. Both layers are displayed in one 50-frame napari image stack.
+    4. During layer remapping, the machine layer's metadata.paths is expanded
+       from its original 20 source paths to all 50 viewer paths.
+    5. complete_df_for_save() interprets metadata.paths as the editable save
+       scope and creates NaN rows for the 30 frames absent from the machine
+       layer.
+    6. merge_save_df() assigns those NaNs into the existing GT dataframe,
+       deleting the original manual labels.
+
+    The trigger is therefore this mismatch:
+
+        actual machine annotation scope: outlier_paths (20 frames)
+        metadata.paths at save time:     viewer_paths  (50 frames)
+
+    Expected behavior
+    -----------------
+    Promoting the corrected machine labels should preserve the original
+    30 manually labeled frames and add the 20 corrected outlier frames.
+    """
+    scorer = "S"
+    individuals = tuple(str(i) for i in range(1, 11))
+    bodyparts = ("head", "body", "tail")
+
+    header_cols = cols_4level(
+        scorer=scorer,
+        individuals=individuals,
+        bodyparts=bodyparts,
+        coords=("x", "y"),
+    )
+    header = DLCHeaderModel(columns=header_cols)
+
+    initial_paths = [f"labeled-data/test/img{i:03d}.png" for i in range(30)]
+    outlier_paths = [f"labeled-data/test/img{i:03d}.png" for i in range(30, 50)]
+    viewer_paths = initial_paths + outlier_paths
+
+    # Existing manually labeled GT dataset:
+    # 30 frames x 10 individuals x 3 bodyparts x 2 coordinates.
+    initial_index_df = pd.DataFrame(index=pd.Index(initial_paths))
+    guarantee_multiindex_rows(initial_index_df)
+    initial_index = initial_index_df.index
+
+    old_values = np.arange(
+        30 * len(header_cols),
+        dtype=float,
+    ).reshape(30, len(header_cols))
+
+    old_values += 1000.0
+
+    df_old = pd.DataFrame(
+        old_values,
+        index=initial_index,
+        columns=header_cols,
+    )
+    df_old_before_save = df_old.copy(deep=True)
+
+    points_data: list[list[float]] = []
+    labels: list[str] = []
+    ids: list[str] = []
+
+    for frame_index in range(30, 50):
+        for individual_index, individual in enumerate(individuals):
+            for bodypart_index, bodypart in enumerate(bodyparts):
+                x = 2000.0 + frame_index * 100.0 + individual_index * 10.0 + bodypart_index
+                y = x + 0.5
+
+                points_data.append([float(frame_index), y, x])
+                labels.append(bodypart)
+                ids.append(individual)
+
+    # The machine layer originally represented only outlier_paths, but its
+    # metadata.paths now contains every path in the 50-frame viewer.
+    remapped_machine_meta = PointsMetadata(
+        header=header,
+        paths=viewer_paths,
+    )
+
+    machine_ctx = PointsWriteInputModel(
+        points={"data": np.asarray(points_data, dtype=float)},
+        meta=remapped_machine_meta,
+        props={
+            "label": labels,
+            "id": ids,
+            "likelihood": [1.0] * len(points_data),
+        },
+    )
+
+    sparse_machine_df = form_df_from_validated(machine_ctx)
+
+    # The finite machine annotations themselves cover only the 20 outliers.
+    assert len(sparse_machine_df.index) == 20
+    assert set(sparse_machine_df.index) == set(
+        pd.MultiIndex.from_tuples([("labeled-data", "test", f"img{i:03d}.png") for i in range(30, 50)])
+    )
+
+    # complete_df_for_save() currently treats all 50 remapped viewer paths as
+    # editable rows. This creates 30 all-NaN rows for the original frames.
+    df_new = complete_df_for_save(
+        sparse_machine_df,
+        pts_meta=remapped_machine_meta,
+        header=header,
+    )
+
+    assert len(df_new.index) == 50
+
+    initial_rows_in_incoming_save = df_new.loc[initial_index]
+    assert initial_rows_in_incoming_save.isna().all().all()
+
+    merged = merge_save_df(df_old, df_new, allow_deletions=False)
+
+    # Intended result: all 50 frame rows should exist.
+    assert len(merged.index) == 50
+
+    # Regression expectation:
+    # frames outside the machine file's original 20-frame annotation scope
+    # must retain their manually labeled GT coordinates.
+    pd.testing.assert_frame_equal(
+        merged.loc[initial_index, header_cols],
+        df_old_before_save,
+    )
+
+    # The 20 corrected outlier frames should also be present and finite.
+    outlier_index_df = pd.DataFrame(index=pd.Index(outlier_paths))
+    guarantee_multiindex_rows(outlier_index_df)
+    outlier_index = outlier_index_df.index
+
+    assert merged.loc[outlier_index, header_cols].notna().all().all()
+
+
+def test_machine_to_gt_merge_overwrites_finite_values_but_does_not_delete():
+    """
+    A machine-to-GT merge is a non-deleting patch:
+
+    - finite incoming values overwrite existing GT values;
+    - incoming NaN values preserve existing GT values.
+    """
+    cols = cols_4level(
+        scorer="S",
+        individuals=("animal1",),
+        bodyparts=("nose", "tail"),
+        coords=("x", "y"),
+    )
+    index = pd.MultiIndex.from_tuples(
+        [
+            (
+                "labeled-data",
+                "test",
+                "img000.png",
+            )
+        ]
+    )
+
+    df_old = pd.DataFrame(
+        [[10.0, 20.0, 30.0, 40.0]],
+        index=index,
+        columns=cols,
+    )
+
+    df_new = pd.DataFrame(
+        [
+            [
+                11.0,
+                21.0,
+                np.nan,
+                np.nan,
+            ]
+        ],
+        index=index,
+        columns=cols,
+    )
+
+    merged = merge_save_df(
+        df_old,
+        df_new,
+        allow_deletions=False,
+    )
+
+    # Finite machine correction overwrites the existing nose coordinates.
+    assert (
+        merged.loc[
+            index[0],
+            ("S", "animal1", "nose", "x"),
+        ]
+        == 11.0
+    )
+    assert (
+        merged.loc[
+            index[0],
+            ("S", "animal1", "nose", "y"),
+        ]
+        == 21.0
+    )
+
+    # Missing machine tail coordinates preserve existing GT.
+    assert (
+        merged.loc[
+            index[0],
+            ("S", "animal1", "tail", "x"),
+        ]
+        == 30.0
+    )
+    assert (
+        merged.loc[
+            index[0],
+            ("S", "animal1", "tail", "y"),
+        ]
+        == 40.0
+    )
+
+
 # -----------------------------------------------------------------------------
 # 13) drop_likelihood_columns
 # -----------------------------------------------------------------------------
