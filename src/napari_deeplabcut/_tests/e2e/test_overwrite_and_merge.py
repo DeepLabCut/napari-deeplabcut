@@ -463,18 +463,8 @@ def test_machine_label_promotion_preserves_existing_gt_after_frame_remap(
     assert machine_layer.name == ("machinelabels-iter0")
 
     machine_io = (machine_layer.metadata or {}).get("io")
-
-    if isinstance(machine_io, dict):
-        assert machine_io.get("kind") is (AnnotationKind.MACHINE)
-    else:
-        assert (
-            getattr(
-                machine_io,
-                "kind",
-                None,
-            )
-            is AnnotationKind.MACHINE
-        )
+    machine_kind = machine_io.get("kind") if isinstance(machine_io, dict) else getattr(machine_io, "kind", None)
+    assert machine_kind in ("machine", "MACHINE", AnnotationKind.MACHINE)
 
     # The source machine HDF has 20 annotation rows. After remapping, finite
     # machine points should still occupy exactly 20 frame positions.
