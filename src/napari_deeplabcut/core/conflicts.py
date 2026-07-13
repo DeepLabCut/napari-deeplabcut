@@ -158,7 +158,7 @@ def compute_overwrite_report_for_points_save(
 
     key_conflict = keypoint_conflicts(df_old, df_new)
 
-    allow_deletions = allow_deletions_for_save(source_kind, destination_kind)
+    allow_deletions = allow_deletions_for_save(source_kind=source_kind, destination_kind=destination_kind)
     deletion_conflict = keypoint_deletions(df_old, df_new) if allow_deletions else None
 
     report = build_overwrite_conflict_report(
