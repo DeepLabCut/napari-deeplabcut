@@ -149,6 +149,20 @@ def is_projectless_folder_association_candidate(
     return True
 
 
+def allow_deletions_for_save(
+    *,
+    source_kind: AnnotationKind | None,
+    destination_kind: AnnotationKind,
+) -> bool:
+    """
+    Return whether missing incoming values may delete stored annotations.
+
+    Direct GT edits are authoritative and may delete keypoints.
+    Machine-to-GT promotion is a non-deleting patch.
+    """
+    return not (source_kind == AnnotationKind.MACHINE and destination_kind == AnnotationKind.GT)
+
+
 # ----------------------------------------
 # Core provenance logic
 # ----------------------------------------
