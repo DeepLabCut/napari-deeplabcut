@@ -564,7 +564,7 @@ def merge_save_df(
     df_new2 = harmonize_keypoint_column_index(df_new2)
     df_old2 = harmonize_keypoint_column_index(df_old2)
 
-    if len(df_old2.index) and len(df_new2.index) and len(df_old2.index):
+    if allow_deletions and len(df_new2.index) and len(df_old2.index):
         overlap = df_old2.index.intersection(df_new2.index)
         if overlap.empty:
             raise ValueError(
