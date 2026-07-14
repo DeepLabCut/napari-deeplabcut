@@ -516,49 +516,41 @@ def merge_save_df(
     *,
     allow_deletions: bool = True,
 ) -> pd.DataFrame:
-    """
-    Merge a new DLC save dataframe into an existing DLC dataframe.
+    """Merge incoming DLC annotations into an existing DLC dataframe.
 
-    Parameters
-    ----------
-    df_old:
-        Existing on-disk DLC annotations.
-    df_new:
-        Incoming annotations to save.
-    allow_deletions:
-        Controls how missing values in ``df_new`` are interpreted.
+    Args:
+        df_old: Existing on-disk DLC annotations.
+        df_new: Incoming annotations to save.
+        allow_deletions: Controls how missing values in ``df_new`` are interpreted.
 
-        When True, ``df_new`` is authoritative within its row and column
-        scope. Incoming values, including NaN, replace existing values.
-        This supports intentional deletion when saving a directly edited
-        GT layer.
+            - If ``True``, ``df_new`` is authoritative within its row/column scope.
+              Incoming values, including NaN, replace existing values. This enables
+              intentional deletion when saving a directly edited GT layer.
+            - If ``False``, ``df_new`` is applied as a non-deleting patch.
+              Only non-missing incoming values are applied; incoming NaN values
+              preserve existing values. This is used when promoting machine
+              annotations into GT.
 
-        When False, ``df_new`` is treated as a non-deleting patch. Only
-        non-missing incoming values are applied. Incoming NaN values preserve
-        existing values. This is used when promoting machine annotations
-        into GT.
-
-    Returns
-    -------
-    pandas.DataFrame
-        A dataframe containing the union of the old and new row and column
+    Returns:
+        pandas.DataFrame: A dataframe containing the union of old and new row/column
         indexes, with ``df_new`` applied according to ``allow_deletions``.
 
-    Semantics
-    ---------
-    In both modes:
+    Raises:
+        ValueError: If ``allow_deletions=True`` and row indexes in ``df_old`` and
+            ``df_new`` do not overlap after harmonization. This guards against
+            accidental destructive saves when incoming data does not cover any
+            existing rows.
 
-    - rows and columns outside ``df_new``'s scope are preserved from ``df_old``
-    - non-missing values in ``df_new`` add or overwrite values in ``df_old``
+    Notes:
+        In both modes:
+            - Rows/columns outside ``df_new`` scope are preserved from ``df_old``.
+            - Non-missing values in ``df_new`` add or overwrite values in ``df_old``.
 
-    With ``allow_deletions=True``:
+        With ``allow_deletions=True``:
+            - NaN values in ``df_new`` clear existing values in ``df_old``.
 
-    - NaN values in ``df_new`` clear existing values in ``df_old``
-
-    With ``allow_deletions=False``:
-
-    - NaN values in ``df_new`` are no-ops and preserve existing values in
-      ``df_old``
+        With ``allow_deletions=False``:
+            - NaN values in ``df_new`` are no-ops and preserve existing values.
     """
     df_new2, df_old2 = harmonize_keypoint_row_index(df_new, df_old)
     df_new2 = harmonize_keypoint_column_index(df_new2)
