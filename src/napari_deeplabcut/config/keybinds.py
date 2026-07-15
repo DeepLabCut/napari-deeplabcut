@@ -14,7 +14,7 @@ from napari.components._viewer_key_bindings import (
     increment_dims_right,
 )
 from napari.layers import Points
-from qtpy.QtCore import QTimer
+from qtpy.QtCore import QElapsedTimer, QTimer
 
 from .settings import TRACKING_SHORTCUTS_ENABLED
 
@@ -58,9 +58,41 @@ class ShortcutAction(Enum):
 # ----------------------------------------
 #  Functions with associated keybind callbacks
 # ----------------------------------------
+_FRAME_REPEAT_INITIAL_DELAY_MS = 400
 
-_FRAME_REPEAT_INTERVAL_MS = 60
-_frame_repeat_timers: dict[tuple[int, str], QTimer] = {}
+_FRAME_REPEAT_STAGES = (
+    # Milliseconds since repeating began, interval in milliseconds.
+    (0, 180),
+    (800, 100),
+    (1_500, 40),
+)
+
+
+@dataclass
+class _FrameRepeatState:
+    delay_timer: QTimer
+    repeat_timer: QTimer
+    elapsed: QElapsedTimer
+
+
+_frame_repeat_states: dict[
+    tuple[int, str],
+    _FrameRepeatState,
+] = {}
+
+
+def _repeat_interval_for_elapsed(
+    elapsed_ms: int,
+) -> int:
+    interval = _FRAME_REPEAT_STAGES[0][1]
+
+    for threshold_ms, stage_interval in _FRAME_REPEAT_STAGES:
+        if elapsed_ms < threshold_ms:
+            break
+
+        interval = stage_interval
+
+    return interval
 
 
 def _viewer_from_callback_arg(ctx: BindingContext, obj):
@@ -77,41 +109,85 @@ def _viewer_from_callback_arg(ctx: BindingContext, obj):
     return None
 
 
-def _make_repeating_viewer_callback(ctx: BindingContext, action, repeat_id: str):
+def _make_repeating_viewer_callback(
+    ctx: BindingContext,
+    action,
+    repeat_id: str,
+):
     """
-    Call a napari viewer action once, then continue calling it while the key is held.
-
-    This reuses napari's own increment_dims_* functions, but adds hold-to-repeat
-    for A/D, which napari otherwise filters as non-navigation autorepeat keys.
+    Move once immediately, then repeat with progressive acceleration while
+    the key remains held.
     """
 
     def callback(obj):
-        viewer = _viewer_from_callback_arg(ctx, obj)
+        viewer = _viewer_from_callback_arg(
+            ctx,
+            obj,
+        )
         if viewer is None:
             return
 
-        timer_key = (id(viewer), repeat_id)
+        timer_key = (
+            id(viewer),
+            repeat_id,
+        )
 
-        # Avoid duplicate timers if repeat key-press events sneak through.
-        if timer_key in _frame_repeat_timers:
+        # Ignore duplicate press events while this key is already held.
+        if timer_key in _frame_repeat_states:
             return
 
-        # Move once immediately.
+        # A tap always moves exactly one frame.
         action(viewer)
 
-        timer = QTimer()
-        timer.setInterval(_FRAME_REPEAT_INTERVAL_MS)
-        timer.timeout.connect(lambda: action(viewer))
+        delay_timer = QTimer()
+        delay_timer.setSingleShot(True)
 
-        _frame_repeat_timers[timer_key] = timer
-        timer.start()
+        repeat_timer = QTimer()
+        elapsed = QElapsedTimer()
+
+        state = _FrameRepeatState(
+            delay_timer=delay_timer,
+            repeat_timer=repeat_timer,
+            elapsed=elapsed,
+        )
+        _frame_repeat_states[timer_key] = state
+
+        def repeat_once():
+            action(viewer)
+
+            next_interval = _repeat_interval_for_elapsed(elapsed.elapsed())
+
+            if repeat_timer.interval() != next_interval:
+                repeat_timer.setInterval(next_interval)
+
+        def begin_repeating():
+            elapsed.start()
+
+            initial_interval = _repeat_interval_for_elapsed(0)
+            repeat_timer.setInterval(initial_interval)
+
+            # Move when the initial hold delay expires, then continue.
+            repeat_once()
+            repeat_timer.start()
+
+        delay_timer.timeout.connect(begin_repeating)
+        repeat_timer.timeout.connect(repeat_once)
+
+        delay_timer.start(_FRAME_REPEAT_INITIAL_DELAY_MS)
 
         try:
             yield
         finally:
-            timer.stop()
-            timer.deleteLater()
-            _frame_repeat_timers.pop(timer_key, None)
+            delay_timer.stop()
+            repeat_timer.stop()
+
+            delay_timer.deleteLater()
+            repeat_timer.deleteLater()
+
+            _frame_repeat_states.pop(
+                timer_key,
+                None,
+            )
 
     return callback
 
