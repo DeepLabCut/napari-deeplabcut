@@ -70,7 +70,7 @@ from napari_deeplabcut.core.project_paths import (
     find_nearest_config,
     infer_dlc_project_from_points_meta,
 )
-from napari_deeplabcut.core.provenance import allow_deletions_for_save, resolve_output_path_from_metadata
+from napari_deeplabcut.core.provenance import resolve_output_path_from_metadata, should_nan_clear_existing_for_save
 from napari_deeplabcut.utils.debug import log_timing
 
 logger = logging.getLogger(__name__)
@@ -549,21 +549,21 @@ def write_hdf(path: str, data, attributes: dict) -> list[str]:
             )
             pass
 
-        allow_deletions = allow_deletions_for_save(
+        nan_clears_existing = should_nan_clear_existing_for_save(
             source_kind=source_kind,
             destination_kind=destination_kind,
         )
 
         logger.debug(
-            "Merging save dataframe source_kind=%s destination_kind=%s allow_deletions=%s old_rows=%d new_rows=%d",
+            "Merging save dataframe source_kind=%s destination_kind=%s nan_clears_existing=%s old_rows=%d new_rows=%d",
             source_kind,
             destination_kind,
-            allow_deletions,
+            nan_clears_existing,
             len(df_old.index),
             len(df_new.index),
         )
 
-        df_out = merge_save_df(df_old, df_new, allow_deletions=allow_deletions)
+        df_out = merge_save_df(df_old, df_new, nan_clears_existing=nan_clears_existing)
     else:
         df_out = df_new
 

@@ -149,9 +149,9 @@ def is_projectless_folder_association_candidate(
     return True
 
 
-def allow_deletions_for_save(
+def should_nan_clear_existing_for_save(
     *,
-    source_kind: AnnotationKind | None,
+    source_kind: AnnotationKind,
     destination_kind: AnnotationKind,
 ) -> bool:
     """
