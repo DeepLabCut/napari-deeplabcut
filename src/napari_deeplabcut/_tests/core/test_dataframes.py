@@ -584,7 +584,7 @@ def test_complete_df_for_save_without_paths_preserves_existing_rows_and_complete
 
 
 # -----------------------------------------------------------------------------
-# 9) merge_save_df: save-scope overlay preserves intentional NaN deletions
+# 9) merge_save_df: NaN merge policy and row harmonization
 # -----------------------------------------------------------------------------
 
 
@@ -600,7 +600,7 @@ def test_merge_save_df_nan_in_new_clears_old_value():
     df_old = pd.DataFrame([[10.0, 20.0]], index=idx, columns=cols)
     df_new = pd.DataFrame([[np.nan, np.nan]], index=idx, columns=cols)
 
-    out = merge_save_df(df_old, df_new)
+    out = merge_save_df(df_old, df_new, nan_clears_existing=True)
 
     assert pd.isna(out.loc[idx[0], ("S", "", "nose", "x")])
     assert pd.isna(out.loc[idx[0], ("S", "", "nose", "y")])
@@ -635,7 +635,7 @@ def test_merge_save_df_preserves_rows_outside_new_save_scope():
         columns=cols,
     )
 
-    out = merge_save_df(df_old, df_new)
+    out = merge_save_df(df_old, df_new, nan_clears_existing=True)
 
     assert pd.isna(out.loc[("labeled-data", "test", "img000.png"), ("S", "", "nose", "x")])
     assert out.loc[("labeled-data", "test", "img999.png"), ("S", "", "nose", "x")] == 30.0
@@ -660,7 +660,7 @@ def test_merge_save_df_preserves_old_columns_outside_new_columns():
     df_old = pd.DataFrame([[10.0, 20.0, 30.0, 40.0]], index=idx, columns=old_cols)
     df_new = pd.DataFrame([[11.0, 22.0]], index=idx, columns=new_cols)
 
-    out = merge_save_df(df_old, df_new)
+    out = merge_save_df(df_old, df_new, nan_clears_existing=True)
 
     assert out.loc[idx[0], ("S", "", "nose", "x")] == 11.0
     assert out.loc[idx[0], ("S", "", "nose", "y")] == 22.0
@@ -702,7 +702,7 @@ def test_merge_save_df_nan_clears_old_value_after_row_harmonization():
     )
     guarantee_multiindex_rows(df_new)
 
-    out = merge_save_df(df_old, df_new)
+    out = merge_save_df(df_old, df_new, nan_clears_existing=True)
 
     # harmonize_keypoint_row_index() collapses the deep row to basename so the
     # assignment hits the existing row and NaN clears the old value.
@@ -712,12 +712,15 @@ def test_merge_save_df_nan_clears_old_value_after_row_harmonization():
     assert pd.isna(out.loc[row, ("S", "", "nose", "y")])
 
 
-def test_merge_save_df_refuses_no_row_overlap_after_harmonization():
+def test_merge_save_df_merge_refuses_no_row_overlap_after_harmonization():
     """
-    If row labels do not overlap after harmonization, df_new cannot overwrite or
-    delete existing values. merge_save_df() refuses this case rather than silently
-    preserving old labels when deletion/overwrite semantics were expected.
+    An authoritative merge requires overlapping row indices.
+
+    When incoming NaN values may clear existing annotations, a complete lack
+    of overlap implies incompatible row representations or unrelated
+    sets.
     """
+
     cols = cols_4level(
         scorer="S",
         individuals=("",),
@@ -740,7 +743,7 @@ def test_merge_save_df_refuses_no_row_overlap_after_harmonization():
     )
 
     with pytest.raises(ValueError, match="no row-index overlap after harmonization"):
-        merge_save_df(df_old, df_new)
+        merge_save_df(df_old, df_new, nan_clears_existing=True)
 
 
 # -----------------------------------------------------------------------------
@@ -983,7 +986,7 @@ def test_deleted_keypoint_roundtrip_complete_then_merge_clears_old_value():
         header=header,
     )
 
-    out = merge_save_df(df_old, df_new)
+    out = merge_save_df(df_old, df_new, nan_clears_existing=True)
 
     # Deleted nose should be cleared.
     assert pd.isna(out.loc[idx[0], ("S", "", "nose", "x")])
@@ -1110,7 +1113,7 @@ def test_remapped_machine_layer_does_not_clear_initial_gt_frames_outside_origina
     initial_rows_in_incoming_save = df_new.loc[initial_index]
     assert initial_rows_in_incoming_save.isna().all().all()
 
-    merged = merge_save_df(df_old, df_new, allow_deletions=False)
+    merged = merge_save_df(df_old, df_new, nan_clears_existing=False)
 
     # Intended result: all 50 frame rows should exist.
     assert len(merged.index) == 50
@@ -1176,7 +1179,7 @@ def test_machine_to_gt_merge_overwrites_finite_values_but_does_not_delete():
     merged = merge_save_df(
         df_old,
         df_new,
-        allow_deletions=False,
+        nan_clears_existing=False,
     )
 
     # Finite machine correction overwrites the existing nose coordinates.
@@ -1214,11 +1217,12 @@ def test_machine_to_gt_merge_overwrites_finite_values_but_does_not_delete():
 
 def test_merge_save_df_non_deleting_patch_adds_completely_disjoint_rows():
     """
-    A non-deleting patch may safely add rows that do not overlap the existing
+    A non-deleting save may safely add rows that do not overlap the existing
     dataframe.
 
-    This represents machine annotations whose frames are entirely disjoint
-    from the existing GT dataset.
+    This represents machine annotations for frames that are entirely disjoint
+    from the existing GT dataset. Existing GT rows must remain unchanged and
+    finite incoming machine values must be added.
     """
     cols = cols_4level(
         scorer="S",
@@ -1257,12 +1261,45 @@ def test_merge_save_df_non_deleting_patch_adds_completely_disjoint_rows():
         columns=cols,
     )
 
-    with pytest.raises(ValueError, match="no row-index overlap after harmonization"):
-        merge_save_df(
-            df_old,
-            df_new,
-            allow_deletions=False,
-        )
+    result = merge_save_df(
+        df_old,
+        df_new,
+        nan_clears_existing=False,
+    )
+
+    assert result.index.equals(old_index.union(new_index))
+
+    # Existing GT row is preserved.
+    assert (
+        result.loc[
+            old_index[0],
+            ("S", "animal1", "nose", "x"),
+        ]
+        == 10.0
+    )
+    assert (
+        result.loc[
+            old_index[0],
+            ("S", "animal1", "nose", "y"),
+        ]
+        == 20.0
+    )
+
+    # Disjoint incoming machine row is added.
+    assert (
+        result.loc[
+            new_index[0],
+            ("S", "animal1", "nose", "x"),
+        ]
+        == 30.0
+    )
+    assert (
+        result.loc[
+            new_index[0],
+            ("S", "animal1", "nose", "y"),
+        ]
+        == 40.0
+    )
 
 
 # -----------------------------------------------------------------------------
