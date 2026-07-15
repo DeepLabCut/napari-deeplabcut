@@ -33,6 +33,7 @@ from copy import deepcopy
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
+from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -420,7 +421,7 @@ class KeypointControls(ViewerSingletonWidget):
         traj_canvas = self._safe_get_traj_canvas()
         if traj_canvas is not None:
             try:
-                traj_canvas.refresh_from_viewer_layers()
+                traj_canvas.refresh_from_viewer_layers(allow_fallback=True)
             except Exception:
                 logger.debug("Failed to refresh trajectory plot after color mode change", exc_info=True)
 
@@ -599,6 +600,33 @@ class KeypointControls(ViewerSingletonWidget):
             sorted((layer.metadata or {}).keys()),
         )
 
+    def _sync_current_active_layer_state(self) -> None:
+        """
+        Ensure sync after adding a layer.
+        This prevents partial initialization states where the sync called on layer selection
+        never fires since loading a layer is not considered a selection change, but the new layer is already active.
+        """
+        try:
+            active = self.viewer.layers.selection.active
+        except Exception:
+            active = None
+
+        if active is None:
+            return
+
+        try:
+            self.on_active_layer_change(SimpleNamespace(value=active))
+            logger.debug(
+                "Synced active layer state after setup for layer=%r",
+                getattr(active, "name", active),
+            )
+        except Exception:
+            logger.debug(
+                "Failed to sync current active layer state for layer=%r",
+                getattr(active, "name", active),
+                exc_info=True,
+            )
+
     def _on_points_layer_setup_requested(self, req: PointsLayerSetupRequest) -> None:
         layer = req.layer
         store = req.store
@@ -627,6 +655,7 @@ class KeypointControls(ViewerSingletonWidget):
             self._maybe_initialize_layer_point_size_from_config(layer)
             self._connect_layer_status_events(layer)
             self._complete_points_layer_ui_setup(layer, store)
+            self._sync_current_active_layer_state()
 
         except Exception:
             logger.debug(
@@ -754,7 +783,7 @@ class KeypointControls(ViewerSingletonWidget):
         if Qt.CheckState(state) == Qt.CheckState.Checked:
             self._ensure_traj_canvas_docked()
             if self._mpl_docked:
-                self._traj_mpl_canvas.refresh_from_viewer_layers()
+                self._traj_mpl_canvas.refresh_from_viewer_layers(allow_fallback=True)
                 self._traj_mpl_canvas._apply_napari_theme()
                 self._traj_mpl_canvas.update_plot_range(
                     Event(type_name="", value=[self.viewer.dims.current_step[0]]),
@@ -1254,10 +1283,10 @@ class KeypointControls(ViewerSingletonWidget):
         * Sets the visibility of the "Color mode" box to True if the selected layer
             is a multi-animal one, or False otherwise
         """
-        with log_timing(
-            logger, f"on_active_layer_change value={getattr(event.value, 'name', None)!r}", threshold_ms=0.0
-        ):
-            self._color_grp.setVisible(self.layer_manager.is_multianimal(event.value))
+        layer = getattr(event, "value", None)
+
+        with log_timing(logger, f"on_active_layer_change value={getattr(layer, 'name', None)!r}", threshold_ms=0.0):
+            self._color_grp.setVisible(self.layer_manager.is_multianimal(layer))
             # self._update_color_scheme() # if needed
             self._sync_dropdown_visibility()
 

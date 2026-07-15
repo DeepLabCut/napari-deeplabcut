@@ -19,12 +19,14 @@ import pandas as pd
 from matplotlib.backends.backend_qtagg import FigureCanvas, NavigationToolbar2QT
 from napari.layers import Points
 from napari.utils.events import Event
-from qtpy.QtCore import QSize, Qt, QTimer
+from qtpy.QtCore import QSize, Qt
 from qtpy.QtGui import QIcon
 from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QSlider, QVBoxLayout, QWidget
 
 import napari_deeplabcut.core.io as io
 from napari_deeplabcut.config.settings import (
+    _DEFAULT_TRAJ_PLOT_WINDOW,
+    _MIN_TRAJ_PLOT_WINDOW,
     DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP,
     DEFAULT_SINGLE_ANIMAL_CMAP,
 )
@@ -34,6 +36,7 @@ from napari_deeplabcut.core.layers import (
     get_first_image_layer,
     get_first_video_image_layer,
 )
+from napari_deeplabcut.ui.base_widget import OwnedTimersMixin
 from napari_deeplabcut.utils.deprecations import deprecated
 
 from .plot_models import TrajectoryPlotState, TrajectorySeries
@@ -87,7 +90,7 @@ class NapariNavigationToolbar(NavigationToolbar2QT):
                 self._actions["zoom"].setIcon(self._qicon(Path(icon_dir) / "Zoom.png"))
 
 
-class TrajectoryMatplotlibCanvas(QWidget):
+class TrajectoryMatplotlibCanvas(QWidget, OwnedTimersMixin):
     """Trajectory plot using matplotlib for keypoints (t-y plot)."""
 
     def __init__(
@@ -99,6 +102,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
         get_color_mode: callable = None,
     ):
         super().__init__(parent=parent)
+        self._init_owned_timers()
 
         self.viewer = napari_viewer
         self._get_color_mode = get_color_mode or (lambda: "bodypart")
@@ -118,9 +122,9 @@ class TrajectoryMatplotlibCanvas(QWidget):
         self.canvas.mpl_connect("button_press_event", self.on_doubleclick)
 
         self.slider = QSlider(Qt.Horizontal)
-        self.slider.setMinimum(50)
+        self.slider.setMinimum(_MIN_TRAJ_PLOT_WINDOW)
         self.slider.setMaximum(10000)
-        self.slider.setValue(50)
+        self.slider.setValue(_DEFAULT_TRAJ_PLOT_WINDOW)
         self.slider.setToolTip("Adjust the range of frames to display around the current frame")
         self.slider.setTickPosition(QSlider.TicksBelow)
         self.slider.setTickInterval(50)
@@ -154,6 +158,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
         self.frames = []
         self.keypoints = []
         self._plot_state: TrajectoryPlotState | None = None
+        self._plot_layer: Points | None = None
         self.setMinimumSize(280, 350)
 
         self.viewer.dims.events.current_step.connect(self.update_plot_range)
@@ -164,9 +169,15 @@ class TrajectoryMatplotlibCanvas(QWidget):
         )
         self._apply_axis_theme()
 
-        self.viewer.layers.events.inserted.connect(lambda event=None: self.refresh_from_viewer_layers())
-        self.viewer.layers.events.removed.connect(lambda event=None: self.refresh_from_viewer_layers())
-        self.viewer.layers.selection.events.active.connect(lambda event=None: self.refresh_from_viewer_layers())
+        self.viewer.layers.events.inserted.connect(
+            lambda event=None: self.refresh_from_viewer_layers(allow_fallback=False)
+        )
+        self.viewer.layers.events.removed.connect(
+            lambda event=None: self.refresh_from_viewer_layers(allow_fallback=False)
+        )
+        self.viewer.layers.selection.events.active.connect(
+            lambda event=None: self.refresh_from_viewer_layers(allow_fallback=False)
+        )
         self.viewer.dims.events.range.connect(self._update_slider_max)
         self._lines: dict[tuple[str, str], list] = {}
 
@@ -175,7 +186,11 @@ class TrajectoryMatplotlibCanvas(QWidget):
         # If layers already existed before this widget was created
         # (e.g. drag-and-drop load before opening the plugin), populate
         # the plot from the current viewer state on the next event-loop turn.
-        QTimer.singleShot(0, self.refresh_from_viewer_layers)
+        self._schedule_once(
+            "initial_trajectory_refresh",
+            0,
+            lambda: self.refresh_from_viewer_layers(allow_fallback=True),
+        )
 
     @property
     def df(self) -> pd.DataFrame | None:
@@ -236,6 +251,40 @@ class TrajectoryMatplotlibCanvas(QWidget):
             return ""
         return text
 
+    @staticmethod
+    def _clamp(value: float, low: float, high: float) -> float:
+        """Clamp value to [low, high]."""
+        if high < low:
+            low, high = high, low
+        return max(low, min(high, value))
+
+    @staticmethod
+    def _small_span_padding(span: float) -> float:
+        """
+        Return padding for short trajectories.
+
+        For tiny frame ranges, a fixed half-frame padding keeps points and the
+        current-frame marker readable instead of pinned to the axes border.
+        """
+        if not np.isfinite(span) or span <= 0:
+            return 0.5
+        return max(0.5, 0.05 * span)
+
+    def _effective_window(self, state: TrajectoryPlotState) -> float:
+        """
+        Return a display window that is valid for the current frame extent.
+
+        The slider stores the requested window, but for short videos the actual
+        usable window cannot exceed the available frame span.
+        """
+        frame_span = float(state.frame_max - state.frame_min)
+
+        if not np.isfinite(frame_span) or frame_span <= 0:
+            return 1.0
+
+        requested = max(float(self._window), float(_MIN_TRAJ_PLOT_WINDOW))
+        return min(requested, frame_span)
+
     def on_doubleclick(self, event):
         if getattr(event, "dblclick", False):
             if not self._lines:
@@ -246,12 +295,23 @@ class TrajectoryMatplotlibCanvas(QWidget):
                     line.set_visible(not show)
             self._refresh_canvas(value=self._n)
 
-    def refresh_from_viewer_layers(self) -> None:
+    def refresh_from_viewer_layers(self, *, allow_fallback: bool = False) -> None:
         """
         Refresh the trajectory plot from the current viewer state.
+
+        Parameters
+        ----------
+        allow_fallback:
+            If True, choose a sensible plottable layer even when the active layer
+            is not plottable. This is appropriate for explicit plot initialization
+            or when the user opens the trajectory plot.
+
+            If False, use only the currently active plottable Points layer. This is
+            important for selection/layer-removal events, where napari may
+            transiently set active=None while a removed layer is still present.
         """
         try:
-            self._load_dataframe()
+            self._load_dataframe(allow_fallback=allow_fallback)
         except Exception:
             logger.debug("Trajectory plot: failed to load dataframe from viewer layers", exc_info=True)
 
@@ -265,15 +325,34 @@ class TrajectoryMatplotlibCanvas(QWidget):
         except Exception:
             logger.debug("Trajectory plot: failed to sync visible lines to point selection", exc_info=True)
 
-    def _get_plot_points_layer(self) -> Points | None:
+    def _get_plot_points_layer(self, *, allow_fallback: bool = False) -> Points | None:
         """
-        Return the manager-selected Points layer for the trajectory plot.
+        Return the Points layer to use for the trajectory plot.
+
+        Automatic refreshes should not fallback, because during layer deletion
+        napari temporarily has active=None while the removed layer may still be in
+        viewer.layers. Falling back in that state can rebuild the plot from a
+        tearing-down Points layer.
+
+        Explicit initialization/showing may allow fallback.
         """
-        return self.layer_manager.suggest_plottable_traj_layer()
+        if allow_fallback:
+            layer = self.layer_manager.suggest_plottable_traj_layer()
+        else:
+            layer = self.layer_manager.active_plottable_traj_layer()
+
+        if not isinstance(layer, Points):
+            return None
+
+        if layer not in self.viewer.layers:
+            return None
+
+        return layer
 
     def _clear_plot(self) -> None:
         """Clear plotted trajectories and reset axes."""
         self._plot_state = None
+        self._plot_layer = None
         self._lines = {}
 
         self._reset_axes()
@@ -521,9 +600,9 @@ class TrajectoryMatplotlibCanvas(QWidget):
 
         self._apply_napari_theme()
 
-    def _load_dataframe(self, event=None) -> None:
+    def _load_dataframe(self, event=None, *, allow_fallback: bool = False) -> None:
         with mplstyle.context(self.mpl_style_sheet_path):
-            points_layer = self._get_plot_points_layer()
+            points_layer = self._get_plot_points_layer(allow_fallback=allow_fallback)
             logger.debug(f"Loading trajectory plot DataFrame from layer: {points_layer!r}")
             if points_layer is None:
                 # No plottable DLC points layer present -> clear the plot quietly.
@@ -554,6 +633,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
                 return
 
             self._plot_state = state
+            self._plot_layer = points_layer
 
             logger.debug(
                 "Trajectory plot built: layer=%r df_shape=%s n_series=%d frame_bounds=(%s, %s)",
@@ -564,6 +644,7 @@ class TrajectoryMatplotlibCanvas(QWidget):
                 state.frame_max,
             )
 
+            self._update_slider_max()
             self._render_plot_state(state)
             self._refresh_canvas(value=self._n)
 
@@ -593,17 +674,52 @@ class TrajectoryMatplotlibCanvas(QWidget):
             return
 
         with mplstyle.context(self.mpl_style_sheet_path):
-            half = self._window / 2.0
-            start = max(state.frame_min, value - half)
-            start = min(start, state.frame_max - self._window)
-            end = min(state.frame_max, value + half)
-            end = max(end, state.frame_min + self._window)
+            frame_min = float(state.frame_min)
+            frame_max = float(state.frame_max)
 
-            if end <= start:
-                end = start + 1.0
+            if frame_max < frame_min:
+                frame_min, frame_max = frame_max, frame_min
+
+            frame_span = frame_max - frame_min
+
+            if not np.isfinite(frame_span) or frame_span <= 0:
+                pad = 0.5
+                start = frame_min - pad
+                end = frame_max + pad
+            else:
+                window = self._effective_window(state)
+
+                if window >= frame_span:
+                    pad = self._small_span_padding(frame_span)
+                    start = frame_min - pad
+                    end = frame_max + pad
+                else:
+                    center = self._clamp(float(value), frame_min, frame_max)
+                    half = window / 2.0
+
+                    start = center - half
+                    end = center + half
+
+                    # Keep the window inside the available frame span
+                    if start < frame_min:
+                        end += frame_min - start
+                        start = frame_min
+
+                    if end > frame_max:
+                        start -= end - frame_max
+                        end = frame_max
+
+                    start = max(start, frame_min)
+                    end = min(end, frame_max)
+
+                    # Avoid visually collapsed limits for very small windows
+                    if end <= start:
+                        pad = self._small_span_padding(frame_span)
+                        start = center - pad
+                        end = center + pad
 
             self.ax.set_xlim(start, end)
-            self.vline.set_xdata([value])
+            self.vline.set_xdata([value, value])
             self.canvas.draw_idle()
 
     def set_window(self, value: int) -> None:
@@ -624,19 +740,51 @@ class TrajectoryMatplotlibCanvas(QWidget):
         self._refresh_canvas(value)
 
     def _update_slider_max(self, event=None) -> None:
-        img = get_first_video_image_layer(self.viewer)
-        if img is None:
-            return
+        """
+        Update the trajectory window slider maximum.
 
+        Prefer the rendered plot state's frame bounds when available, because
+        the trajectory layer may cover fewer frames than the video layer.
+        """
+        max_window = None
+
+        if self._plot_state is not None:
+            try:
+                span = float(self._plot_state.frame_max - self._plot_state.frame_min)
+                if np.isfinite(span):
+                    max_window = max(_MIN_TRAJ_PLOT_WINDOW, int(np.ceil(span)))
+            except Exception:
+                logger.debug("Trajectory plot: failed to derive slider max from plot state", exc_info=True)
+
+        if max_window is None:
+            img = get_first_video_image_layer(self.viewer)
+            if img is None:
+                return
+
+            try:
+                n_frames = int(img.data.shape[0])
+            except Exception:
+                return
+
+            max_window = max(_MIN_TRAJ_PLOT_WINDOW, n_frames - 1)
+
+        self.slider.blockSignals(True)
         try:
-            n_frames = img.data.shape[0]
-        except Exception:
-            return
+            self.slider.setMinimum(_MIN_TRAJ_PLOT_WINDOW)
+            self.slider.setMaximum(max_window)
 
-        if n_frames < self.slider.minimum():
-            self.slider.setMaximum(self.slider.minimum())
-        else:
-            self.slider.setMaximum(n_frames - 1)
+            if self.slider.value() > max_window:
+                self.slider.setValue(max_window)
+                self._window = max_window
+                self.slider_value.setText(str(max_window))
+
+            tick_interval = max(1, max_window // 10)
+            self.slider.setTickInterval(tick_interval)
+        finally:
+            self.slider.blockSignals(False)
+
+        if self._plot_state is not None:
+            self._refresh_canvas(value=self._n)
 
     def _set_visible_keypoints(self, visible_keys: set) -> None:
         if not self._lines:
@@ -669,9 +817,18 @@ class TrajectoryMatplotlibCanvas(QWidget):
             self._refresh_canvas(value=self._n)
 
     def _selected_line_keys_from_points_layer(self) -> set:
-        points_layer = self._get_plot_points_layer()
+        # Selection sync must be strict. If there is no active plottable Points
+        # layer, do not fallback to another managed Points layer, especially during
+        # layer removal.
+        points_layer = self._get_plot_points_layer(allow_fallback=False)
         logger.debug(f"Determining visible trajectory lines from points layer: {points_layer!r}")
+
         if points_layer is None:
+            return None
+
+        # If the active layer is not the layer currently rendered, do not inspect
+        # its selected_data.
+        if self._plot_layer is not None and points_layer is not self._plot_layer:
             return set()
 
         selected = getattr(points_layer, "selected_data", None)
@@ -737,6 +894,8 @@ class TrajectoryMatplotlibCanvas(QWidget):
             return
 
         visible = self._selected_line_keys_from_points_layer()
+        if visible is None:
+            return
         if not visible:
             self._show_all_keypoints()
             return
