@@ -1,3 +1,4 @@
+# src/napari_deeplabcut/_tests/ui/test_traj_select.py
 from __future__ import annotations
 
 import numpy as np
@@ -18,7 +19,7 @@ def test_sync_visible_lines_to_points_selection_shows_all_when_no_points_selecte
     qtbot.add_widget(canvas)
 
     # Force the visibility sync to use this test layer directly.
-    canvas._get_plot_points_layer = lambda: layer
+    canvas._get_plot_points_layer = lambda *, allow_fallback=False: layer
 
     # canvas._plot_state.df = object()
     (line_nose,) = canvas.ax.plot([0, 1], [0, 1])
@@ -28,6 +29,7 @@ def test_sync_visible_lines_to_points_selection_shows_all_when_no_points_selecte
         ("", "nose"): [line_nose],
         ("", "tail"): [line_tail],
     }
+    canvas._plot_layer = layer
 
     layer.selected_data.clear()
     canvas.sync_visible_lines_to_points_selection()
@@ -48,7 +50,7 @@ def test_sync_visible_lines_to_points_selection_filters_by_selected_labels_in_bo
     qtbot.add_widget(canvas)
 
     # Force the visibility sync to use this test layer directly.
-    canvas._get_plot_points_layer = lambda: layer
+    canvas._get_plot_points_layer = lambda *, allow_fallback=False: layer
 
     # canvas._plot_state.df = object()
     (line_nose,) = canvas.ax.plot([0, 1], [0, 1])
@@ -59,6 +61,7 @@ def test_sync_visible_lines_to_points_selection_filters_by_selected_labels_in_bo
         ("", "nose"): [line_nose],
         ("", "tail"): [line_tail],
     }
+    canvas._plot_layer = layer
 
     # Select a point whose label is "tail"
     layer.selected_data.select_only(1)
@@ -82,7 +85,7 @@ def test_sync_visible_lines_to_points_selection_shows_label_if_any_selected_poin
     qtbot.add_widget(canvas)
 
     # Force the visibility sync to use this test layer directly.
-    canvas._get_plot_points_layer = lambda: layer
+    canvas._get_plot_points_layer = lambda *, allow_fallback=False: layer
 
     # canvas._plot_state.df = object()
     (line_nose,) = canvas.ax.plot([0, 1], [0, 1])
@@ -93,7 +96,7 @@ def test_sync_visible_lines_to_points_selection_shows_label_if_any_selected_poin
         ("", "nose"): [line_nose],
         ("", "tail"): [line_tail],
     }
-
+    canvas._plot_layer = layer
     # Select both nose points
     layer.selected_data.update({0, 2})
     canvas.sync_visible_lines_to_points_selection()

@@ -3,6 +3,12 @@
 
 name: tests
 
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+
 on:
   push:
     branches:
@@ -75,9 +81,15 @@ jobs:
     # github secrets (see readme for details)
     needs: [test]
     runs-on: ubuntu-latest
+
+    concurrency:
+      group: pypi-deploy
+      cancel-in-progress: false
+
     if: |
       always() && (
-        (github.event_name == 'workflow_dispatch' && inputs.force_deploy) ||
+        (github.event_name == 'workflow_dispatch' && inputs.force_deploy && github.ref == 'refs/heads/main'
+        ) ||
         (startsWith(github.ref, 'refs/tags/v') && needs.test.result == 'success')
       )
     steps:

@@ -16,6 +16,9 @@ AUTO_OPEN_KEYPOINT_CONTROLS_KEY = "napari_deeplabcut/ui/auto_open_keypoint_contr
 ### so that pressing "s" will jump to e.g. "snout" if it is the first item starting with "s".
 ### Since this conflicts with the "w" and "s" shortcuts for seeking frames, we ignore these keys for dropdown menus.
 IGNORED_FOR_DROPDOWN_MENU_SEEKING_KEYS = {Qt.Key_W, Qt.Key_S}
+## Trajectory plot
+_MIN_TRAJ_PLOT_WINDOW = 1
+_DEFAULT_TRAJ_PLOT_WINDOW = 50
 
 # Tracking settings
 TRACKING_SHORTCUTS_ENABLED = os.environ.get("NAPARI_DLC_TRACKING_SHORTCUTS_ENABLED", "1") == "1"
