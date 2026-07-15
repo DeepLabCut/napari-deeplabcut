@@ -513,20 +513,50 @@ def complete_df_for_save(
 def merge_save_df(
     df_old: pd.DataFrame,
     df_new: pd.DataFrame,
+    *,
+    nan_clears_existing: bool = True,
 ) -> pd.DataFrame:
-    """
-    Merge an existing DLC dataframe with a new save dataframe.
+    """Merge incoming DLC annotations into an existing DLC dataframe.
 
-    Semantics:
-    - rows/columns outside df_new scope are preserved from df_old
-    - rows/columns inside df_new scope replace df_old, including NaN
-    - NaN in df_new therefore clears/deletes an old saved keypoint
+    Args:
+        df_old: Existing on-disk DLC annotations.
+        df_new: Incoming annotations to save.
+        nan_clears_existing: Controls how missing values in ``df_new`` are interpreted.
+
+            - If ``True``, ``df_new`` is authoritative within its row/column scope.
+              Incoming values, including NaN, replace existing values. This enables
+              intentional deletion when saving a directly edited GT layer.
+            - If ``False``, ``df_new`` is applied as a non-deleting patch.
+              Only non-missing incoming values are applied; incoming NaN values
+              preserve existing values. This is used when promoting machine
+              annotations into GT.
+
+    Returns:
+        pandas.DataFrame: A dataframe containing the union of old and new row/column
+        indexes, with ``df_new`` applied according to ``nan_clears_existing``.
+
+    Raises:
+        ValueError: If ``nan_clears_existing=True`` and row indexes in ``df_old``
+            and ``df_new`` do not overlap after harmonization. This guards against
+            accidental destructive saves when incoming data does not cover any
+            existing rows.
+
+    Notes:
+        In both modes:
+            - Rows/columns outside ``df_new`` scope are preserved from ``df_old``.
+            - Non-missing values in ``df_new`` add or overwrite values in ``df_old``.
+
+        With ``nan_clears_existing=True``:
+            - NaN values in ``df_new`` clear existing values in ``df_old``.
+
+        With ``nan_clears_existing=False``:
+            - NaN values in ``df_new`` are no-ops and preserve existing values.
     """
     df_new2, df_old2 = harmonize_keypoint_row_index(df_new, df_old)
     df_new2 = harmonize_keypoint_column_index(df_new2)
     df_old2 = harmonize_keypoint_column_index(df_old2)
 
-    if len(df_old2.index) and len(df_new2.index):
+    if nan_clears_existing and len(df_new2.index) and len(df_old2.index):
         overlap = df_old2.index.intersection(df_new2.index)
         if overlap.empty:
             raise ValueError(
@@ -539,9 +569,12 @@ def merge_save_df(
 
     df_out = df_old2.reindex(index=idx, columns=cols)
 
-    # Critical: assign df_new values directly, including NaN.
-    df_out.loc[df_new2.index, df_new2.columns] = df_new2
-
+    existing = df_out.loc[df_new2.index, df_new2.columns]
+    values_to_write = df_new2
+    if not nan_clears_existing:
+        # Keep existing values where the new df contains NaN
+        values_to_write = df_new2.where(df_new2.notna(), existing)
+    df_out.loc[df_new2.index, df_new2.columns] = values_to_write
     return df_out
 
 

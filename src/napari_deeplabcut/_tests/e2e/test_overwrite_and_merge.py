@@ -5,9 +5,19 @@ import pandas as pd
 import pytest
 from napari.layers import Points
 
-from napari_deeplabcut.config.models import DLCHeaderModel
+from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
+from napari_deeplabcut.core.io import _read_hdf_any_key
+from napari_deeplabcut.core.layers import is_machine_layer
 
-from .utils import _get_coord_from_df, _get_points_layer_with_data, _make_minimal_dlc_project, _set_or_add_bodypart_xy
+from .utils import (
+    _dataframe_rows_by_path,
+    _get_coord_from_df,
+    _get_points_layer_with_data,
+    _make_minimal_dlc_project,
+    _make_project_config_and_frames_no_gt,
+    _seed_gt_and_machine_outlier_dataset,
+    _set_or_add_bodypart_xy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -343,3 +353,305 @@ def test_overwrite_warning_cancel_aborts_write(viewer, keypoint_controls, qtbot,
     post = pd.read_hdf(h5_path, key="df_with_missing")
     assert _get_coord_from_df(post, "bodypart1", "x") == b1x_pre
     assert _get_coord_from_df(post, "bodypart1", "y") == b1y_pre
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_machine_label_promotion_preserves_existing_gt_after_frame_remap(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    overwrite_confirm,
+):
+    """
+    End-to-end regression for destructive machine-to-GT promotion.
+
+    Reproduced workflow
+    -------------------
+    1. A labeled-data folder contains 50 extracted images.
+    2. CollectedData_John.h5 contains manually labeled GT for the first
+       30 frames.
+    3. machinelabels-iter0.h5 contains machine annotations for the final
+       20 outlier frames.
+    4. Opening the folder aligns both annotation layers to one 50-frame
+       image stack.
+    5. The machine layer is selected and saved through the plugin UI.
+    6. The save workflow promotes the machine source into the existing
+       CollectedData_John.h5 target.
+
+    Regression assertions
+    ---------------------
+    - the original 30 GT rows remain unchanged;
+    - the 20 machine rows are promoted into GT;
+    - the resulting GT file contains 50 rows;
+    - machine likelihood values are not written to GT;
+    - the machine source file is not overwritten;
+    - the on-disk GT file remains canonical single-animal DLC data.
+    """
+    overwrite_confirm.capture()
+
+    (
+        _project,
+        _config_path,
+        labeled_folder,
+    ) = _make_project_config_and_frames_no_gt(tmp_path)
+
+    (
+        gt_path,
+        machine_path,
+        initial_paths,
+        outlier_paths,
+        expected_outlier_xy,
+    ) = _seed_gt_and_machine_outlier_dataset(
+        labeled_folder,
+        scorer="John",
+        bodypart="bodypart1",
+        n_initial_frames=30,
+        n_outlier_frames=20,
+    )
+
+    # Save exact copies for post-operation comparisons.
+    gt_before = _read_hdf_any_key(gt_path).sort_index()
+    machine_before = _read_hdf_any_key(machine_path).sort_index()
+
+    assert len(gt_before.index) == 30
+    assert len(machine_before.index) == 20
+
+    assert gt_before.notna().all().all()
+    assert machine_before.notna().all().all()
+
+    # Canonical disk-state sanity checks before loading the plugin.
+    assert gt_before.columns.nlevels == 3
+    assert list(gt_before.columns.names) == [
+        "scorer",
+        "bodyparts",
+        "coords",
+    ]
+
+    assert machine_before.columns.nlevels == 3
+    assert "likelihood" in set(machine_before.columns.get_level_values("coords"))
+
+    # Open the complete labeled-data folder through the real reader and
+    # lifecycle manager.
+    viewer.open(
+        str(labeled_folder),
+        plugin="napari-deeplabcut",
+    )
+
+    qtbot.waitUntil(
+        lambda: len([layer for layer in viewer.layers if isinstance(layer, Points)]) >= 2,
+        timeout=10_000,
+    )
+
+    qtbot.waitUntil(
+        lambda: any(isinstance(layer, Points) and layer.name == "machinelabels-iter0" for layer in viewer.layers),
+        timeout=10_000,
+    )
+
+    points_layers = [layer for layer in viewer.layers if isinstance(layer, Points)]
+
+    machine_layers = [layer for layer in points_layers if is_machine_layer(layer)]
+
+    assert len(machine_layers) == 1, (
+        "Expected exactly one machine annotation layer. "
+        "Loaded Points layers were: "
+        f"{[(layer.name, layer.metadata) for layer in points_layers]}"
+    )
+
+    machine_layer = machine_layers[0]
+
+    assert machine_layer.name == ("machinelabels-iter0")
+
+    machine_io = (machine_layer.metadata or {}).get("io")
+    machine_kind = machine_io.get("kind") if isinstance(machine_io, dict) else getattr(machine_io, "kind", None)
+    assert machine_kind in ("machine", "MACHINE", AnnotationKind.MACHINE)
+
+    # The source machine HDF has 20 annotation rows. After remapping, finite
+    # machine points should still occupy exactly 20 frame positions.
+    machine_data = np.asarray(machine_layer.data)
+
+    assert machine_data.ndim == 2
+    assert machine_data.shape[1] == 3
+
+    machine_frame_indices = {int(frame_index) for frame_index in machine_data[:, 0]}
+
+    assert len(machine_frame_indices) == 20
+
+    # Reproduce and document the exact dangerous state:
+    #
+    # - finite machine annotations: 20 frames
+    # - machine metadata paths:     combined 50-frame viewer context
+    remapped_paths = list((machine_layer.metadata or {}).get("paths") or [])
+
+    assert len(remapped_paths) == 50, (
+        "The regression setup did not reproduce the post-remap state. "
+        "Expected the machine layer to have 50 shared viewer paths, "
+        f"but got {len(remapped_paths)}."
+    )
+
+    normalized_remapped_paths = {str(path).replace("\\", "/") for path in remapped_paths}
+
+    assert set(initial_paths).issubset(normalized_remapped_paths)
+    assert set(outlier_paths).issubset(normalized_remapped_paths)
+
+    # Before saving, the machine source should not yet have a promotion target.
+    assert (machine_layer.metadata or {}).get("save_target") is None
+
+    # Exercise the real selected-layer save workflow. This should:
+    #
+    # 1. detect the MACHINE source;
+    # 2. discover config.yaml and scorer John;
+    # 3. attach a GT save target;
+    # 4. preflight against CollectedData_John.h5;
+    # 5. write through write_hdf();
+    # 6. use allow_deletions=False for the MACHINE source.
+    viewer.layers.selection.active = machine_layer
+    keypoint_controls.viewer.layers.selection.select_only(machine_layer)
+
+    keypoint_controls._save_layers_dialog(selected=True)
+
+    # Wait for the final combined file rather than relying on a fixed sleep.
+    def _gt_has_expected_rows() -> bool:
+        try:
+            saved = _read_hdf_any_key(gt_path)
+            return len(saved.index) == 50
+        except Exception:
+            return False
+
+    qtbot.waitUntil(
+        _gt_has_expected_rows,
+        timeout=10_000,
+    )
+
+    # Promotion target should now be attached to the live machine layer.
+    save_target = (machine_layer.metadata or {}).get("save_target")
+
+    assert save_target is not None
+
+    if isinstance(save_target, dict):
+        assert save_target.get("kind") is (AnnotationKind.GT) or save_target.get("kind") == "gt"
+        assert save_target.get("scorer") == ("John")
+        assert save_target.get("source_relpath_posix") == "CollectedData_John.h5"
+    else:
+        assert (
+            getattr(
+                save_target,
+                "kind",
+                None,
+            )
+            is AnnotationKind.GT
+        )
+        assert (
+            getattr(
+                save_target,
+                "scorer",
+                None,
+            )
+            == "John"
+        )
+        assert (
+            getattr(
+                save_target,
+                "source_relpath_posix",
+                None,
+            )
+            == "CollectedData_John.h5"
+        )
+
+    assert gt_path.exists()
+    assert gt_path.with_suffix(".csv").exists()
+
+    gt_after = _read_hdf_any_key(gt_path).sort_index()
+
+    # ------------------------------------------------------------------
+    # Validate final GT schema.
+    # ------------------------------------------------------------------
+
+    assert isinstance(
+        gt_after.columns,
+        pd.MultiIndex,
+    )
+    assert gt_after.columns.nlevels == 3
+    assert list(gt_after.columns.names) == [
+        "scorer",
+        "bodyparts",
+        "coords",
+    ]
+
+    assert set(gt_after.columns.get_level_values("scorer")) == {"John"}
+
+    assert tuple(dict.fromkeys(gt_after.columns.get_level_values("bodyparts"))) == ("bodypart1",)
+
+    assert set(gt_after.columns.get_level_values("coords")) == {"x", "y"}
+
+    assert "likelihood" not in set(gt_after.columns.get_level_values("coords"))
+
+    # Expected final dataset:
+    # 30 manual GT frames + 20 promoted machine frames.
+    assert len(gt_after.index) == 50
+
+    before_rows = _dataframe_rows_by_path(gt_before)
+    after_rows = _dataframe_rows_by_path(gt_after)
+
+    assert set(initial_paths).issubset(after_rows)
+    assert set(outlier_paths).issubset(after_rows)
+
+    # ------------------------------------------------------------------
+    # Core regression assertion: original GT is unchanged.
+    # ------------------------------------------------------------------
+
+    for path in initial_paths:
+        before_row = gt_before.loc[before_rows[path]]
+        after_row = gt_after.loc[after_rows[path]]
+
+        pd.testing.assert_series_equal(
+            after_row,
+            before_row,
+            check_dtype=False,
+            check_names=False,
+        )
+
+    # ------------------------------------------------------------------
+    # Promoted machine values were added with the target GT scorer.
+    # ------------------------------------------------------------------
+
+    for path, (
+        expected_x,
+        expected_y,
+    ) in expected_outlier_xy.items():
+        row_key = after_rows[path]
+
+        actual_x = gt_after.loc[
+            row_key,
+            (
+                "John",
+                "bodypart1",
+                "x",
+            ),
+        ]
+        actual_y = gt_after.loc[
+            row_key,
+            (
+                "John",
+                "bodypart1",
+                "y",
+            ),
+        ]
+
+        assert actual_x == pytest.approx(expected_x)
+        assert actual_y == pytest.approx(expected_y)
+
+    # There should be no fully empty rows in the final combined dataset.
+    assert not gt_after.isna().all(axis=1).any()
+
+    # ------------------------------------------------------------------
+    # Saving refined annotations must not rewrite the machine source HDF.
+    # ------------------------------------------------------------------
+
+    machine_after = _read_hdf_any_key(machine_path).sort_index()
+
+    pd.testing.assert_frame_equal(
+        machine_after,
+        machine_before,
+        check_dtype=False,
+    )

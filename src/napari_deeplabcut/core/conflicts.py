@@ -21,6 +21,7 @@ from napari_deeplabcut.core.metadata import parse_points_metadata
 from napari_deeplabcut.core.project_paths import infer_dlc_project_from_points_meta
 from napari_deeplabcut.core.provenance import (
     resolve_output_path_from_metadata,
+    should_nan_clear_existing_for_save,
 )
 
 
@@ -156,7 +157,9 @@ def compute_overwrite_report_for_points_save(
         df_old = pd.read_hdf(out)
 
     key_conflict = keypoint_conflicts(df_old, df_new)
-    deletion_conflict = keypoint_deletions(df_old, df_new)
+
+    nan_clears_existing = should_nan_clear_existing_for_save(source_kind=source_kind, destination_kind=destination_kind)
+    deletion_conflict = keypoint_deletions(df_old, df_new) if nan_clears_existing else None
 
     report = build_overwrite_conflict_report(
         key_conflict,

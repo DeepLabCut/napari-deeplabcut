@@ -22,6 +22,10 @@ from .utils import (
 
 _COORD_TOL_DEFAULT = 1e-6
 
+# NOTE: @C-Achard 2026-07-15 This system could be reused for machine labels -> GT merges,
+# and would give more control to users to choose whether to overwrite existing GT or only fill missing slots.
+# It would also simplify the whole machinery for machine to GT promotion.
+
 
 class TrackingMergePolicy(str, Enum):
     """Supported merge policies for tracking-result -> DLC points merges."""
