@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 import numpy as np
+from napari import Viewer
+from napari.components._viewer_key_bindings import (
+    increment_dims_left,
+    increment_dims_right,
+)
 from napari.layers import Points
+from qtpy.QtCore import QTimer
 
 from .settings import TRACKING_SHORTCUTS_ENABLED
 
@@ -19,6 +25,11 @@ _global_points_bindings_installed = False
 class BindingContext:
     controls: object
     store: object
+    viewer: object | None = (
+        None
+        # only needed for viewer-scoped keybinds,
+        # can be left out for points-layer-scoped keybinds
+    )
 
 
 @dataclass(frozen=True)
@@ -40,11 +51,87 @@ class ShortcutAction(Enum):
     PREV_KEYPOINT = auto()
     JUMP_UNLABELED_FRAME = auto()
     TOGGLE_EDGE_COLOR = auto()
+    NEXT_FRAME = auto()
+    PREV_FRAME = auto()
 
 
 # ----------------------------------------
 #  Functions with associated keybind callbacks
 # ----------------------------------------
+
+_FRAME_REPEAT_INTERVAL_MS = 60
+_frame_repeat_timers: dict[tuple[int, str], QTimer] = {}
+
+
+def _viewer_from_callback_arg(ctx: BindingContext, obj):
+    """
+    Get the viewer either from context or from the callback argument itself.
+    Requires a napari action that uses viewer as the callback argument.
+    """
+    if ctx.viewer is not None:
+        return ctx.viewer
+
+    if isinstance(obj, Viewer):
+        return obj
+
+    return None
+
+
+def _make_repeating_viewer_callback(ctx: BindingContext, action, repeat_id: str):
+    """
+    Call a napari viewer action once, then continue calling it while the key is held.
+
+    This reuses napari's own increment_dims_* functions, but adds hold-to-repeat
+    for A/D, which napari otherwise filters as non-navigation autorepeat keys.
+    """
+
+    def callback(obj):
+        viewer = _viewer_from_callback_arg(ctx, obj)
+        if viewer is None:
+            return
+
+        timer_key = (id(viewer), repeat_id)
+
+        # Avoid duplicate timers if repeat key-press events sneak through.
+        if timer_key in _frame_repeat_timers:
+            return
+
+        # Move once immediately.
+        action(viewer)
+
+        timer = QTimer()
+        timer.setInterval(_FRAME_REPEAT_INTERVAL_MS)
+        timer.timeout.connect(lambda: action(viewer))
+
+        _frame_repeat_timers[timer_key] = timer
+        timer.start()
+
+        try:
+            yield
+        finally:
+            timer.stop()
+            timer.deleteLater()
+            _frame_repeat_timers.pop(timer_key, None)
+
+    return callback
+
+
+def _prev_frame(ctx: BindingContext):
+    return _make_repeating_viewer_callback(
+        ctx,
+        increment_dims_left,
+        "prev_frame",
+    )
+
+
+def _next_frame(ctx: BindingContext):
+    return _make_repeating_viewer_callback(
+        ctx,
+        increment_dims_right,
+        "next_frame",
+    )
+
+
 def _cycle_label_mode(ctx: BindingContext):
     return ctx.controls.cycle_through_label_modes
 
@@ -86,7 +173,7 @@ SHORTCUTS: tuple[ShortcutSpec, ...] = (
         when="Only cycles beyond bodypart mode for multi-animal layers",
     ),
     ShortcutSpec(
-        keys=("Down",),
+        keys=("Down", "S"),
         action=ShortcutAction.NEXT_KEYPOINT,
         get_callback=_next_keypoint,
         description="Select next keypoint",
@@ -95,7 +182,7 @@ SHORTCUTS: tuple[ShortcutSpec, ...] = (
         overwrite=True,
     ),
     ShortcutSpec(
-        keys=("Up",),
+        keys=("Up", "W"),
         action=ShortcutAction.PREV_KEYPOINT,
         get_callback=_prev_keypoint,
         description="Select previous keypoint",
@@ -118,6 +205,24 @@ SHORTCUTS: tuple[ShortcutSpec, ...] = (
         group="Display",
         scope="global-points",
     ),
+    ShortcutSpec(
+        keys=("A",),
+        action=ShortcutAction.PREV_FRAME,
+        get_callback=_prev_frame,
+        description="Previous frame (fast on hold)",
+        group="Navigation",
+        scope="viewer",
+        overwrite=True,
+    ),
+    ShortcutSpec(
+        keys=("D",),
+        action=ShortcutAction.NEXT_FRAME,
+        get_callback=_next_frame,
+        description="Next frame (fast on hold)",
+        group="Navigation",
+        scope="viewer",
+        overwrite=True,
+    ),
 )
 
 # --------------------------------
@@ -137,12 +242,12 @@ class TrackingKeybindConfig:
         return txt
 
 
-TRACK_FORWARD = TrackingKeybindConfig(key="l", tooltip="Track forward")
-TRACK_FORWARD_END = TrackingKeybindConfig(key="k", tooltip="Track forward to end")
-TRACK_BACKWARD = TrackingKeybindConfig(key="h", tooltip="Track backward")
-TRACK_BACKWARD_END = TrackingKeybindConfig(key="j", tooltip="Track backward to start")
-MOVE_FORWARD_FRAME = TrackingKeybindConfig(key="i", tooltip="Move forward one frame")
-MOVE_BACKWARD_FRAME = TrackingKeybindConfig(key="u", tooltip="Move backward one frame")
+TRACK_FORWARD = TrackingKeybindConfig(key="L", tooltip="Track forward")
+TRACK_FORWARD_END = TrackingKeybindConfig(key="K", tooltip="Track forward to end")
+TRACK_BACKWARD = TrackingKeybindConfig(key="H", tooltip="Track backward")
+TRACK_BACKWARD_END = TrackingKeybindConfig(key="J", tooltip="Track backward to start")
+MOVE_FORWARD_FRAME = TrackingKeybindConfig(key="I", tooltip="Move forward one frame")
+MOVE_BACKWARD_FRAME = TrackingKeybindConfig(key="U", tooltip="Move backward one frame")
 
 
 TRACKING_SHORTCUTS: tuple[ShortcutSpec, ...] = (
@@ -204,15 +309,34 @@ def _bind_each_key(layer: Points, keys: tuple[str, ...], callback, *, overwrite:
         layer.bind_key(key, callback, overwrite=overwrite)
 
 
-def install_points_layer_keybindings(layer: Points, controls, store) -> None:
-    ctx = BindingContext(controls=controls, store=store)
+def install_points_layer_keybindings(layer: Points, controls, store, viewer=None) -> None:
+    ctx = BindingContext(controls=controls, store=store, viewer=viewer)
 
     for spec in SHORTCUTS:
-        if spec.scope != "points-layer" or spec.get_callback is None:
+        if spec.get_callback is None:
+            continue
+
+        if spec.scope == "points-layer":
+            callback = spec.get_callback(ctx)
+            _bind_each_key(layer, spec.keys, callback, overwrite=spec.overwrite)
+
+        elif spec.scope == "viewer" and viewer is not None:
+            callback = spec.get_callback(ctx)
+            _bind_each_key(layer, spec.keys, callback, overwrite=spec.overwrite)
+
+
+def install_viewer_keybindings(viewer, controls=None, store=None) -> None:
+    # Still needed so A/D work without a Points layer
+    ctx = BindingContext(controls=controls, store=store, viewer=viewer)
+
+    for spec in SHORTCUTS:
+        if spec.scope != "viewer" or spec.get_callback is None:
             continue
 
         callback = spec.get_callback(ctx)
-        _bind_each_key(layer, spec.keys, callback, overwrite=spec.overwrite)
+
+        for key in spec.keys:
+            viewer.bind_key(key, callback, overwrite=spec.overwrite)
 
 
 # ------- Global keybinds that apply to all points layers, e.g. toggling edge color -------

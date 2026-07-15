@@ -1,6 +1,6 @@
 import os
 
-from qtpy.QtCore import QSettings
+from qtpy.QtCore import QSettings, Qt
 
 from .utils import _get_int_env
 
@@ -11,6 +11,11 @@ DEFAULT_MULTI_ANIMAL_INDIVIDUAL_CMAP = "Set3"
 # UI settings
 _OVERWRITE_CONFIRM_ENABLED_KEY = "napari_deeplabcut/overwrite/confirm_enabled"
 AUTO_OPEN_KEYPOINT_CONTROLS_KEY = "napari_deeplabcut/ui/auto_open_keypoint_controls"
+## Shortcuts
+### By default, dropdown menus in Qt will jump to any item that starts with the key pressed.
+### so that pressing "s" will jump to e.g. "snout" if it is the first item starting with "s".
+### Since this conflicts with the "w" and "s" shortcuts for seeking frames, we ignore these keys for dropdown menus.
+IGNORED_FOR_DROPDOWN_MENU_SEEKING_KEYS = {Qt.Key_W, Qt.Key_S}
 ## Trajectory plot
 _MIN_TRAJ_PLOT_WINDOW = 1
 _DEFAULT_TRAJ_PLOT_WINDOW = 50
