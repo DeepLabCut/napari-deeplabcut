@@ -140,7 +140,7 @@ def test_make_paste_data_returns_early_when_all_points_are_annotated(monkeypatch
     paste(layer)
 
     assert recolor_calls == []
-    # features are popped before the early return; smoke test just checks no crash/no recolor
+    # Smoke test: no paste, no refresh, no recolor when all keypoints are already annotated.
 
 
 def test_make_paste_data_pastes_only_unannotated_points_and_recolors(paste_env):
@@ -179,3 +179,60 @@ def test_make_paste_data_pastes_only_unannotated_points_and_recolors(paste_env):
     assert layer._selected_data == {1}
     assert layer.refresh_count == 1
     assert paste_env.recolor_calls == [paste_env.store.layer]
+
+
+def test_make_paste_data_handles_scalar_text_payload(paste_env):
+    """
+    napari 0.7.0 may store copied Points text as a scalar / 0-d array,
+    for example np.array("", dtype="<U1"), rather than one string per point.
+
+    Our paste compat code must not index that scalar with the unannotated mask.
+    """
+    paste_env.layer._clipboard["text"] = {
+        "string": np.array("", dtype="<U1"),
+        "color": "white",
+    }
+
+    paste = make_paste_data(paste_env.controls, store=paste_env.store)
+    paste(paste_env.layer)
+
+    layer = paste_env.layer
+
+    # Smoke check: paste succeeded and only the unannotated point was pasted.
+    assert layer._data.shape == (2, 3)
+
+    assert len(layer.text.calls) == 1
+    assert layer.text.calls[0]["color"] == "white"
+
+    pasted_string = layer.text.calls[0]["string"]
+    assert isinstance(pasted_string, np.ndarray)
+    assert pasted_string.shape == ()
+    assert pasted_string.item() == ""
+
+    assert layer.refresh_count == 1
+    assert paste_env.recolor_calls == [paste_env.store.layer]
+
+
+def test_make_paste_data_preserves_text_payload_when_text_length_does_not_match_mask(paste_env):
+    """
+    If napari changes the shape of text["string"], paste should stay defensive:
+    only mask per-point text arrays whose length matches the feature mask.
+    """
+    paste_env.layer._clipboard["text"] = {
+        "string": np.array(["unexpected-only-one"], dtype=object),
+        "color": "white",
+    }
+
+    paste = make_paste_data(paste_env.controls, store=paste_env.store)
+    paste(paste_env.layer)
+
+    layer = paste_env.layer
+
+    assert layer._data.shape == (2, 3)
+
+    assert len(layer.text.calls) == 1
+    np.testing.assert_array_equal(
+        layer.text.calls[0]["string"],
+        np.array(["unexpected-only-one"], dtype=object),
+    )
+    assert layer.text.calls[0]["color"] == "white"
