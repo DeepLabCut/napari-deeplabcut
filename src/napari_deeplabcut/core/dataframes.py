@@ -560,10 +560,10 @@ def merge_save_df(
         overlap = df_old2.index.intersection(df_new2.index)
         if overlap.empty:
             raise ValueError(
-                "Cannot merge annotations because the dataset path stored in the "
-                "destination file does not match the current labeled-data folder. "
-                "This can happen when a labeled-data folder is renamed or copied "
-                "without rewriting the annotation row indexes. "
+                "Cannot merge annotations because no annotation rows overlap between the "
+                "destination file and the incoming data after harmonization. "
+                "This usually means the annotations refer to different image paths/names "
+                "(e.g., a labeled-data folder was moved/renamed, or you are saving to a different dataset). "
                 f"Existing row example: {df_old2.index[0]!r}. "
                 f"Incoming row example: {df_new2.index[0]!r}."
             )

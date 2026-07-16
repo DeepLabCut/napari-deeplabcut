@@ -28,8 +28,8 @@ def write_hdf_napari_dlc(path: str, data, attributes: dict) -> list[str]:
     logger.debug("write_hdf_napari_dlc ENTER path=%r", path)
     try:
         written = write_hdf(path, data, attributes)
-    except Exception as e:
-        logger.exception("write_hdf_napari_dlc failed with exception: %s", e)
+    except Exception:
+        logger.exception("write_hdf_napari_dlc failed")
         raise
 
     logger.debug("write_hdf_napari_dlc RETURN written=%r", written)
