@@ -742,7 +742,7 @@ def test_merge_save_df_merge_refuses_no_row_overlap_after_harmonization():
         columns=cols,
     )
 
-    with pytest.raises(ValueError, match="no row-index overlap after harmonization"):
+    with pytest.raises(ValueError, match="Cannot merge annotations"):
         merge_save_df(df_old, df_new, nan_clears_existing=True)
 
 

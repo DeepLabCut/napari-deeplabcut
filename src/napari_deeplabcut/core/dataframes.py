@@ -560,8 +560,12 @@ def merge_save_df(
         overlap = df_old2.index.intersection(df_new2.index)
         if overlap.empty:
             raise ValueError(
-                "Cannot merge save dataframe: no row-index overlap after harmonization. "
-                "Existing labels would be preserved instead of overwritten/deleted."
+                "Cannot merge annotations because no annotation rows overlap between the "
+                "destination file and the incoming data after harmonization. "
+                "This usually means the annotations refer to different image paths/names "
+                "(e.g., a labeled-data folder was moved/renamed, or you are saving to a different dataset). "
+                f"Existing row example: {df_old2.index[0]!r}. "
+                f"Incoming row example: {df_new2.index[0]!r}."
             )
 
     idx = df_old2.index.union(df_new2.index)
