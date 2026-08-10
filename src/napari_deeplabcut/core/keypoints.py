@@ -303,10 +303,26 @@ class KeypointStore:
     def current_keypoint(self, keypoint: Keypoint) -> None:
         self._set_current_keypoint_properties(label=keypoint.label, id_=keypoint.id)
 
+    def _next_keypoint_after(self, keypoint: Keypoint) -> Keypoint | None:
+        try:
+            index = self._keypoints.index(keypoint)
+        except ValueError:
+            logger.warning(
+                "Cannot advance from keypoint outside configured sequence: %r",
+                keypoint,
+            )
+            return None
+
+        next_index = index + 1
+        if next_index >= len(self._keypoints):
+            return None
+
+        return self._keypoints[next_index]
+
     def next_keypoint(self, *args):
-        ind = self._keypoints.index(self.current_keypoint) + 1
-        if ind <= len(self._keypoints) - 1:
-            self.current_keypoint = self._keypoints[ind]
+        next_kp = self._next_keypoint_after(self.current_keypoint)
+        if next_kp is not None:
+            self.current_keypoint = next_kp
 
     def prev_keypoint(self, *args):
         ind = self._keypoints.index(self.current_keypoint) - 1
@@ -420,8 +436,7 @@ class KeypointStore:
             changed = True
 
         elif label_mode is LabelMode.QUICK:
-            layer = self.layer
-            ind = self.annotated_keypoints.index(self.current_keypoint)
+            ind = annotated_before.index(requested)
             data = layer.data
             data[np.flatnonzero(self.current_mask)[ind]] = coord.squeeze()
             layer.data = data
@@ -432,9 +447,10 @@ class KeypointStore:
         if label_mode is LabelMode.LOOP:
             if changed:
                 self.layer.events.query_next_frame()
-        else:
-            if changed:
-                self.next_keypoint()
+        elif changed:
+            next_kp = self._next_keypoint_after(requested)
+            if next_kp is not None:
+                self.current_keypoint = next_kp
 
 
 @deprecated(details="Temporary compat shim, remove once KeypointStore.add is properly integrated.")

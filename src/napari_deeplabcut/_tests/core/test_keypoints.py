@@ -342,3 +342,53 @@ def test_sequential_add_advances_from_manually_selected_keypoint(store):
 
     # Sequential advancement starts from the manually selected pair.
     assert store.current_keypoint == expected_next
+
+
+def test_sequential_add_advances_from_requested_keypoint_when_event_changes_current(
+    store,
+):
+    store._get_label_mode = lambda: keypoints.LabelMode.SEQUENTIAL
+
+    layer = store.layer
+    frame = store.current_step
+
+    assert len(store._keypoints) >= 4
+
+    # Start with no annotations on the current frame.
+    layer.remove(np.flatnonzero(store.current_mask).tolist())
+    assert not store.annotated_keypoints
+
+    requested = store._keypoints[1]
+    expected_next = store._keypoints[2]
+    event_keypoint = store._keypoints[3]
+
+    callback_calls = 0
+
+    def change_current_on_properties_event(event):
+        nonlocal callback_calls
+        callback_calls += 1
+        store.current_keypoint = event_keypoint
+
+    layer.events.properties.connect(
+        change_current_on_properties_event,
+    )
+
+    try:
+        store.current_keypoint = requested
+        store.add((frame, 1, 1))
+    finally:
+        layer.events.properties.disconnect(
+            change_current_on_properties_event,
+        )
+
+    assert callback_calls >= 1
+
+    added_index = len(layer.data) - 1
+
+    # Property assignment uses the pair captured at the start of add().
+    assert layer.properties["label"][added_index] == requested.label
+    assert layer.properties["id"][added_index] == requested.id
+
+    # Sequential advancement must also use the captured pair, not the
+    # keypoint installed by the event callback.
+    assert store.current_keypoint == expected_next
