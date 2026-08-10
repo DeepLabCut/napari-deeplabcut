@@ -237,8 +237,11 @@ def test_current_keypoint_change_does_not_affect_other_layer(
     viewer,
 ):
     active_layer = store.layer
-    other_layer = active_layer.copy()
-    viewer.add_layer(other_layer)
+    other_layer = viewer.add_points(
+        active_layer.data.copy(),
+        properties={name: np.asarray(values).copy() for name, values in active_layer.properties.items()},
+        name="other_layer",
+    )
 
     other_layer.selected_data = {0}
 
