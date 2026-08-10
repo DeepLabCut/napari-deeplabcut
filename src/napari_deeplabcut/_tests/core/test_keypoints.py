@@ -271,3 +271,74 @@ def test_current_keypoint_change_does_not_affect_other_layer(
         other_layer.properties["id"],
         other_ids,
     )
+
+
+def test_add_keypoints_out_of_sequence(store):
+    store._get_label_mode = lambda: keypoints.LabelMode.SEQUENTIAL
+
+    layer = store.layer
+    frame = store.current_step
+
+    assert len(store._keypoints) >= 3
+
+    # Start with an unannotated current frame.
+    indices = np.flatnonzero(store.current_mask).tolist()
+    layer.remove(indices)
+
+    assert not store.annotated_keypoints
+
+    # Deliberately differ from the header-defined keypoint order.
+    requested_order = [
+        store._keypoints[0],
+        store._keypoints[2],
+        store._keypoints[1],
+    ]
+
+    for offset, requested in enumerate(requested_order):
+        store.current_keypoint = requested
+        assert store.current_keypoint == requested
+
+        n_points_before = len(layer.data)
+
+        store.add((frame, offset + 1, offset + 1))
+
+        assert len(layer.data) == n_points_before + 1
+        assert requested in store.annotated_keypoints
+
+        added_index = len(layer.data) - 1
+        assert layer.properties["label"][added_index] == requested.label
+        assert layer.properties["id"][added_index] == requested.id
+
+    assert set(store.annotated_keypoints) == set(requested_order)
+
+
+def test_sequential_add_advances_from_manually_selected_keypoint(store):
+    store._get_label_mode = lambda: keypoints.LabelMode.SEQUENTIAL
+
+    layer = store.layer
+    frame = store.current_step
+
+    assert len(store._keypoints) >= 3
+
+    # Start with an unannotated current frame.
+    indices = np.flatnonzero(store.current_mask).tolist()
+    layer.remove(indices)
+
+    requested_index = 1
+    requested = store._keypoints[requested_index]
+    expected_next = store._keypoints[requested_index + 1]
+
+    # Select a keypoint that is not first in the configured sequence.
+    store.current_keypoint = requested
+    assert store.current_keypoint == requested
+
+    store.add((frame, 1, 1))
+
+    # The added point must retain the pair selected when add() began.
+    added_index = len(layer.data) - 1
+    assert layer.properties["label"][added_index] == requested.label
+    assert layer.properties["id"][added_index] == requested.id
+    assert requested in store.annotated_keypoints
+
+    # Sequential advancement starts from the manually selected pair.
+    assert store.current_keypoint == expected_next
