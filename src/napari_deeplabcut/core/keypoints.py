@@ -141,18 +141,42 @@ class KeypointStore:
         id_: str | None = None,
     ) -> None:
         """Set defaults for the next point without editing selected points."""
-        current_properties = {name: np.asarray(values).copy() for name, values in self.layer.current_properties.items()}
+        layer = self.layer
+        before = self.current_keypoint
+
+        requested = Keypoint(
+            label=before.label if label is None else label,
+            id=before.id if id_ is None else id_,
+        )
+
+        current_properties = {name: np.asarray(values).copy() for name, values in layer.current_properties.items()}
 
         if label is not None:
-            current_properties["label"] = np.asarray([label], dtype=object)
+            current_properties["label"] = np.asarray(
+                [label],
+                dtype=object,
+            )
 
         if id_ is not None:
-            current_properties["id"] = np.asarray([id_], dtype=object)
+            current_properties["id"] = np.asarray(
+                [id_],
+                dtype=object,
+            )
 
         # Keep the current selection, but prevent Napari from applying the new
         # defaults to selected points.
-        with self.layer.block_update_properties():
-            self.layer.current_properties = current_properties
+        with layer.block_update_properties():
+            layer.current_properties = current_properties
+
+        actual = self.current_keypoint
+        if actual != requested:
+            logger.warning(
+                "Keypoint switch mismatch layer=%r frame=%d requested=%r actual=%r",
+                getattr(layer, "name", None),
+                self.current_step,
+                requested,
+                actual,
+            )
 
     def set_label_mode_getter(self, getter: Callable[[], LabelMode]):
         self._get_label_mode = getter
@@ -352,16 +376,19 @@ class KeypointStore:
         get_mode = getattr(self, "_get_label_mode", None)
         label_mode = get_mode() if callable(get_mode) else None
 
+        layer = self.layer
+        requested = self.current_keypoint
+        annotated_before = self.annotated_keypoints
+        already_annotated = requested in annotated_before
+
         changed = False
 
-        if self.current_keypoint not in self.annotated_keypoints:
-            layer = self.layer
-
+        if not already_annotated:
             # 1) append data
             layer.data = np.append(layer.data, coord, axis=0)
 
             # 2) append/align properties to match number of points
-            kp = self.current_keypoint
+            kp = requested
             n_new = coord.shape[0]
             n_total = len(layer.data)
             n_old = n_total - n_new
