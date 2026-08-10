@@ -134,6 +134,26 @@ class KeypointStore:
 
         self.viewer.dims.set_current_step(0, 0)
 
+    def _set_current_keypoint_properties(
+        self,
+        *,
+        label: str | None = None,
+        id_: str | None = None,
+    ) -> None:
+        """Set defaults for the next point without editing selected points."""
+        current_properties = {name: np.asarray(values).copy() for name, values in self.layer.current_properties.items()}
+
+        if label is not None:
+            current_properties["label"] = np.asarray([label], dtype=object)
+
+        if id_ is not None:
+            current_properties["id"] = np.asarray([id_], dtype=object)
+
+        # Keep the current selection, but prevent Napari from applying the new
+        # defaults to selected points.
+        with self.layer.block_update_properties():
+            self.layer.current_properties = current_properties
+
     def set_label_mode_getter(self, getter: Callable[[], LabelMode]):
         self._get_label_mode = getter
 
@@ -256,14 +276,8 @@ class KeypointStore:
         return Keypoint(label=label, id=id_)
 
     @current_keypoint.setter
-    def current_keypoint(self, keypoint: Keypoint):
-        layer = self.layer
-        # Avoid changing the properties of a selected point
-        if not len(layer.selected_data):
-            current_properties = layer.current_properties
-            current_properties["label"] = np.asarray([keypoint.label])
-            current_properties["id"] = np.asarray([keypoint.id])
-            layer.current_properties = current_properties
+    def current_keypoint(self, keypoint: Keypoint) -> None:
+        self._set_current_keypoint_properties(label=keypoint.label, id_=keypoint.id)
 
     def next_keypoint(self, *args):
         ind = self._keypoints.index(self.current_keypoint) + 1
@@ -280,24 +294,16 @@ class KeypointStore:
         return self.layer.current_properties["label"][0]
 
     @current_label.setter
-    def current_label(self, label: str):
-        layer = self.layer
-        if not len(layer.selected_data):
-            current_properties = layer.current_properties
-            current_properties["label"] = np.asarray([label])
-            layer.current_properties = current_properties
+    def current_label(self, label: str) -> None:
+        self._set_current_keypoint_properties(label=label)
 
     @property
     def current_id(self) -> str:
         return self.layer.current_properties["id"][0]
 
     @current_id.setter
-    def current_id(self, id_: str):
-        layer = self.layer
-        if not len(layer.selected_data):
-            current_properties = layer.current_properties
-            current_properties["id"] = np.asarray([id_])
-            layer.current_properties = current_properties
+    def current_id(self, id_: str) -> None:
+        self._set_current_keypoint_properties(id_=id_)
 
     def _advance_step(self, event):
         ind = (self.current_step + 1) % self.n_steps
