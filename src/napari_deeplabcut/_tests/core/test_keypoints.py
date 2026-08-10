@@ -153,3 +153,118 @@ def test_store_layer_setter_updates_layer_id_and_keypoints(store, viewer):
     assert store.layer is new_layer
     assert store.layer_id == id(new_layer)
     assert store.layer_id != old_layer_id or new_layer is old_layer
+
+
+def test_current_keypoint_change_does_not_relabel_selected_point(store):
+    layer = store.layer
+    selected_index = 0
+
+    original_label = layer.properties["label"][selected_index]
+    original_id = layer.properties["id"][selected_index]
+
+    new_keypoint = keypoints.Keypoint(
+        label="kpt_1",
+        id="animal_1",
+    )
+
+    layer.selected_data = {selected_index}
+    store.current_keypoint = new_keypoint
+
+    assert store.current_keypoint == new_keypoint
+    assert set(layer.selected_data) == {selected_index}
+
+    assert layer.properties["label"][selected_index] == original_label
+    assert layer.properties["id"][selected_index] == original_id
+
+
+def test_current_id_change_preserves_label_and_selected_point(store):
+    layer = store.layer
+    selected_index = 0
+
+    store.current_keypoint = keypoints.Keypoint(
+        label="kpt_0",
+        id="animal_0",
+    )
+
+    original_properties = {name: np.asarray(values).copy() for name, values in layer.properties.items()}
+
+    layer.selected_data = {selected_index}
+    store.current_id = "animal_1"
+
+    assert store.current_keypoint == keypoints.Keypoint(
+        label="kpt_0",
+        id="animal_1",
+    )
+    assert set(layer.selected_data) == {selected_index}
+
+    np.testing.assert_array_equal(
+        layer.properties["label"],
+        original_properties["label"],
+    )
+    np.testing.assert_array_equal(
+        layer.properties["id"],
+        original_properties["id"],
+    )
+
+
+def test_switch_to_existing_keypoint_does_not_modify_points(store):
+    layer = store.layer
+
+    existing = store.annotated_keypoints[0]
+    original_data = layer.data.copy()
+    original_labels = layer.properties["label"].copy()
+    original_ids = layer.properties["id"].copy()
+
+    layer.selected_data = {0}
+    store.current_keypoint = existing
+
+    assert store.current_keypoint == existing
+    assert set(layer.selected_data) == {0}
+
+    np.testing.assert_array_equal(layer.data, original_data)
+    np.testing.assert_array_equal(
+        layer.properties["label"],
+        original_labels,
+    )
+    np.testing.assert_array_equal(
+        layer.properties["id"],
+        original_ids,
+    )
+
+
+def test_current_keypoint_change_does_not_affect_other_layer(
+    store,
+    viewer,
+):
+    active_layer = store.layer
+    other_layer = active_layer.copy()
+    viewer.add_layer(other_layer)
+
+    other_layer.selected_data = {0}
+
+    other_current = {name: np.asarray(values).copy() for name, values in other_layer.current_properties.items()}
+    other_labels = other_layer.properties["label"].copy()
+    other_ids = other_layer.properties["id"].copy()
+
+    active_layer.selected_data = {0}
+    store.current_keypoint = keypoints.Keypoint(
+        label="kpt_1",
+        id="animal_1",
+    )
+
+    assert set(other_layer.selected_data) == {0}
+
+    for name, values in other_current.items():
+        np.testing.assert_array_equal(
+            other_layer.current_properties[name],
+            values,
+        )
+
+    np.testing.assert_array_equal(
+        other_layer.properties["label"],
+        other_labels,
+    )
+    np.testing.assert_array_equal(
+        other_layer.properties["id"],
+        other_ids,
+    )
