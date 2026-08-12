@@ -153,3 +153,242 @@ def test_store_layer_setter_updates_layer_id_and_keypoints(store, viewer):
     assert store.layer is new_layer
     assert store.layer_id == id(new_layer)
     assert store.layer_id != old_layer_id or new_layer is old_layer
+
+
+def test_current_keypoint_change_does_not_relabel_selected_point(store):
+    layer = store.layer
+    selected_index = 0
+
+    original_label = layer.properties["label"][selected_index]
+    original_id = layer.properties["id"][selected_index]
+
+    new_keypoint = keypoints.Keypoint(
+        label="kpt_1",
+        id="animal_1",
+    )
+
+    layer.selected_data = {selected_index}
+    store.current_keypoint = new_keypoint
+
+    assert store.current_keypoint == new_keypoint
+    assert set(layer.selected_data) == {selected_index}
+
+    assert layer.properties["label"][selected_index] == original_label
+    assert layer.properties["id"][selected_index] == original_id
+
+
+def test_current_id_change_preserves_label_and_selected_point(store):
+    layer = store.layer
+    selected_index = 0
+
+    store.current_keypoint = keypoints.Keypoint(
+        label="kpt_0",
+        id="animal_0",
+    )
+
+    original_properties = {name: np.asarray(values).copy() for name, values in layer.properties.items()}
+
+    layer.selected_data = {selected_index}
+    store.current_id = "animal_1"
+
+    assert store.current_keypoint == keypoints.Keypoint(
+        label="kpt_0",
+        id="animal_1",
+    )
+    assert set(layer.selected_data) == {selected_index}
+
+    np.testing.assert_array_equal(
+        layer.properties["label"],
+        original_properties["label"],
+    )
+    np.testing.assert_array_equal(
+        layer.properties["id"],
+        original_properties["id"],
+    )
+
+
+def test_switch_to_existing_keypoint_does_not_modify_points(store):
+    layer = store.layer
+
+    existing = store.annotated_keypoints[0]
+    original_data = layer.data.copy()
+    original_labels = layer.properties["label"].copy()
+    original_ids = layer.properties["id"].copy()
+
+    layer.selected_data = {0}
+    store.current_keypoint = existing
+
+    assert store.current_keypoint == existing
+    assert set(layer.selected_data) == {0}
+
+    np.testing.assert_array_equal(layer.data, original_data)
+    np.testing.assert_array_equal(
+        layer.properties["label"],
+        original_labels,
+    )
+    np.testing.assert_array_equal(
+        layer.properties["id"],
+        original_ids,
+    )
+
+
+def test_current_keypoint_change_does_not_affect_other_layer(
+    store,
+    viewer,
+):
+    active_layer = store.layer
+    other_layer = viewer.add_points(
+        active_layer.data.copy(),
+        properties={name: np.asarray(values).copy() for name, values in active_layer.properties.items()},
+        name="other_layer",
+    )
+
+    other_layer.selected_data = {0}
+
+    other_current = {name: np.asarray(values).copy() for name, values in other_layer.current_properties.items()}
+    other_labels = other_layer.properties["label"].copy()
+    other_ids = other_layer.properties["id"].copy()
+
+    active_layer.selected_data = {0}
+    store.current_keypoint = keypoints.Keypoint(
+        label="kpt_1",
+        id="animal_1",
+    )
+
+    assert set(other_layer.selected_data) == {0}
+
+    for name, values in other_current.items():
+        np.testing.assert_array_equal(
+            other_layer.current_properties[name],
+            values,
+        )
+
+    np.testing.assert_array_equal(
+        other_layer.properties["label"],
+        other_labels,
+    )
+    np.testing.assert_array_equal(
+        other_layer.properties["id"],
+        other_ids,
+    )
+
+
+def test_add_keypoints_out_of_sequence(store):
+    store._get_label_mode = lambda: keypoints.LabelMode.SEQUENTIAL
+
+    layer = store.layer
+    frame = store.current_step
+
+    assert len(store._keypoints) >= 3
+
+    # Start with an unannotated current frame.
+    indices = np.flatnonzero(store.current_mask).tolist()
+    layer.remove(indices)
+
+    assert not store.annotated_keypoints
+
+    # Deliberately differ from the header-defined keypoint order.
+    requested_order = [
+        store._keypoints[0],
+        store._keypoints[2],
+        store._keypoints[1],
+    ]
+
+    for offset, requested in enumerate(requested_order):
+        store.current_keypoint = requested
+        assert store.current_keypoint == requested
+
+        n_points_before = len(layer.data)
+
+        store.add((frame, offset + 1, offset + 1))
+
+        assert len(layer.data) == n_points_before + 1
+        assert requested in store.annotated_keypoints
+
+        added_index = len(layer.data) - 1
+        assert layer.properties["label"][added_index] == requested.label
+        assert layer.properties["id"][added_index] == requested.id
+
+    assert set(store.annotated_keypoints) == set(requested_order)
+
+
+def test_sequential_add_advances_from_manually_selected_keypoint(store):
+    store._get_label_mode = lambda: keypoints.LabelMode.SEQUENTIAL
+
+    layer = store.layer
+    frame = store.current_step
+
+    assert len(store._keypoints) >= 3
+
+    # Start with an unannotated current frame.
+    indices = np.flatnonzero(store.current_mask).tolist()
+    layer.remove(indices)
+
+    requested_index = 1
+    requested = store._keypoints[requested_index]
+    expected_next = store._keypoints[requested_index + 1]
+
+    # Select a keypoint that is not first in the configured sequence.
+    store.current_keypoint = requested
+    assert store.current_keypoint == requested
+
+    store.add((frame, 1, 1))
+
+    # The added point must retain the pair selected when add() began.
+    added_index = len(layer.data) - 1
+    assert layer.properties["label"][added_index] == requested.label
+    assert layer.properties["id"][added_index] == requested.id
+    assert requested in store.annotated_keypoints
+
+    # Sequential advancement starts from the manually selected pair.
+    assert store.current_keypoint == expected_next
+
+
+def test_sequential_add_advances_from_requested_keypoint_when_event_changes_current(
+    store,
+):
+    store._get_label_mode = lambda: keypoints.LabelMode.SEQUENTIAL
+
+    layer = store.layer
+    frame = store.current_step
+
+    assert len(store._keypoints) >= 4
+
+    # Start with no annotations on the current frame.
+    layer.remove(np.flatnonzero(store.current_mask).tolist())
+    assert not store.annotated_keypoints
+
+    requested = store._keypoints[1]
+    expected_next = store._keypoints[2]
+    event_keypoint = store._keypoints[3]
+
+    callback_calls = 0
+
+    def change_current_on_properties_event(event):
+        nonlocal callback_calls
+        callback_calls += 1
+        store.current_keypoint = event_keypoint
+
+    layer.events.properties.connect(
+        change_current_on_properties_event,
+    )
+
+    try:
+        store.current_keypoint = requested
+        store.add((frame, 1, 1))
+    finally:
+        layer.events.properties.disconnect(
+            change_current_on_properties_event,
+        )
+
+    assert callback_calls >= 1
+
+    added_index = len(layer.data) - 1
+
+    # Property assignment uses the pair captured at the start of add().
+    assert layer.properties["label"][added_index] == requested.label
+    assert layer.properties["id"][added_index] == requested.id
+
+    # Sequential advancement must also use the captured pair, not the
+    # keypoint installed by the event callback.
+    assert store.current_keypoint == expected_next

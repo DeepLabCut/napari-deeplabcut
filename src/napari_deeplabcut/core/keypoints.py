@@ -134,6 +134,50 @@ class KeypointStore:
 
         self.viewer.dims.set_current_step(0, 0)
 
+    def _set_current_keypoint_properties(
+        self,
+        *,
+        label: str | None = None,
+        id_: str | None = None,
+    ) -> None:
+        """Set defaults for the next point without editing selected points."""
+        layer = self.layer
+        before = self.current_keypoint
+
+        requested = Keypoint(
+            label=before.label if label is None else label,
+            id=before.id if id_ is None else id_,
+        )
+
+        current_properties = {name: np.asarray(values).copy() for name, values in layer.current_properties.items()}
+
+        if label is not None:
+            current_properties["label"] = np.asarray(
+                [label],
+                dtype=object,
+            )
+
+        if id_ is not None:
+            current_properties["id"] = np.asarray(
+                [id_],
+                dtype=object,
+            )
+
+        # Keep the current selection, but prevent Napari from applying the new
+        # defaults to selected points.
+        with layer.block_update_properties():
+            layer.current_properties = current_properties
+
+        actual = self.current_keypoint
+        if actual != requested:
+            logger.warning(
+                "Keypoint switch mismatch layer=%r frame=%d requested=%r actual=%r",
+                getattr(layer, "name", None),
+                self.current_step,
+                requested,
+                actual,
+            )
+
     def set_label_mode_getter(self, getter: Callable[[], LabelMode]):
         self._get_label_mode = getter
 
@@ -256,19 +300,29 @@ class KeypointStore:
         return Keypoint(label=label, id=id_)
 
     @current_keypoint.setter
-    def current_keypoint(self, keypoint: Keypoint):
-        layer = self.layer
-        # Avoid changing the properties of a selected point
-        if not len(layer.selected_data):
-            current_properties = layer.current_properties
-            current_properties["label"] = np.asarray([keypoint.label])
-            current_properties["id"] = np.asarray([keypoint.id])
-            layer.current_properties = current_properties
+    def current_keypoint(self, keypoint: Keypoint) -> None:
+        self._set_current_keypoint_properties(label=keypoint.label, id_=keypoint.id)
+
+    def _next_keypoint_after(self, keypoint: Keypoint) -> Keypoint | None:
+        try:
+            index = self._keypoints.index(keypoint)
+        except ValueError:
+            logger.warning(
+                "Cannot advance from keypoint outside configured sequence: %r",
+                keypoint,
+            )
+            return None
+
+        next_index = index + 1
+        if next_index >= len(self._keypoints):
+            return None
+
+        return self._keypoints[next_index]
 
     def next_keypoint(self, *args):
-        ind = self._keypoints.index(self.current_keypoint) + 1
-        if ind <= len(self._keypoints) - 1:
-            self.current_keypoint = self._keypoints[ind]
+        next_kp = self._next_keypoint_after(self.current_keypoint)
+        if next_kp is not None:
+            self.current_keypoint = next_kp
 
     def prev_keypoint(self, *args):
         ind = self._keypoints.index(self.current_keypoint) - 1
@@ -280,24 +334,16 @@ class KeypointStore:
         return self.layer.current_properties["label"][0]
 
     @current_label.setter
-    def current_label(self, label: str):
-        layer = self.layer
-        if not len(layer.selected_data):
-            current_properties = layer.current_properties
-            current_properties["label"] = np.asarray([label])
-            layer.current_properties = current_properties
+    def current_label(self, label: str) -> None:
+        self._set_current_keypoint_properties(label=label)
 
     @property
     def current_id(self) -> str:
         return self.layer.current_properties["id"][0]
 
     @current_id.setter
-    def current_id(self, id_: str):
-        layer = self.layer
-        if not len(layer.selected_data):
-            current_properties = layer.current_properties
-            current_properties["id"] = np.asarray([id_])
-            layer.current_properties = current_properties
+    def current_id(self, id_: str) -> None:
+        self._set_current_keypoint_properties(id_=id_)
 
     def _advance_step(self, event):
         ind = (self.current_step + 1) % self.n_steps
@@ -346,16 +392,19 @@ class KeypointStore:
         get_mode = getattr(self, "_get_label_mode", None)
         label_mode = get_mode() if callable(get_mode) else None
 
+        layer = self.layer
+        requested = self.current_keypoint
+        annotated_before = self.annotated_keypoints
+        already_annotated = requested in annotated_before
+
         changed = False
 
-        if self.current_keypoint not in self.annotated_keypoints:
-            layer = self.layer
-
+        if not already_annotated:
             # 1) append data
             layer.data = np.append(layer.data, coord, axis=0)
 
             # 2) append/align properties to match number of points
-            kp = self.current_keypoint
+            kp = requested
             n_new = coord.shape[0]
             n_total = len(layer.data)
             n_old = n_total - n_new
@@ -387,8 +436,7 @@ class KeypointStore:
             changed = True
 
         elif label_mode is LabelMode.QUICK:
-            layer = self.layer
-            ind = self.annotated_keypoints.index(self.current_keypoint)
+            ind = annotated_before.index(requested)
             data = layer.data
             data[np.flatnonzero(self.current_mask)[ind]] = coord.squeeze()
             layer.data = data
@@ -399,9 +447,10 @@ class KeypointStore:
         if label_mode is LabelMode.LOOP:
             if changed:
                 self.layer.events.query_next_frame()
-        else:
-            if changed:
-                self.next_keypoint()
+        elif changed:
+            next_kp = self._next_keypoint_after(requested)
+            if next_kp is not None:
+                self.current_keypoint = next_kp
 
 
 @deprecated(details="Temporary compat shim, remove once KeypointStore.add is properly integrated.")
