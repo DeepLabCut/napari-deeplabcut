@@ -88,7 +88,6 @@ from .core.metadata import (
 from .core.trails import TrailsController
 from .napari_compat import (
     apply_points_layer_ui_tweaks,
-    patch_color_manager_guess_continuous,
     register_points_action,
 )
 from .ui.base_widget import ViewerSingletonWidget
@@ -125,8 +124,6 @@ class KeypointControls(ViewerSingletonWidget):
         self._singleton_finalize_init()
         self.viewer = self.canonical_viewer(napari_viewer)
 
-        # Monkey-patch napari continuous variable type guess
-        patch_color_manager_guess_continuous()
         self._is_saved = False
 
         # Layer lifecycle manager
