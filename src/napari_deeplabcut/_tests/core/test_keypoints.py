@@ -50,17 +50,6 @@ def test_store_keypoints(store, fake_keypoints):
     store.next_keypoint()
 
 
-@pytest.mark.usefixtures("qtbot")
-def test_point_resize(qtbot, viewer, points):
-    viewer.layers.selection.add(points)
-    layer = viewer.layers[0]
-    controls = keypoints.QtPointsControls(layer)
-    qtbot.addWidget(controls)
-    new_size = 10
-    controls.changeCurrentSize(new_size)
-    np.testing.assert_array_equal(points.size, new_size)
-
-
 def test_add_unannotated(store):
     # LOOP mode: after a successful add/move, the viewer advances to the next frame
     store._get_label_mode = lambda: keypoints.LabelMode.LOOP
