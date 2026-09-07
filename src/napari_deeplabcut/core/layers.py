@@ -266,7 +266,7 @@ def get_uniform_point_size(layer: Points, *, default: int = 6) -> int:
 
 def set_uniform_point_size(
     layer: Points,
-    size: int,
+    size: float,
     *,
     update_new: bool = True,
 ) -> None:
