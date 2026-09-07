@@ -60,6 +60,8 @@ def test_apply_points_layer_ui_tweaks_smoke_real_viewer(viewer, qtbot, dropdown_
     assert point_controls._border_color_control.border_color_edit_label.isHidden()
     assert point_controls._out_slice_checkbox_control.out_of_slice_checkbox.isHidden()
     assert point_controls._out_slice_checkbox_control.out_of_slice_checkbox_label.isHidden()
+    assert point_controls._current_size_slider_control.size_slider.isHidden()
+    assert point_controls._current_size_slider_control.size_slider_label.isHidden()
 
 
 def test_install_add_wrapper_smoke_real_points_layer(viewer):
