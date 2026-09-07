@@ -268,7 +268,7 @@ def set_uniform_point_size(
     layer: Points,
     size: int,
     *,
-    update_new: bool = False,
+    update_new: bool = True,
 ) -> None:
     """Set a uniform size for existing points.
 
