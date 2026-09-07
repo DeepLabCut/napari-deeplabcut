@@ -280,7 +280,12 @@ def set_uniform_point_size(
     size = float(size)
     layer.size = size
     if update_new:
-        layer.current_size = size
+        # napari's current_size setter re-applies size to the selected subset and
+        # emits events.size. layer.size above already covered every point, so that
+        # emission is redundant and napari's own size setter emits nothing, so
+        # blocking it keeps event behaviour identical to a plain resize.
+        with layer.events.size.blocker():
+            layer.current_size = size
 
 
 def infer_frame_count(
