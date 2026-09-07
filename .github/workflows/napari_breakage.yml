@@ -29,7 +29,7 @@ on:
 
 jobs:
   prerelease:
-    # Scheduled: cheap, single job, fails on deprecation as well as breakage
+    # Scheduled: cheap, single job, fails on deprecation as well as breakage.
     if: inputs.napari-version == ''
     name: napari --pre py3.12
     runs-on: ubuntu-latest
@@ -56,9 +56,32 @@ jobs:
         with:
           run: python -m tox -e napari-pre
 
+  versions:
+    # Versions are deduplicated should the specified version match a default check
+    if: inputs.napari-version != ''
+    name: resolve napari versions
+    runs-on: ubuntu-latest
+    outputs:
+      napari: ${{ steps.resolve.outputs.napari }}
+
+    steps:
+      - id: resolve
+        env:
+          CHOSEN: ${{ inputs.napari-version }}
+        run: |
+          set -euo pipefail
+          # awk keeps first occurrence, so the chosen version stays first; jq -Rn
+          # reads the surviving lines into a JSON array for fromJSON below.
+          list=$(printf '%s\n' \
+            "$CHOSEN" \
+            "napari==0.6.6" \
+            "napari" \
+            | awk 'NF && !seen[$0]++' | jq -Rnc '[inputs]')
+          echo "napari=$list" >> "$GITHUB_OUTPUT"
+
   pinned:
     # Manual: chosen version and both ends of the supported range
-    if: inputs.napari-version != ''
+    needs: [versions]
     name: ${{ matrix.napari }} ${{ matrix.platform }} py${{ matrix.python-version }}
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
@@ -69,10 +92,9 @@ jobs:
       matrix:
         platform: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12"]
-        napari:
-          - ${{ inputs.napari-version }}
-          - "napari==0.6.6" # floor declared in pyproject.toml
-          - "napari" # ceiling: latest stable release (currently)
+        # Chosen version, the floor declared in pyproject.toml, and the latest stable
+        # ceiling minus duplicates.
+        napari: ${{ fromJSON(needs.versions.outputs.napari) }}
 
     steps:
       - uses: actions/checkout@v6

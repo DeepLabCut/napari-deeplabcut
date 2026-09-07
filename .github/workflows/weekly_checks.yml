@@ -8,6 +8,9 @@ name: weekly checks
 on:
   schedule:
     - cron: "0 6 * * 1" # Mondays, 06:00 UTC
+  # Scheduled workflows only ever run on the default branch, so without this the
+  # orchestration, the failure wiring and the issue step cannot be exercised at all.
+  workflow_dispatch:
 
 jobs:
   napari-breakage:
@@ -20,12 +23,12 @@ jobs:
     # A separate job so the notification cannot be lost to the failure it reports: a
     # step-level `if: failure()` only runs if its job reaches that step, so a dead
     # runner, a crashed step or a timeout would silently produce nothing.
-    #
-    # Manual dispatch does not open issues.
+    # Manual version does not open issues
     needs: [napari-breakage, build-release]
     if: failure()
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
 
     steps:
@@ -42,10 +45,11 @@ jobs:
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$REPO" --body "Still failing: $RUN_URL"
           else
-            gh issue create --repo "$REPO" --title "$title" --body "The weekly checks failed: $RUN_URL
-
-          These run against napari pre-releases and against the built wheel, so they
-          are expected to fire before users are affected. Nothing gates on them.
-
-          Close this issue once the run is green again."
+            body=$(printf '%s\n' \
+              "Weekly checks failed: $RUN_URL" \
+              "" \
+              "(Run against napari pre-releases and the built wheel.)" \
+              "" \
+              "Close this issue once the run is fixed.")
+            gh issue create --repo "$REPO" --title "$title" --body "$body"
           fi
