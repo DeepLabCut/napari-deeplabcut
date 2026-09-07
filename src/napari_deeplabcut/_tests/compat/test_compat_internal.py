@@ -18,7 +18,7 @@ from napari_deeplabcut.napari_compat.points_layer import make_paste_data
 
 
 def test_apply_points_layer_ui_tweaks_returns_none_when_viewer_shape_is_missing():
-    viewer = SimpleNamespace(window=SimpleNamespace(qt_viewer=SimpleNamespace()))
+    viewer = SimpleNamespace(window=SimpleNamespace(_qt_viewer=SimpleNamespace()))
     layer = SimpleNamespace(metadata={})
 
     result = apply_points_layer_ui_tweaks(

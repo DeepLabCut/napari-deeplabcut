@@ -84,7 +84,7 @@ def ui_env(qtbot):
     qtbot.addWidget(point_controls)
 
     dock_layer_controls = SimpleNamespace(widget=lambda: SimpleNamespace(widgets={layer: point_controls}))
-    viewer = SimpleNamespace(window=SimpleNamespace(qt_viewer=SimpleNamespace(dockLayerControls=dock_layer_controls)))
+    viewer = SimpleNamespace(window=SimpleNamespace(_qt_viewer=SimpleNamespace(dockLayerControls=dock_layer_controls)))
 
     layer_obj = SimpleNamespace(metadata={"colormap_name": "magma"})
 
