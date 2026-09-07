@@ -343,6 +343,8 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
         ("_border_color_control", "border_color_edit_label"),
         ("_out_slice_checkbox_control", "out_of_slice_checkbox"),
         ("_out_slice_checkbox_control", "out_of_slice_checkbox_label"),
+        ("_current_size_slider_control", "size_slider"),
+        ("_current_size_slider_control", "size_slider_label"),
     ]
 
     for parent_attr, widget_attr in widgets_to_hide:
