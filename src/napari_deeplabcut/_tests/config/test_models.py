@@ -109,16 +109,31 @@ def test_multi_animal_config_preserves_categorical_identity_values() -> None:
 
 
 @pytest.mark.parametrize(
-    "columns",
+    ("columns", "names"),
     [
-        [(123, 10, "x")],
-        [[123, 10, "x"]],
+        (
+            [(123, 10, "x")],
+            ["scorer", "bodyparts", "coords"],
+        ),
+        (
+            [[123, 10, "x"]],
+            ["scorer", "bodyparts", "coords"],
+        ),
+        (
+            [(123, 1, 10, "x")],
+            ["scorer", "individuals", "bodyparts", "coords"],
+        ),
+        (
+            [[123, 1, 10, "x"]],
+            ["scorer", "individuals", "bodyparts", "coords"],
+        ),
     ],
 )
-def test_all_supported_direct_column_shapes_preserve_string_values(
+def test_supported_direct_header_representations_preserve_categorical_values(
     columns,
+    names,
 ) -> None:
-    """Prevent alternate accepted inputs from bypassing normalization."""
-    header = DLCHeaderModel(columns=columns)
+    """Protect string identity values across all valid direct input forms."""
+    header = DLCHeaderModel(columns=columns, names=names)
 
     assert_categorical_header_invariant(header)
