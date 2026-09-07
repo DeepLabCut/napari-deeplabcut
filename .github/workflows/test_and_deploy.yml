@@ -108,25 +108,38 @@ jobs:
         with:
           run: python -m tox -e napari-floor
 
-  deploy:
+  build:
+    # Shared with the weekly checks, so the release build is continuously exercised
+    # rather than only at tag time. It also builds, checks metadata, installs the
+    # wheel and runs the suite against it - a release is blocked if any of that fails.
+    #
     # this will run when you have tagged a commit, starting with "v*"
-    # and requires that you have put your twine API key in your
-    # github secrets (see readme for details)
     needs: [test]
-    runs-on: ubuntu-latest
-
-    concurrency:
-      group: pypi-deploy
-      cancel-in-progress: false
-
     if: |
       always() && (
         (github.event_name == 'workflow_dispatch' && inputs.force_deploy && github.ref == 'refs/heads/main'
         ) ||
         (startsWith(github.ref, 'refs/tags/v') && needs.test.result == 'success')
       )
+    uses: ./.github/workflows/build_release.yml
+
+  deploy:
+    # requires that you have put your twine API key in your
+    # github secrets (see readme for details)
+    needs: [build]
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: pypi-deploy
+      cancel-in-progress: false
+
     steps:
-      - uses: actions/checkout@v6
+      # Publishes exactly what `build` produced and tested. Nothing is rebuilt here.
+      - name: Download the distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -134,15 +147,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -U setuptools setuptools_scm wheel twine build
-      - name: Build package
-        run: python -m build .
-      - name: Check metadata
-        run: twine check --strict dist/*
+          pip install -U twine
       - name: Publish to PyPI
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.TWINE_API_KEY }}
-        run: |
-          git tag
-          twine upload dist/*
+        run: twine upload dist/*
