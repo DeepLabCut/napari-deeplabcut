@@ -989,7 +989,11 @@ class KeypointControls(ViewerSingletonWidget):
         if layer is None:
             return
 
-        set_uniform_point_size(layer, size, update_new=True)
+        try:
+            set_uniform_point_size(layer, size, update_new=True)
+        except (TypeError, ValueError):
+            logger.warning("Ignoring invalid point size %r", size)
+            return
         mark_layer_presentation_changed(layer)
 
     def _commit_active_points_size_to_config(self, size: int) -> None:
@@ -1021,15 +1025,22 @@ class KeypointControls(ViewerSingletonWidget):
         if config_size is None:
             return
 
-        current_size = get_uniform_point_size(layer)
+        existing_size = get_uniform_point_size(layer)
+        default_size = float(getattr(layer, "current_size", existing_size))
 
-        # Conservative initialization
-        if current_size <= 8:
-            try:
-                set_uniform_point_size(layer, config_size, update_new=True)
-                mark_layer_presentation_changed(layer)
-            except Exception:
-                logger.debug("Could not initialize layer point size from config", exc_info=True)
+        # Conservative: only use config if neither hints show a deliberate size
+        if max(existing_size, default_size) > 8:
+            return
+        try:
+            set_uniform_point_size(layer, config_size, update_new=True)
+        except (ValueError, TypeError):
+            logger.warning("Ignoring invalid point size in config: %r", config_size)
+            self.viewer.status = f"Invalid point size in config {config_size!r}"
+            return
+        except Exception:
+            logger.debug("Could not initialize layer point size from config", exc_info=True)
+            return
+        mark_layer_presentation_changed(layer)
 
     def _connect_layer_status_events(self, layer: Points) -> None:
         """
