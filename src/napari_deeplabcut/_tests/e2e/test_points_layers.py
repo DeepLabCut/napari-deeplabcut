@@ -16,6 +16,12 @@ def test_point_added_after_panel_size_change_inherits_size(
     qtbot,
 ) -> None:
     """The panel-selected size is inherited by points added through the store."""
+    viewer.add_image(
+        np.zeros((2, 64, 64), dtype=np.uint8),
+        name="frames",
+        metadata={"paths": ["frame0.png", "frame1.png"]},
+    )
+
     header = make_real_header_factory(individuals=("",))
     md = populate_keypoint_layer_properties(
         header,
@@ -47,6 +53,8 @@ def test_point_added_after_panel_size_change_inherits_size(
     )
 
     viewer.dims.set_point(0, 1)
+    qtbot.waitUntil(lambda: store.current_step == 1, timeout=1_000)
+
     store.current_keypoint = keypoints.Keypoint(label="head", id="")
 
     n_before = len(layer.data)
