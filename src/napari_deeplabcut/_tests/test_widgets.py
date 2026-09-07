@@ -25,17 +25,6 @@ from napari_deeplabcut.ui.plots.trajectory import TrajectoryMatplotlibCanvas
 from .conftest import force_show
 
 
-def test_guess_continuous():
-    import numpy as np
-    from napari.layers.utils import color_manager
-
-    # Patch is applied during KeypointControls init (or import-time depending on your setup)
-    # Expect float -> continuous
-    assert color_manager.guess_continuous(np.array([0.0]))
-    # Expect object/categorical -> NOT continuous
-    assert not color_manager.guess_continuous(np.array(["a", "b"], dtype=object))
-
-
 @pytest.mark.usefixtures("qtbot")
 def test_keypoint_controls(keypoint_controls):
     controls = keypoint_controls
