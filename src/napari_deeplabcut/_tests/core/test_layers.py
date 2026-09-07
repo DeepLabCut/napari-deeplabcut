@@ -17,7 +17,7 @@ def test_set_uniform_point_size_resizes_all_existing_points() -> None:
     layer.selected_data = {0}
     original_current_size = float(layer.current_size)
 
-    set_uniform_point_size(layer, 10)
+    set_uniform_point_size(layer, 10, update_new=False)
 
     assert len(layer.size) == 3
     np.testing.assert_array_equal(
