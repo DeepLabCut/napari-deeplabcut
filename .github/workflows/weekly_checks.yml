@@ -1,0 +1,51 @@
+# Weekly cron. Runs the scheduled checks and reports failures as a tracking issue.
+#
+# Each child workflow is also dispatchable on its own, with richer inputs, for
+# release validation. This orchestrator only ever calls them with defaults.
+
+name: weekly checks
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
+
+jobs:
+  napari-breakage:
+    uses: ./.github/workflows/napari_breakage.yml
+
+  build-release:
+    uses: ./.github/workflows/build_release.yml
+
+  notify:
+    # A separate job so the notification cannot be lost to the failure it reports: a
+    # step-level `if: failure()` only runs if its job reaches that step, so a dead
+    # runner, a crashed step or a timeout would silently produce nothing.
+    #
+    # Manual dispatch does not open issues.
+    needs: [napari-breakage, build-release]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      # One open issue at a time, commented on subsequent failures.
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Weekly checks failing"
+          existing=$(gh issue list --repo "$REPO" --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "Still failing: $RUN_URL"
+          else
+            gh issue create --repo "$REPO" --title "$title" --body "The weekly checks failed: $RUN_URL
+
+          These run against napari pre-releases and against the built wheel, so they
+          are expected to fire before users are affected. Nothing gates on them.
+
+          Close this issue once the run is green again."
+          fi
