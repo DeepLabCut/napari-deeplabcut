@@ -264,9 +264,23 @@ def get_uniform_point_size(layer: Points, *, default: int = 6) -> int:
             return default
 
 
-def set_uniform_point_size(layer: Points, size: int) -> None:
-    # Scalar assignment keeps it lightweight and applies uniformly.
-    layer.size = float(size)
+def set_uniform_point_size(
+    layer: Points,
+    size: int,
+    *,
+    update_new: bool = False,
+) -> None:
+    """Set a uniform size for existing points.
+
+    Args:
+        layer: Points layer to update.
+        size: Size to apply to all existing points.
+        update_new: Whether points added afterward should use size.
+    """
+    size = float(size)
+    layer.size = size
+    if update_new:
+        layer.current_size = size
 
 
 def infer_frame_count(

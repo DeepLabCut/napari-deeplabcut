@@ -989,7 +989,7 @@ class KeypointControls(ViewerSingletonWidget):
         if layer is None:
             return
 
-        set_uniform_point_size(layer, size)
+        set_uniform_point_size(layer, size, update_new=True)
         mark_layer_presentation_changed(layer)
 
     def _commit_active_points_size_to_config(self, size: int) -> None:
@@ -1026,7 +1026,7 @@ class KeypointControls(ViewerSingletonWidget):
         # Conservative initialization
         if current_size <= 8:
             try:
-                set_uniform_point_size(layer, config_size)
+                set_uniform_point_size(layer, config_size, update_new=True)
                 mark_layer_presentation_changed(layer)
             except Exception:
                 logger.debug("Could not initialize layer point size from config", exc_info=True)
