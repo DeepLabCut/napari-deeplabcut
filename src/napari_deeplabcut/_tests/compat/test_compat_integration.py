@@ -14,7 +14,7 @@ from napari_deeplabcut.napari_compat import (
 
 
 def _get_point_controls(viewer, layer):
-    return viewer.window.qt_viewer.dockLayerControls.widget().widgets[layer]
+    return viewer.window._qt_viewer.dockLayerControls.widget().widgets[layer]
 
 
 def test_apply_points_layer_ui_tweaks_smoke_real_viewer(viewer, qtbot, dropdown_cls, plt_module):
@@ -33,7 +33,7 @@ def test_apply_points_layer_ui_tweaks_smoke_real_viewer(viewer, qtbot, dropdown_
     viewer.layers.selection.active = layer
 
     qtbot.waitUntil(
-        lambda: layer in viewer.window.qt_viewer.dockLayerControls.widget().widgets,
+        lambda: layer in viewer.window._qt_viewer.dockLayerControls.widget().widgets,
         timeout=3000,
     )
 

@@ -330,7 +330,7 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
         The created colormap selector, or None if unavailable.
     """
     try:
-        controls = viewer.window.qt_viewer.dockLayerControls
+        controls = viewer.window._qt_viewer.dockLayerControls
         point_controls = controls.widget().widgets[layer]
     except Exception:
         logger.debug("Failed to resolve point controls for layer UI tweaks", exc_info=True)
