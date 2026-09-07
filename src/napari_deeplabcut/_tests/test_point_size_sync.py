@@ -88,7 +88,7 @@ def test_config_point_size_rejects_invalid_value(monkeypatch, keypoint_controls,
 
     np.testing.assert_array_equal(layer.size, np.full(3, 6.0))
     assert float(layer.current_size) == 6.0
-    assert "Invalid point size" in caplog.text
+    assert "invalid point size" in caplog.text
 
 
 @pytest.mark.usefixtures("qtbot")
