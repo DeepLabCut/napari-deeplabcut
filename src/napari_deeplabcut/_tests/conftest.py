@@ -1,8 +1,11 @@
 # src/napari_deeplabcut/_tests/conftest.py
+from __future__ import annotations
+
 import json
 import logging
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -16,6 +19,13 @@ from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.config.settings import set_auto_open_keypoint_controls
 from napari_deeplabcut.core import io as io
 from napari_deeplabcut.core import keypoints
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from napari.layers import Points
+
+    from napari_deeplabcut._widgets import KeypointControls
 
 # os.environ["NAPARI_DLC_HIDE_TUTORIAL"] = "True" # no longer on by default
 
@@ -96,7 +106,11 @@ def only_deeplabcut_debug_logs():
             logger.setLevel(level)
 
 
-def make_real_header(bodyparts=("bodypart1", "bodypart2"), individuals=("",), scorer="S"):
+def make_real_header(
+    bodyparts: tuple[str, ...] = ("bodypart1", "bodypart2"),
+    individuals: tuple[str, ...] = ("",),
+    scorer: str = "S",
+) -> DLCHeaderModel:
     cols = pd.MultiIndex.from_product(
         [[scorer], list(individuals), list(bodyparts), ["x", "y"]],
         names=["scorer", "individuals", "bodyparts", "coords"],
@@ -105,7 +119,7 @@ def make_real_header(bodyparts=("bodypart1", "bodypart2"), individuals=("",), sc
 
 
 @pytest.fixture
-def make_real_header_factory():
+def make_real_header_factory() -> Callable[..., DLCHeaderModel]:
     return make_real_header
 
 
@@ -140,7 +154,7 @@ def viewer(make_napari_viewer_proxy):
 
 
 @pytest.fixture
-def keypoint_controls_and_dock(viewer):
+def keypoint_controls_and_dock(viewer) -> tuple[KeypointControls, QDockWidget]:
     dock, controls = viewer.window.add_plugin_dock_widget(
         "napari-deeplabcut",
         "Keypoint controls",
@@ -149,19 +163,23 @@ def keypoint_controls_and_dock(viewer):
 
 
 @pytest.fixture
-def keypoint_controls(keypoint_controls_and_dock):
+def keypoint_controls(
+    keypoint_controls_and_dock: tuple[KeypointControls, QDockWidget],
+) -> KeypointControls:
     controls, _dock = keypoint_controls_and_dock
     return controls
 
 
 @pytest.fixture
-def keypoint_controls_dock(keypoint_controls_and_dock):
+def keypoint_controls_dock(
+    keypoint_controls_and_dock: tuple[KeypointControls, QDockWidget],
+) -> QDockWidget:
     _controls, dock = keypoint_controls_and_dock
     return dock
 
 
 @pytest.fixture
-def fake_keypoints():
+def fake_keypoints() -> pd.DataFrame:
     n_rows = 10
     n_animals = 2
     n_kpts = 3
@@ -180,7 +198,7 @@ def fake_keypoints():
 
 
 @pytest.fixture
-def points(tmp_path_factory, viewer, fake_keypoints):
+def points(tmp_path_factory, viewer, fake_keypoints: pd.DataFrame) -> Points:
     output_path = str(tmp_path_factory.mktemp("folder") / "fake_data.h5")
     fake_keypoints.to_hdf(output_path, key="data")
     layer = viewer.open(output_path, plugin="napari-deeplabcut")[0]
@@ -221,7 +239,7 @@ class DummyViewerForStore:
 
 
 @pytest.fixture
-def store(points):
+def store(points: Points) -> keypoints.KeypointStore:
     try:
         data = np.asarray(points.data)
         nsteps = int(np.nanmax(data[:, 0])) + 1 if data.size else 1
@@ -240,7 +258,11 @@ def store(points):
 
 
 @pytest.fixture
-def single_animal_store(tmp_path_factory, viewer, fake_keypoints):
+def single_animal_store(
+    tmp_path_factory,
+    viewer,
+    fake_keypoints: pd.DataFrame,
+) -> keypoints.KeypointStore:
     # Keep only columns for one animal
     df = fake_keypoints.xs("animal_0", level="individuals", axis=1)
     # Now df has levels: scorer, bodyparts, coords
