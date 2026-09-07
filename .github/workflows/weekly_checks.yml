@@ -7,9 +7,8 @@ name: weekly checks
 
 on:
   schedule:
+    # Note: Scheduled workflows only ever run on the default branch
     - cron: "0 6 * * 1" # Mondays, 06:00 UTC
-  # Scheduled workflows only ever run on the default branch, so without this the
-  # orchestration, the failure wiring and the issue step cannot be exercised at all.
   workflow_dispatch:
 
 jobs:
@@ -23,9 +22,10 @@ jobs:
     # A separate job so the notification cannot be lost to the failure it reports: a
     # step-level `if: failure()` only runs if its job reaches that step, so a dead
     # runner, a crashed step or a timeout would silently produce nothing.
-    # Manual version does not open issues
+    #
+    # Scheduled runs only, no issue on manual dispatch.
     needs: [napari-breakage, build-release]
-    if: failure()
+    if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:
       contents: read
