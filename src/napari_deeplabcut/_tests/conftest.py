@@ -38,6 +38,17 @@ logging.getLogger("napari_deeplabcut").propagate = True
 # logging.getLogger("napari-deeplabcut").propagate = True # use the underscore variant to match __name__ throughout.
 
 
+def pytest_report_header(config):
+    """Point developers at parallel runs; the napari viewer fixture dominates runtime."""
+    if getattr(config.option, "numprocesses", None):
+        return None
+    return (
+        "napari-deeplabcut: running serially (~5x slower). "
+        "Use `pytest -n auto --dist loadfile` - pytest-xdist is in the dev extra. "
+        "Note: breakpoints and Debug Test do not work under xdist."
+    )
+
+
 def force_show(widget, qtbot, *, process_ms: int = 50):
     """
     Best-effort show of a widget and all its Qt parents, even under
