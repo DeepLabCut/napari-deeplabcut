@@ -1,7 +1,7 @@
 """
-A directory without ``__init__.py`` is excluded by ``[tool.setuptools.packages.find]``,
-so it never reaches the built distribution. ``pytest --pyargs napari_deeplabcut._tests`` then
-collects and passes while silently running any of those tests.
+``[tool.setuptools.packages.find]`` discovers implicit namespaces by default, but explicit
+``__init__.py`` files ensure these test directories remain regular packages. The installed-wheel
+check below fails if any expected test subpackage is absent.
 
 The expected list is hard-coded rather than discovered because discovery cannot help
 here: a subpackage missing from the wheel is missing from disk too.
