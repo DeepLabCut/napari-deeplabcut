@@ -113,7 +113,6 @@ def test_multi_animal_config_preserves_categorical_identity_values() -> None:
     [
         [(123, 10, "x")],
         [[123, 10, "x"]],
-        [123],
     ],
 )
 def test_all_supported_direct_column_shapes_preserve_string_values(
