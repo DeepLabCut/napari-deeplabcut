@@ -139,6 +139,24 @@ def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
 # and attaches provenance via attach_source_and_io_to_layer_kwargs.
 
 
+def _normalise_column_levels(columns: pd.MultiIndex) -> tuple[pd.MultiIndex, list[str]]:
+    """Coerce every column level to str, reporting which were not already strings.
+
+    DLCHeaderModel string-normalises every level it reads. A file whose 'individuals' or
+    'bodyparts' level is numeric on disk would then align against nothing and load as an
+    empty layer, so the frame is brought into the same representation as the header.
+    """
+    frame = columns.to_frame(index=False)
+    coerced = [
+        name
+        for name, dtype in zip(columns.names, frame.dtypes, strict=False)
+        if not pd.api.types.is_object_dtype(dtype)
+    ]
+    if not coerced:
+        return columns, []
+    return pd.MultiIndex.from_frame(frame.astype(str)), coerced
+
+
 def _read_hdf_any_key(file: Path) -> pd.DataFrame:
     """Read an HDF file without knowing the key in advance. Try common DLC keys."""
     file = str(file)
@@ -180,6 +198,16 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     # temp = pd.read_hdf(str(file))
     temp = _read_hdf_any_key(file)
     temp = merge_multiple_scorers(temp)
+
+    temp.columns, coerced = _normalise_column_levels(temp.columns)
+    if coerced:
+        logger.warning(
+            "%s: column level(s) %s are not strings on disk and were normalised for "
+            "reading. Saving this file will write the normalised form.",
+            file,
+            coerced,
+        )
+
     header = DLCHeaderModel(columns=temp.columns)
     temp = temp.droplevel("scorer", axis=1)
     logger.debug("READ_HDF file=%s", file)
