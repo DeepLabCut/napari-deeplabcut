@@ -40,6 +40,7 @@ import yaml
 from dask import delayed
 from dask_image.imread import imread
 from napari.types import LayerData
+from napari.utils.notifications import show_warning
 from natsort import natsorted
 from pydantic import ValidationError
 
@@ -206,6 +207,10 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
             "reading. Saving this file will write the normalised form.",
             file,
             coerced,
+        )
+        show_warning(
+            f"{Path(file).name}: keypoint names in {coerced} were stored as numbers and "
+            f"normalised to text. Saving will write the normalised form."
         )
 
     header = DLCHeaderModel(columns=temp.columns)
