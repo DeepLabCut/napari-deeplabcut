@@ -4,7 +4,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from napari_deeplabcut.config.models import AnnotationKind
 from napari_deeplabcut.core.io import read_hdf_single
@@ -153,18 +152,13 @@ def test_read_hdf_single_multi_animal_string_individuals(tmp_path: Path):
     assert len(data) == expected
 
 
-@pytest.mark.xfail(
-    reason=(
-        "DLCHeaderModel string-normalises every header level, so header.individuals is "
-        "['1','2'] while the file's level stays int64 and the reindex in read_hdf_single "
-        "matches nothing. read_hdf_single now raises rather than returning an empty layer, "
-        "but the values are still not loaded. Fixing this means aligning the types before "
-        "the reindex, not widening the guard."
-    ),
-    strict=True,
-)
 def test_read_hdf_single_multi_animal_numeric_individuals(tmp_path: Path):
-    """Individuals named 1, 2 should load like any other; today they do not."""
+    """Individuals named 1, 2 load like any other.
+
+    Regression: DLCHeaderModel string-normalises every header level, so header.individuals
+    is ['1','2'] while the file's level stays int64. Before _normalise_column_levels, the
+    reindex in read_hdf_single matched nothing and the layer loaded silently empty.
+    """
     h5 = tmp_path / "CollectedData_John.h5"
     expected = _write_h5_multi_animal(h5, individuals=[1, 2])
 

@@ -247,7 +247,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
             raise ValueError(
                 f"Reading {file}: aligning the '{level}' level dropped every row. "
                 f"The file contains {found!r} but the header expects {list(expected)!r}. "
-                f"These usually differ only by type, the header being string-normalised."
+                f"The two describe different keypoints, so no annotation could be matched."
             )
     df = df.reset_index()
 
