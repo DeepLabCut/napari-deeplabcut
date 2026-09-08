@@ -147,15 +147,16 @@ def _normalise_column_levels(columns: pd.MultiIndex) -> tuple[pd.MultiIndex, lis
     'bodyparts' level is numeric on disk would then align against nothing and load as an
     empty layer, so the frame is brought into the same representation as the header.
     """
-    frame = columns.to_frame(index=False)
+    # Test the values, not the dtype: pandas 2 stores string levels as object while
+    # pandas 3 gives them a dedicated str dtype, so any dtype check is version-specific.
     coerced = [
         name
-        for name, dtype in zip(columns.names, frame.dtypes, strict=False)
-        if not pd.api.types.is_object_dtype(dtype)
+        for name, level in zip(columns.names, columns.levels, strict=False)
+        if not all(isinstance(value, str) for value in level)
     ]
     if not coerced:
         return columns, []
-    return pd.MultiIndex.from_frame(frame.astype(str)), coerced
+    return pd.MultiIndex.from_frame(columns.to_frame(index=False).astype(str)), coerced
 
 
 def _read_hdf_any_key(file: Path) -> pd.DataFrame:
