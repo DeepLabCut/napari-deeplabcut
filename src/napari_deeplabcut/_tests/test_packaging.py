@@ -35,8 +35,8 @@ def test_test_subpackage_is_importable(subpackage: str) -> None:
     """Fail if a test subpackage was excluded from the installed distribution."""
     name = f"napari_deeplabcut._tests.{subpackage}"
     assert importlib.util.find_spec(name) is not None, (
-        f"{name} is not importable. If this fails in the wheel job, the directory is "
-        f"probably missing __init__.py and was excluded from the distribution."
+        f"{name} is not importable. If this fails in the wheel job, the subpackage did "
+        f"not reach the built distribution; check the sdist and wheel contents."
     )
 
 
@@ -52,5 +52,5 @@ def test_expected_subpackages_are_not_stale() -> None:
     unlisted = on_disk - set(EXPECTED_SUBPACKAGES)
     assert not unlisted, (
         f"Test subpackages not listed in EXPECTED_SUBPACKAGES: {sorted(unlisted)}. "
-        f"Add them, and give each an __init__.py so it ships in the wheel."
+        f"Add them, and give each an __init__.py to keep it a regular package."
     )
