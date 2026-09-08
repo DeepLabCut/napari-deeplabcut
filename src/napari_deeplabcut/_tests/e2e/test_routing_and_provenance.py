@@ -690,17 +690,16 @@ def test_projectless_folder_save_can_associate_with_config_and_coerce_paths_to_d
     # E2E readback contract:
     # the plugin should be able to reopen the saved H5 and recover the same
     # plugin-visible annotation.
-    viewer.layers.clear()
-    qtbot.wait(200)
+    existing = set(viewer.layers)
 
     viewer.open(str(expected_h5), plugin="napari-deeplabcut")
     qtbot.waitUntil(
-        lambda: any(isinstance(ly, Points) for ly in viewer.layers),
+        lambda: any(isinstance(ly, Points) and ly not in existing for ly in viewer.layers),
         timeout=10_000,
     )
     qtbot.wait(200)
 
-    reopened = next(ly for ly in viewer.layers if isinstance(ly, Points))
+    reopened = next(ly for ly in viewer.layers if isinstance(ly, Points) and ly not in existing)
 
     _assert_points_layer_has_label_xy(
         reopened,

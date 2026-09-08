@@ -7,10 +7,7 @@ from enum import auto
 
 import numpy as np
 from matplotlib import colormaps as mpl_colormaps
-from napari._qt.layer_controls.qt_points_controls import QtPointsControls
 from napari.layers import Points
-from napari.layers.points._points_constants import SYMBOL_TRANSLATION_INVERTED
-from napari.layers.points._points_utils import coerce_symbols
 from napari.utils import colormaps
 from pydantic import ValidationError
 from scipy.spatial import cKDTree
@@ -25,29 +22,6 @@ logger = logging.getLogger(__name__)
 
 class LayerUnavailableError(RuntimeError):
     """Raised when a KeypointStore can no longer resolve its backing layer."""
-
-
-# Monkeypatch the point size slider
-def _change_size(self, value):
-    """Resize all points at once regardless of the current selection."""
-    self.layer._current_size = value
-    if self.layer._update_properties:
-        self.layer.size = (self.layer.size > 0) * value
-        self.layer.refresh()
-        self.layer.events.size()
-
-
-def _change_symbol(self, text):
-    symbol = coerce_symbols(np.array([SYMBOL_TRANSLATION_INVERTED[text]]))[0]
-    self.layer._current_symbol = symbol
-    if self.layer._update_properties:
-        self.layer.symbol = symbol
-        self.layer.events.symbol()
-    self.layer.events.current_symbol()
-
-
-QtPointsControls.changeCurrentSize = _change_size
-QtPointsControls.changeCurrentSymbol = _change_symbol
 
 
 @deprecated(details="Unused currently, should be removed.")

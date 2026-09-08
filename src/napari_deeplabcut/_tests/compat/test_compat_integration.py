@@ -14,7 +14,7 @@ from napari_deeplabcut.napari_compat import (
 
 
 def _get_point_controls(viewer, layer):
-    return viewer.window.qt_viewer.dockLayerControls.widget().widgets[layer]
+    return viewer.window._qt_viewer.dockLayerControls.widget().widgets[layer]
 
 
 def test_apply_points_layer_ui_tweaks_smoke_real_viewer(viewer, qtbot, dropdown_cls, plt_module):
@@ -33,7 +33,7 @@ def test_apply_points_layer_ui_tweaks_smoke_real_viewer(viewer, qtbot, dropdown_
     viewer.layers.selection.active = layer
 
     qtbot.waitUntil(
-        lambda: layer in viewer.window.qt_viewer.dockLayerControls.widget().widgets,
+        lambda: layer in viewer.window._qt_viewer.dockLayerControls.widget().widgets,
         timeout=3000,
     )
 
@@ -58,8 +58,15 @@ def test_apply_points_layer_ui_tweaks_smoke_real_viewer(viewer, qtbot, dropdown_
     assert point_controls._face_color_control.face_color_label.isHidden()
     assert point_controls._border_color_control.border_color_edit.isHidden()
     assert point_controls._border_color_control.border_color_edit_label.isHidden()
-    assert point_controls._out_slice_checkbox_control.out_of_slice_checkbox.isHidden()
-    assert point_controls._out_slice_checkbox_control.out_of_slice_checkbox_label.isHidden()
+    # napari 0.9 dropped the out-of-slice checkbox entirely, so there is nothing to
+    # hide there. Tolerate its absence, but still assert it is hidden where it exists.
+    out_slice_control = getattr(point_controls, "_out_slice_checkbox_control", None)
+    if out_slice_control is not None:
+        assert out_slice_control.out_of_slice_checkbox.isHidden()
+        assert out_slice_control.out_of_slice_checkbox_label.isHidden()
+
+    assert point_controls._current_size_slider_control.size_slider.isHidden()
+    assert point_controls._current_size_slider_control.size_slider_label.isHidden()
 
 
 def test_install_add_wrapper_smoke_real_points_layer(viewer):
@@ -155,7 +162,7 @@ def test_apply_points_layer_ui_tweaks_real_dropdown(qtbot):
     qtbot.addWidget(point_controls)
 
     dock_layer_controls = SimpleNamespace(widget=lambda: SimpleNamespace(widgets={layer: point_controls}))
-    viewer = SimpleNamespace(window=SimpleNamespace(qt_viewer=SimpleNamespace(dockLayerControls=dock_layer_controls)))
+    viewer = SimpleNamespace(window=SimpleNamespace(_qt_viewer=SimpleNamespace(dockLayerControls=dock_layer_controls)))
 
     selector = apply_points_layer_ui_tweaks(viewer, layer, dropdown_cls=DropdownMenu, plt_module=plt)
     assert selector is not None

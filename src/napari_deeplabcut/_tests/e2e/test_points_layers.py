@@ -4,7 +4,65 @@ import numpy as np
 import pytest
 from napari.layers import Points
 
+from napari_deeplabcut.core import keypoints
 from napari_deeplabcut.core.layers import PointsInteractionObserver, populate_keypoint_layer_properties
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_point_added_after_panel_size_change_inherits_size(
+    viewer,
+    keypoint_controls,
+    make_real_header_factory,
+    qtbot,
+) -> None:
+    """The panel-selected size is inherited by points added through the store."""
+    viewer.add_image(
+        np.zeros((2, 64, 64), dtype=np.uint8),
+        name="frames",
+        metadata={"paths": ["frame0.png", "frame1.png"]},
+    )
+
+    header = make_real_header_factory(individuals=("",))
+    md = populate_keypoint_layer_properties(
+        header,
+        labels=["head"],
+        ids=[""],
+        likelihood=np.array([1.0], dtype=float),
+        paths=["frame0.png", "frame1.png"],
+        colormap="viridis",
+    )
+    layer = viewer.add_points(
+        np.array([[0.0, 10.0, 20.0]], dtype=float),
+        **md,
+    )
+    viewer.layers.selection.active = layer
+
+    qtbot.waitUntil(
+        lambda: keypoint_controls.get_layer_store(layer) is not None,
+        timeout=5_000,
+    )
+    store = keypoint_controls.get_layer_store(layer)
+    assert store is not None
+
+    keypoint_controls._on_active_points_size_changed(12)
+
+    assert float(layer.current_size) == 12.0
+    np.testing.assert_array_equal(
+        layer.size,
+        np.full(len(layer.data), 12.0),
+    )
+
+    viewer.dims.set_point(0, 1)
+    qtbot.waitUntil(lambda: store.current_step == 1, timeout=1_000)
+
+    store.current_keypoint = keypoints.Keypoint(label="head", id="")
+
+    n_before = len(layer.data)
+    store.add(np.array([1.0, 30.0, 40.0], dtype=float))
+
+    assert len(layer.data) == n_before + 1
+    assert len(layer.size) == len(layer.data)
+    assert float(layer.size[-1]) == 12.0
 
 
 @pytest.mark.usefixtures("qtbot")

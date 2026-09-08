@@ -264,9 +264,30 @@ def get_uniform_point_size(layer: Points, *, default: int = 6) -> int:
             return default
 
 
-def set_uniform_point_size(layer: Points, size: int) -> None:
-    # Scalar assignment keeps it lightweight and applies uniformly.
-    layer.size = float(size)
+def set_uniform_point_size(
+    layer: Points,
+    size: float,
+    *,
+    update_new: bool = True,
+) -> None:
+    """Set a uniform size for existing points.
+
+    Args:
+        layer: Points layer to update.
+        size: Size to apply to all existing points.
+        update_new: Whether points added afterward should use size.
+    """
+    size = float(size)
+    if size < 0:
+        raise ValueError("Point size must be positive")
+    if update_new:
+        # napari's current_size setter re-applies size to the selected subset and
+        # emits events.size. layer.size below already covers every point, so that
+        # emission is redundant and napari's own size setter emits nothing, so
+        # blocking it keeps event behaviour identical to a plain resize.
+        with layer.events.size.blocker():
+            layer.current_size = size
+    layer.size = size
 
 
 def infer_frame_count(

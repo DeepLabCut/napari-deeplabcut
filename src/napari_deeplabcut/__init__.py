@@ -35,9 +35,6 @@ except ImportError:  # pragma: no cover
 
 # ---- Warnings & logging setup ------------------------------------------------
 
-# FIXME: Circumvent the need to access window.qt_viewer
-warnings.filterwarnings("ignore", category=FutureWarning)
-
 import re  # noqa: E402
 
 # Suppress RuntimeWarnings caused by NaN values in dataframe
