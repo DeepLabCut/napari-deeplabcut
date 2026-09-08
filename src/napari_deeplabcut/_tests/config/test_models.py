@@ -1,7 +1,5 @@
 # src/napari_deeplabcut/_tests/config/test_models.py
 
-# src/napari_deeplabcut/_tests/config/test_models.py
-
 from __future__ import annotations
 
 import pytest
