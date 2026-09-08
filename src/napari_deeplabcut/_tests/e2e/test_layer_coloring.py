@@ -351,3 +351,31 @@ def test_color_scheme_panel_update_scheme_pushes_resolver_to_display_without_for
     expected_config = _scheme_from_policy(placeholder, active_prop, expected_config_names)
     panel.update_scheme()
     assert panel.display.scheme_dict == expected_config
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_numeric_keypoint_names_color_categorically(viewer, qtbot, tmp_path):
+    """Numeric keypoint names must colour as categories, not as a gradient.
+
+    This is what the removed `guess_continuous` monkeypatch existed to correct: napari
+    selects a continuous colormap when a feature column looks numeric. The plugin now
+    relies on DLCHeaderModel string-normalising every header level instead, so the values
+    napari receives are never numeric. The header tests stop before napari sees anything,
+    so only an end-to-end case covers that claim.
+    """
+    _, config_path, _, _ = _make_minimal_dlc_project(tmp_path, bodyparts=[1, 2])
+
+    viewer.open(str(config_path), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=5000)
+    layer = next(ly for ly in viewer.layers if isinstance(ly, Points))
+
+    layer.add(np.array([0.0, 20.0, 10.0], dtype=float))
+    qtbot.waitUntil(lambda: layer.data is not None and len(layer.data) == 1, timeout=2000)
+    qtbot.waitUntil(lambda: layer.face_color_mode == "cycle", timeout=5000)
+
+    labels = list(layer.properties["label"])
+    assert all(isinstance(v, str) for v in labels), (
+        f"numeric keypoint names reached napari as {[type(v).__name__ for v in labels]}; "
+        f"a numeric feature column is what makes napari pick a continuous colormap"
+    )
+    assert layer.face_color_mode == "cycle"
