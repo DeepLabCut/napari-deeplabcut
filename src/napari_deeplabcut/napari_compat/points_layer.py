@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from copy import deepcopy
+from enum import Enum
 from types import MethodType
 from typing import Any
 
@@ -11,6 +12,38 @@ import numpy as np
 from napari_deeplabcut.core.keypoints import Keypoint
 
 logger = logging.getLogger(__name__)
+
+
+class HideFailure(str, Enum):
+    # The plugin owns this control. A still-visible napari control can disagree with it.
+    REQUIRED = "required"
+    # Untidy if it stays visible; nothing behaves differently
+    COSMETIC = "cosmetic"
+
+    EXPECTED = "expected"
+    """Absent on some supported napari versions. Absence is not a signal."""
+
+
+_HIDE_FAILURE_LOG_LEVEL = {
+    HideFailure.REQUIRED: logging.WARNING,
+    HideFailure.COSMETIC: logging.DEBUG,
+    HideFailure.EXPECTED: None,
+}
+
+
+WIDGETS_TO_HIDE = (
+    # The plugin panel is the only point-size control, and napari's slider is
+    # selection-scoped, so the two disagree if both are live.
+    ("_current_size_slider_control", "size_slider", HideFailure.REQUIRED),
+    ("_current_size_slider_control", "size_slider_label", HideFailure.REQUIRED),
+    ("_face_color_control", "face_color_edit", HideFailure.COSMETIC),
+    ("_face_color_control", "face_color_label", HideFailure.COSMETIC),
+    ("_border_color_control", "border_color_edit", HideFailure.COSMETIC),
+    ("_border_color_control", "border_color_edit_label", HideFailure.COSMETIC),
+    # Removed in napari 0.9.
+    ("_out_slice_checkbox_control", "out_of_slice_checkbox", HideFailure.EXPECTED),
+    ("_out_slice_checkbox_control", "out_of_slice_checkbox_label", HideFailure.EXPECTED),
+)
 
 # -----------------------------------------------------------------------------
 # Optional napari private import
@@ -336,28 +369,22 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
         logger.debug("Failed to resolve point controls for layer UI tweaks", exc_info=True)
         return None
 
-    widgets_to_hide = [
-        ("_face_color_control", "face_color_edit"),
-        ("_face_color_control", "face_color_label"),
-        ("_border_color_control", "border_color_edit"),
-        ("_border_color_control", "border_color_edit_label"),
-        ("_out_slice_checkbox_control", "out_of_slice_checkbox"),
-        ("_out_slice_checkbox_control", "out_of_slice_checkbox_label"),
-        ("_current_size_slider_control", "size_slider"),
-        ("_current_size_slider_control", "size_slider_label"),
-    ]
-
-    for parent_attr, widget_attr in widgets_to_hide:
+    for parent_attr, widget_attr, on_failure in WIDGETS_TO_HIDE:
         try:
             parent = getattr(point_controls, parent_attr)
             widget = getattr(parent, widget_attr)
             widget.hide()
         except Exception:
-            logger.debug(
-                "Failed to hide widget %s.%s in point controls",
+            level = _HIDE_FAILURE_LOG_LEVEL[on_failure]
+            if level is None:
+                continue
+            logger.log(
+                level,
+                "Failed to hide widget %s.%s in point controls. The plugin panel may now "
+                "disagree with a still-visible napari control.",
                 parent_attr,
                 widget_attr,
-                exc_info=True,
+                exc_info=(level >= logging.WARNING),
             )
 
     try:
