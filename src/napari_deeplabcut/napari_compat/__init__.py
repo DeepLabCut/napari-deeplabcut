@@ -1,6 +1,6 @@
 """
 Wrapper around anything that touches private napari internals, to isolate potential breakages to a single file.
-Last updated with version of napari: 0.6.6 by @C-Achard - 2026-03-04
+Last updated with version of napari: 0.9.1 by @C-Achard - 2026-09-08
 """
 
 from __future__ import annotations
