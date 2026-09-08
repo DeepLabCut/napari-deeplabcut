@@ -238,23 +238,22 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     if isinstance(temp.index, pd.MultiIndex):
         temp.index = [str(Path(*row)) for row in temp.index]
 
-    # Reindex aligns the stacked frame to the header's ordering. It is a silent filter:
-    # values the header does not list are dropped. DLCHeaderModel string-normalises every
-    # level, so a file whose 'individuals' or 'bodyparts' level is numeric on disk matches
-    # nothing and the layer loads empty with no error. Raise instead - an empty layer is
-    # valid, but only when the file was empty to begin with.
     stacked = temp.stack(["individuals", "bodyparts"])
     df = stacked
     for level, expected in (("individuals", header.individuals), ("bodyparts", header.bodyparts)):
         before = len(df)
         df = df.reindex(expected, level=level)
-        if before and df.empty:
-            found = stacked.index.get_level_values(level).unique().tolist()
-            raise ValueError(
-                f"Reading {file}: aligning the '{level}' level dropped every row. "
-                f"The file contains {found!r} but the header expects {list(expected)!r}. "
-                f"The two describe different keypoints, so no annotation could be matched."
-            )
+        dropped = before - len(df)
+        if not dropped:
+            continue
+        found = stacked.index.get_level_values(level).unique().tolist()
+        message = (
+            f"Reading {file}: aligning the '{level}' level dropped {dropped} of {before} rows. "
+            f"The file contains {found!r} but the header expects {list(expected)!r}."
+        )
+        if df.empty:
+            raise ValueError(message)
+        logger.warning(message)
     df = df.reset_index()
 
     nrows = df.shape[0]
