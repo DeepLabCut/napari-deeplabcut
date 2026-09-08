@@ -164,3 +164,25 @@ def test_read_hdf_single_multi_animal_numeric_individuals(tmp_path: Path):
 
     data, _, _ = read_hdf_single(h5)[0]
     assert len(data) == expected
+
+
+def test_read_hdf_single_warns_only_when_column_levels_are_not_text(tmp_path: Path, monkeypatch):
+    """Notify for a numeric level, stay silent otherwise.
+
+    Regression: the level check originally tested dtype. pandas 3 gives string levels a
+    dedicated `str` dtype rather than `object`, so every level looked coerced and every
+    file opened with a spurious notification.
+    """
+    seen: list[str] = []
+    monkeypatch.setattr("napari_deeplabcut.core.io.show_warning", seen.append)
+
+    text = tmp_path / "text" / "CollectedData_John.h5"
+    _write_h5_multi_animal(text, individuals=["ind1", "ind2"])
+    read_hdf_single(text)
+    assert seen == [], "a file with text keypoint names must not notify"
+
+    numeric = tmp_path / "numeric" / "CollectedData_John.h5"
+    _write_h5_multi_animal(numeric, individuals=[1, 2])
+    read_hdf_single(numeric)
+    assert len(seen) == 1
+    assert "individuals" in seen[0]
