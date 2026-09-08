@@ -14,21 +14,18 @@ from napari_deeplabcut.core.keypoints import Keypoint
 logger = logging.getLogger(__name__)
 
 
-class HideFailure(str, Enum):
+class HideFailure(Enum):
+    """What it means when a napari Points control cannot be hidden.
+
+    The value is the level to log a failure at, or None to stay silent.
+    """
+
     # The plugin owns this control. A still-visible napari control can disagree with it.
-    REQUIRED = "required"
-    # Untidy if it stays visible; nothing behaves differently
-    COSMETIC = "cosmetic"
-
-    EXPECTED = "expected"
-    """Absent on some supported napari versions. Absence is not a signal."""
-
-
-_HIDE_FAILURE_LOG_LEVEL = {
-    HideFailure.REQUIRED: logging.WARNING,
-    HideFailure.COSMETIC: logging.DEBUG,
-    HideFailure.EXPECTED: None,
-}
+    REQUIRED = logging.WARNING
+    # Untidy if it stays visible; nothing behaves differently.
+    COSMETIC = logging.DEBUG
+    # Absent on some supported napari versions. Absence is not a signal.
+    EXPECTED = None
 
 
 WIDGETS_TO_HIDE = (
@@ -375,7 +372,7 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
             widget = getattr(parent, widget_attr)
             widget.hide()
         except Exception:
-            level = _HIDE_FAILURE_LOG_LEVEL[on_failure]
+            level = on_failure.value
             if level is None:
                 continue
             logger.log(
