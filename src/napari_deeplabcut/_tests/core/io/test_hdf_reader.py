@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from napari_deeplabcut.config.models import AnnotationKind
 from napari_deeplabcut.core.io import read_hdf_single
@@ -126,3 +127,46 @@ def test_read_hdf_single_metadata_contains_root_and_name(tmp_path: Path):
     assert meta["name"] == "CollectedData_John"
     assert meta["metadata"]["root"] == str(h5.parent)
     assert meta["metadata"]["name"] == "CollectedData_John"
+
+
+def _write_h5_multi_animal(path: Path, *, individuals, scorer: str = "John", frames: int = 3):
+    """Write a multi-animal file whose 'individuals' level takes the type given."""
+    bodyparts = ["head", "tail"]
+    cols = pd.MultiIndex.from_product(
+        [[scorer], list(individuals), bodyparts, ["x", "y"]],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
+    index = [f"img{i:03d}.png" for i in range(frames)]
+    values = np.arange(frames * len(cols), dtype=float).reshape(frames, len(cols))
+    df = pd.DataFrame(values, index=index, columns=cols)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_hdf(path, key="df_with_missing", mode="w")
+    return frames * len(individuals) * len(bodyparts)
+
+
+def test_read_hdf_single_multi_animal_string_individuals(tmp_path: Path):
+    """Control for the regression below: string individuals load every annotation."""
+    h5 = tmp_path / "CollectedData_John.h5"
+    expected = _write_h5_multi_animal(h5, individuals=["ind1", "ind2"])
+
+    data, _, _ = read_hdf_single(h5)[0]
+    assert len(data) == expected
+
+
+@pytest.mark.xfail(
+    reason=(
+        "DLCHeaderModel string-normalises every header level, so header.individuals is "
+        "['1','2'] while the file's level stays int64 and the reindex in read_hdf_single "
+        "matches nothing. read_hdf_single now raises rather than returning an empty layer, "
+        "but the values are still not loaded. Fixing this means aligning the types before "
+        "the reindex, not widening the guard."
+    ),
+    strict=True,
+)
+def test_read_hdf_single_multi_animal_numeric_individuals(tmp_path: Path):
+    """Individuals named 1, 2 should load like any other; today they do not."""
+    h5 = tmp_path / "CollectedData_John.h5"
+    expected = _write_h5_multi_animal(h5, individuals=[1, 2])
+
+    data, _, _ = read_hdf_single(h5)[0]
+    assert len(data) == expected

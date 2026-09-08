@@ -204,12 +204,24 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     if isinstance(temp.index, pd.MultiIndex):
         temp.index = [str(Path(*row)) for row in temp.index]
 
-    df = (
-        temp.stack(["individuals", "bodyparts"])
-        .reindex(header.individuals, level="individuals")
-        .reindex(header.bodyparts, level="bodyparts")
-        .reset_index()
-    )
+    # Reindex aligns the stacked frame to the header's ordering. It is a silent filter:
+    # values the header does not list are dropped. DLCHeaderModel string-normalises every
+    # level, so a file whose 'individuals' or 'bodyparts' level is numeric on disk matches
+    # nothing and the layer loads empty with no error. Raise instead - an empty layer is
+    # valid, but only when the file was empty to begin with.
+    stacked = temp.stack(["individuals", "bodyparts"])
+    df = stacked
+    for level, expected in (("individuals", header.individuals), ("bodyparts", header.bodyparts)):
+        before = len(df)
+        df = df.reindex(expected, level=level)
+        if before and df.empty:
+            found = stacked.index.get_level_values(level).unique().tolist()
+            raise ValueError(
+                f"Reading {file}: aligning the '{level}' level dropped every row. "
+                f"The file contains {found!r} but the header expects {list(expected)!r}. "
+                f"These usually differ only by type, the header being string-normalised."
+            )
+    df = df.reset_index()
 
     nrows = df.shape[0]
     data = np.empty((nrows, 3))
