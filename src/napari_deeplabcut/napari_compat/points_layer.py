@@ -377,11 +377,10 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
                 continue
             logger.log(
                 level,
-                "Failed to hide widget %s.%s in point controls. The plugin panel may now "
-                "disagree with a still-visible napari control.",
+                "Failed to hide widget %s.%s in point controls.",
                 parent_attr,
                 widget_attr,
-                exc_info=(level >= logging.WARNING),
+                exc_info=True,
             )
 
     try:
