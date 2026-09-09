@@ -186,3 +186,38 @@ def test_read_hdf_single_warns_only_when_column_levels_are_not_text(tmp_path: Pa
     read_hdf_single(numeric)
     assert len(seen) == 1
     assert "individuals" in seen[0]
+
+
+def _write_h5_multi_scorer(path: Path, *, scorers, frames: int = 3):
+    """Write a two-scorer file with a likelihood coord, so the scorers are merged on read."""
+    individuals = ["ind1", "ind2"]
+    bodyparts = ["head", "tail"]
+    cols = pd.MultiIndex.from_product(
+        [list(scorers), individuals, bodyparts, ["x", "y", "likelihood"]],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
+    index = [f"img{i:03d}.png" for i in range(frames)]
+    values = np.arange(frames * len(cols), dtype=float).reshape(frames, len(cols))
+    df = pd.DataFrame(values, index=index, columns=cols)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_hdf(path, key="df_with_missing", mode="w")
+    return frames * len(individuals) * len(bodyparts)
+
+
+def test_read_hdf_single_does_not_warn_for_a_discarded_numeric_scorer(tmp_path: Path, monkeypatch):
+    """A numeric scorer that merging drops must not be reported as a coerced level.
+
+    Regression: the level check read columns.levels, which keeps values no column uses.
+    merge_multiple_scorers selects one scorer block by boolean mask, so the discarded
+    scorer's numeric name stayed in the level and every such file notified the user that
+    its keypoint names had been rewritten.
+    """
+    seen: list[str] = []
+    monkeypatch.setattr("napari_deeplabcut.core.io.show_warning", seen.append)
+
+    h5 = tmp_path / "CollectedData_John.h5"
+    expected = _write_h5_multi_scorer(h5, scorers=["John", 2])
+
+    data, _, _ = read_hdf_single(h5)[0]
+    assert len(data) == expected
+    assert seen == [], f"every keypoint name is text; got {seen!r}"

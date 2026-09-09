@@ -140,19 +140,23 @@ def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
 # and attaches provenance via attach_source_and_io_to_layer_kwargs.
 
 
-def _normalise_column_levels(columns: pd.MultiIndex) -> tuple[pd.MultiIndex, list[str]]:
+def _normalise_column_levels(columns: pd.Index) -> tuple[pd.Index, list[str]]:
     """Coerce every column level to str, reporting which were not already strings.
 
     DLCHeaderModel string-normalises every level it reads. A file whose 'individuals' or
     'bodyparts' level is numeric on disk would then align against nothing and load as an
     empty layer, so the frame is brought into the same representation as the header.
     """
-    # Test the values, not the dtype: pandas 2 stores string levels as object while
-    # pandas 3 gives them a dedicated str dtype, so any dtype check is version-specific.
+    if not isinstance(columns, pd.MultiIndex):
+        return columns, []
+    # Test the values in use, not the dtype and not columns.levels. A dtype check is
+    # version-specific (pandas 2 stores string levels as object, pandas 3 gives them a
+    # dedicated str dtype), and columns.levels keeps entries no column uses, which
+    # merge_multiple_scorers leaves behind when it masks down to one scorer block.
     coerced = [
-        name
-        for name, level in zip(columns.names, columns.levels, strict=False)
-        if not all(isinstance(value, str) for value in level)
+        name if name is not None else f"level_{level}"
+        for level, name in enumerate(columns.names)
+        if not all(isinstance(value, str) for value in columns.get_level_values(level))
     ]
     if not coerced:
         return columns, []
@@ -244,7 +248,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
         before = len(df)
         df = df.reindex(expected, level=level)
         dropped = before - len(df)
-        if not dropped:
+        if dropped <= 0:
             continue
         found = stacked.index.get_level_values(level).unique().tolist()
         message = (
