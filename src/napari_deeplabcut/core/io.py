@@ -40,6 +40,7 @@ import yaml
 from dask import delayed
 from dask_image.imread import imread
 from napari.types import LayerData
+from napari.utils.notifications import show_warning
 from natsort import natsorted
 from pydantic import ValidationError
 
@@ -139,6 +140,29 @@ def write_config(config_path: str | Path, params: dict[str, Any]) -> None:
 # and attaches provenance via attach_source_and_io_to_layer_kwargs.
 
 
+def _normalise_column_levels(columns: pd.Index) -> tuple[pd.Index, list[str]]:
+    """Coerce every column level to str, reporting which were not already strings.
+
+    DLCHeaderModel string-normalises every level it reads. A file whose 'individuals' or
+    'bodyparts' level is numeric on disk would then align against nothing and load as an
+    empty layer, so the frame is brought into the same representation as the header.
+    """
+    if not isinstance(columns, pd.MultiIndex):
+        return columns, []
+    # Test the values in use, not the dtype and not columns.levels. A dtype check is
+    # version-specific (pandas 2 stores string levels as object, pandas 3 gives them a
+    # dedicated str dtype), and columns.levels keeps entries no column uses, which
+    # merge_multiple_scorers leaves behind when it masks down to one scorer block.
+    coerced = [
+        name if name is not None else f"level_{level}"
+        for level, name in enumerate(columns.names)
+        if not all(isinstance(value, str) for value in columns.get_level_values(level))
+    ]
+    if not coerced:
+        return columns, []
+    return pd.MultiIndex.from_frame(columns.to_frame(index=False).astype(str)), coerced
+
+
 def _read_hdf_any_key(file: Path) -> pd.DataFrame:
     """Read an HDF file without knowing the key in advance. Try common DLC keys."""
     file = str(file)
@@ -180,6 +204,20 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     # temp = pd.read_hdf(str(file))
     temp = _read_hdf_any_key(file)
     temp = merge_multiple_scorers(temp)
+
+    temp.columns, coerced = _normalise_column_levels(temp.columns)
+    if coerced:
+        logger.warning(
+            "%s: column level(s) %s are not strings on disk and were normalised for "
+            "reading. Saving this file will write the normalised form.",
+            file,
+            coerced,
+        )
+        show_warning(
+            f"{Path(file).name}: keypoint names in {coerced} were stored as numbers and "
+            f"normalised to text. Saving will write the normalised form."
+        )
+
     header = DLCHeaderModel(columns=temp.columns)
     temp = temp.droplevel("scorer", axis=1)
     logger.debug("READ_HDF file=%s", file)
@@ -204,12 +242,23 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     if isinstance(temp.index, pd.MultiIndex):
         temp.index = [str(Path(*row)) for row in temp.index]
 
-    df = (
-        temp.stack(["individuals", "bodyparts"])
-        .reindex(header.individuals, level="individuals")
-        .reindex(header.bodyparts, level="bodyparts")
-        .reset_index()
-    )
+    stacked = temp.stack(["individuals", "bodyparts"])
+    df = stacked
+    for level, expected in (("individuals", header.individuals), ("bodyparts", header.bodyparts)):
+        before = len(df)
+        df = df.reindex(expected, level=level)
+        dropped = before - len(df)
+        if dropped <= 0:
+            continue
+        found = stacked.index.get_level_values(level).unique().tolist()
+        message = (
+            f"Reading {file}: aligning the '{level}' level dropped {dropped} of {before} rows. "
+            f"The file contains {found!r} but the header expects {list(expected)!r}."
+        )
+        if df.empty:
+            raise ValueError(message)
+        logger.warning(message)
+    df = df.reset_index()
 
     nrows = df.shape[0]
     data = np.empty((nrows, 3))
