@@ -39,13 +39,10 @@ os.environ["NAPARI_ASYNC"] = "0"  # avoid async teardown surprises in tests
 logging.getLogger("napari_deeplabcut").propagate = True
 # logging.getLogger("napari-deeplabcut").propagate = True # use the underscore variant to match __name__ throughout.
 
-# Keep the suite out of the real settings store
-_settings_dir = Path(tempfile.gettempdir()) / (
-    f"napari-dlc-test-settings-{os.environ.get('PYTEST_XDIST_WORKER', 'main')}"
-)
-_settings_dir.mkdir(parents=True, exist_ok=True)
+# Keep the suite out of the real settings store.
+_settings_tmp = tempfile.TemporaryDirectory(prefix="napari-dlc-test-settings-", ignore_cleanup_errors=True)
 QSettings.setDefaultFormat(QSettings.Format.IniFormat)  # because of Win registry
-QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(_settings_dir))
+QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, _settings_tmp.name)
 
 
 def pytest_report_header(config):
