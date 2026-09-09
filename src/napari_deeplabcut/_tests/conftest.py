@@ -104,7 +104,7 @@ def only_deeplabcut_debug_logs():
             original_levels[name] = logger.level
 
             if not (name.startswith("napari_deeplabcut") or name.startswith("napari-deeplabcut")):
-                logger.setLevel(logging.INFO)
+                logger.setLevel(max(logger.getEffectiveLevel(), logging.INFO))
 
         # Ensure our plugin is verbose
         logging.getLogger("napari_deeplabcut").setLevel(logging.DEBUG)
