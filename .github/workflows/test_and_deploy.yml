@@ -114,12 +114,14 @@ jobs:
     # wheel and runs the suite against it - a release is blocked if any of that fails.
     #
     # this will run when you have tagged a commit, starting with "v*"
-    needs: [test]
+    needs: [test, test-napari-floor]
     if: |
       always() && (
         (github.event_name == 'workflow_dispatch' && inputs.force_deploy && github.ref == 'refs/heads/main'
         ) ||
-        (startsWith(github.ref, 'refs/tags/v') && needs.test.result == 'success')
+        (startsWith(github.ref, 'refs/tags/v')
+          && needs.test.result == 'success'
+          && needs['test-napari-floor'].result == 'success')
       )
     uses: ./.github/workflows/build_release.yml
 
