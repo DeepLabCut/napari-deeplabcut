@@ -77,7 +77,9 @@ def test_install_add_wrapper_swallows_schedule_recolor_errors():
 
 def test_install_paste_patch_binds_method_to_layer():
     class Layer:
-        pass
+        # Every napari version defines Points._paste_data, so the patch replaces an
+        # existing method rather than adding one.
+        def _paste_data(self): ...
 
     layer = Layer()
     seen = []
@@ -90,6 +92,23 @@ def test_install_paste_patch_binds_method_to_layer():
     layer._paste_data()
 
     assert seen == [layer]
+
+
+def test_install_paste_patch_refuses_layer_without_paste_hook():
+    """A layer with no paste hook must not come back with a dead attribute.
+
+    Assigning one anyway would leave a method nobody calls, and pasting would silently
+    fall back to napari's, which re-adds keypoints already annotated on the frame.
+    """
+
+    class Layer:
+        pass
+
+    layer = Layer()
+
+    install_paste_patch(layer, paste_func=lambda this: None)
+
+    assert not hasattr(layer, "_paste_data")
 
 
 def test_make_paste_data_returns_early_when_all_points_are_annotated(monkeypatch):

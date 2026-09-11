@@ -21,6 +21,7 @@ from napari_deeplabcut.config.models import DLCHeaderModel
 from napari_deeplabcut.config.settings import get_auto_open_keypoint_controls, set_auto_open_keypoint_controls
 from napari_deeplabcut.core import io as io
 from napari_deeplabcut.core import keypoints
+from napari_deeplabcut.napari_compat import unwrap
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -163,7 +164,7 @@ def viewer(make_napari_viewer_proxy):
         # proactively close dock widgets to drop any lingering Qt refs
         try:
             # close all added dock widgets (if any) before viewer is closed
-            for dw in list(viewer.window._qt_window.findChildren(QDockWidget)):
+            for dw in list(unwrap(viewer).window._qt_window.findChildren(QDockWidget)):
                 # defensive: some Qt objects can be None during shutdown
                 if hasattr(dw, "close"):
                     dw.close()
