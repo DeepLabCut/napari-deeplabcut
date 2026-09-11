@@ -40,19 +40,21 @@ def test_hooks_are_installed_only_once(keypoint_controls, qtbot):
     assert window.closeEvent is close_event_handler, "second call should not re-wrap the handler"
 
 
-def test_closing_the_window_routes_through_on_close(keypoint_controls, qtbot, monkeypatch):
+def test_closing_the_window_routes_through_on_close(keypoint_controls, qtbot):
     window = _hooked_window(keypoint_controls, qtbot)
 
-    seen = []
+    calls = []
 
     def fake_on_close(event):
-        seen.append(event)
+        calls.append(True)
         # Ignore it, or the wrapper falls through to napari's own handler and really
         # closes the viewer mid-test.
         event.ignore()
 
-    monkeypatch.setattr(keypoint_controls, "on_close", fake_on_close)
+    keypoint_controls.on_close = fake_on_close
+    try:
+        window.closeEvent(QCloseEvent())
+    finally:
+        del keypoint_controls.on_close  # restores the class-level method
 
-    window.closeEvent(QCloseEvent())
-
-    assert len(seen) == 1
+    assert calls == [True]
