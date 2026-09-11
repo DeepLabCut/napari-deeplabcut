@@ -7,9 +7,13 @@ import pandas as pd
 import pytest
 from qtpy.QtCore import Qt
 
+from napari_deeplabcut.config.settings import TRACKING_SHORTCUTS_ENABLED
 from napari_deeplabcut.tracking._widgets import TrackingControls
 from napari_deeplabcut.tracking.core.data import TrackingWorkerData
 from napari_deeplabcut.tracking.core.models import AVAILABLE_TRACKERS
+from napari_deeplabcut.ui.dialogs import Shortcuts
+
+from ...conftest import force_show
 
 if TYPE_CHECKING:
     import napari
@@ -103,6 +107,35 @@ def _capture_tracking_requests(tc: TrackingControls):
 # -----------------------------------------------------------------------------
 # Light integration tests: real viewer + widget, but minimal behavior surface
 # -----------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not TRACKING_SHORTCUTS_ENABLED,
+    reason="shortcuts are disabled, so the gate returns False regardless of visibility",
+)
+def test_tracking_shortcuts_gate_follows_widget_visibility(empty_tracking_env, qtbot):
+    """The gate reads this widget's own visibility rather than napari's dock registry."""
+    _viewer, tc = empty_tracking_env
+
+    force_show(tc, qtbot)
+    assert tc._tracking_shortcuts_active() is True
+
+    tc.hide()
+    assert tc._tracking_shortcuts_active() is False
+
+
+def test_shortcuts_dialog_sees_the_tracking_panel(viewer, qtbot, patch_tracking_side_effects):
+    """Shortcuts resolves the panel through the singleton registry, not napari's docks."""
+    dlg = Shortcuts(None, viewer=viewer)
+    qtbot.addWidget(dlg)
+
+    assert dlg._tracking_widget_is_open() is False
+
+    tc = _get_tracking_controls(viewer)
+    qtbot.addWidget(tc)
+    force_show(tc, qtbot)
+
+    assert dlg._tracking_widget_is_open() is True
 
 
 def test_tracking_controls_initial_state(empty_tracking_env):

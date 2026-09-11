@@ -120,6 +120,41 @@ def test_callback_resolvers_return_expected_methods():
     assert keybinds._jump_unlabeled_frame(ctx) is store._find_first_unlabeled_frame
 
 
+def test_increment_dims_steps_the_last_used_axis_in_both_directions():
+    """Direction and arithmetic, against a fake dims."""
+    calls = []
+
+    dims = SimpleNamespace(
+        last_used=1,
+        current_step=(0, 5, 0),
+        set_current_step=lambda axis, value: calls.append((axis, value)),
+    )
+    viewer = SimpleNamespace(dims=dims)
+
+    keybinds.increment_dims_right(viewer)
+    keybinds.increment_dims_left(viewer)
+
+    assert calls == [(1, 6), (1, 4)]
+
+
+def test_increment_dims_moves_a_real_viewer(viewer):
+    """The fake above cannot prove Dims.last_used / set_current_step exist.
+
+    These replaced a private napari import, so the public API they rely on has to be
+    exercised against a real viewer, not only a stand-in.
+    """
+    viewer.add_image(np.zeros((5, 4, 4), dtype=np.uint8))
+
+    axis = viewer.dims.last_used
+    viewer.dims.set_current_step(axis, 2)
+
+    keybinds.increment_dims_right(viewer)
+    assert viewer.dims.current_step[axis] == 3
+
+    keybinds.increment_dims_left(viewer)
+    assert viewer.dims.current_step[axis] == 2
+
+
 def test_toggle_edge_color_toggles_between_0_and_2():
     layer = SimpleNamespace(border_width=np.array([0, 2, 0, 2]))
 
