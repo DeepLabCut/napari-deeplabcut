@@ -87,10 +87,7 @@ from .core.metadata import (
     read_points_meta,
 )
 from .core.trails import TrailsController
-from .napari_compat import (
-    apply_points_layer_ui_tweaks,
-    register_points_action,
-)
+from .napari_compat import apply_points_layer_ui_tweaks
 from .ui.base_widget import ViewerSingletonWidget
 from .ui.color_scheme_display import ColorSchemePanel
 from .ui.cropping import (
@@ -356,11 +353,9 @@ class KeypointControls(ViewerSingletonWidget):
         """Compatibility shim: lifecycle-owned project path now lives in manager."""
         return self.layer_manager.project_path
 
-    @register_points_action("Change labeling mode")
     def cycle_through_label_modes(self, *args):
         self.label_mode = next(keypoints.LabelMode)
 
-    @register_points_action("Change color mode")
     def cycle_through_color_modes(self, *args):
         if self._active_layer_is_multianimal() or self.color_mode != str(keypoints.ColorMode.BODYPART):
             self.color_mode = next(keypoints.ColorMode)
