@@ -21,6 +21,9 @@ on:
   workflow_dispatch:
     inputs:
       force_deploy:
+        # Validates the build and the installed-wheel tests, but does not publish from an
+        # untagged commit: setuptools_scm derives a local version there (0.x.devN+g<sha>)
+        # and PyPI rejects local version identifiers, so the upload step fails.
         description: 'Force deployment even if tests fail'
         required: true
         type: boolean

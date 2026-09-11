@@ -39,6 +39,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Empty ref means the branch this workflow was dispatched from
+          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-python@v6
         with:
@@ -61,6 +64,8 @@ jobs:
     if: inputs.napari-version != ''
     name: resolve napari versions
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       napari: ${{ steps.resolve.outputs.napari }}
 
