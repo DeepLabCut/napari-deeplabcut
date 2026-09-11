@@ -7,6 +7,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+from ...napari_compat.proxy import unwrap
+
 if TYPE_CHECKING:
     from napari.layers import Points
 
@@ -128,17 +130,21 @@ class RuntimeRegistry(Generic[StoreT]):
 
     def is_managed(self, layer: Any) -> bool:
         """Whether this exact live layer object is currently registered and live."""
-        entry = self._entries_by_id.get(id(layer))
+        target = unwrap(layer)
+        entry = self._entries_by_id.get(id(target))
         if entry is None:
             return False
         resolved = entry.resolve_layer()
-        return resolved is layer
+        return resolved is target
 
     def contains_layer_id(self, layer_id: int) -> bool:
         """Whether a registry entry exists for this id (live or stale)."""
         return layer_id in self._entries_by_id
 
     def register(self, layer: Any, runtime: ManagedPointsRuntime[StoreT]) -> None:
+        # A PublicOnlyProxy and the layer it wraps have different id()s,
+        # so a caller holding either must register and resolve the same entry.
+        layer = unwrap(layer)
         layer_id = id(layer)
         if layer_id in self._entries_by_id:
             raise ValueError(f"Layer already registered: id={layer_id}")
@@ -322,4 +328,4 @@ class RuntimeRegistry(Generic[StoreT]):
     def _coerce_layer_id(layer_or_id: Any) -> int:
         if isinstance(layer_or_id, int):
             return layer_or_id
-        return id(layer_or_id)
+        return id(unwrap(layer_or_id))

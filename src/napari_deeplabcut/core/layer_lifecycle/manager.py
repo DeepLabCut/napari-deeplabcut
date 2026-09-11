@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import weakref
 from collections.abc import Callable, Iterator
 from enum import Enum
 from types import MethodType
@@ -28,7 +29,7 @@ from ...core.metadata import (
 )
 from ...core.project_paths import PathMatchPolicy
 from ...core.remap import remap_layer_data_by_paths
-from ...napari_compat import install_add_wrapper, install_paste_patch
+from ...napari_compat import install_add_wrapper, install_paste_patch, unwrap
 from ...napari_compat.points_layer import make_paste_data
 from ...tracking.core.data import TRACKING_LAYER_METADATA_KEY, is_tracking_result_points_layer
 from ...ui.base_widget._qt_timers import OwnedTimersMixin
@@ -103,6 +104,9 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         self.viewer = viewer
         self.registry: RuntimeRegistry[Any] = RuntimeRegistry()
+        # Stores of layers that were unregistered on removal but whose layer object is
+        # still alive, so a remove/re-add of the same layer keeps its store
+        self._detached_stores: dict[int, tuple[weakref.ReferenceType[Any], KeypointStore]] = {}
         self._placeholder_config_decision_provider: PlaceholderConfigDecisionProvider | None = None
 
         # Lifecycle-owned viewer/image context
@@ -133,6 +137,42 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
     def require_store(self, layer_or_id: Any) -> KeypointStore:
         store = self.registry.require_store(layer_or_id)
         return store  # typed via TYPE_CHECKING
+
+    def detached_store(self, layer: Any) -> KeypointStore | None:
+        """Store of a layer that was unregistered on removal but is still alive.
+
+        A removed layer is unregistered, so the registry no longer knows it. If the
+        same layer object is re-added it must keep its store rather than silently get
+        a fresh one, which is what storing the store on the layer used to provide.
+        """
+        target = unwrap(layer)
+        entry = self._detached_stores.get(id(target))
+        if entry is None:
+            return None
+
+        layer_ref, store = entry
+        if layer_ref() is not target:
+            # id() was reused by a different object; the original layer is gone
+            self._detached_stores.pop(id(target), None)
+            return None
+        return store
+
+    def _detach_store(self, layer: Any, store: KeypointStore | None) -> None:
+        """Remember a removed layer's store while the layer object stays alive."""
+        if store is None:
+            return
+
+        target = unwrap(layer)
+        try:
+            layer_ref: weakref.ReferenceType[Any] = weakref.ref(target)
+        except TypeError:
+            logger.debug("Could not detach store for non-weakref-able layer: %r", target)
+            return
+
+        self._detached_stores[id(target)] = (layer_ref, store)
+
+    def _drop_detached_store(self, layer: Any) -> None:
+        self._detached_stores.pop(id(unwrap(layer)), None)
 
     def iter_managed_points(self) -> Iterator[tuple[Points, KeypointStore]]:
         """Iterate only live managed Points layers and their stores."""
@@ -682,9 +722,10 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if not self.validate_header(layer):
             return None
 
-        existing = getattr(layer, "_dlc_store", None)
+        existing = self.get_store(layer) or self.detached_store(layer)
         if existing is not None:
             self.register_managed_points_layer(layer, existing)
+            self._drop_detached_store(layer)
 
             runtime = self.get_live_runtime(layer)
             existing_resources = None
@@ -715,8 +756,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         store = keypoints.KeypointStore(self.viewer, layer)
         self.register_managed_points_layer(layer, store)
 
-        layer._dlc_store = store
-
         proj = layer.metadata.get("project")
         if proj:
             self._project_path = proj
@@ -742,7 +781,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         logger.debug(
             "Wire points layer=%r existing_store=%s project=%s root=%s len_paths=%s",
             getattr(layer, "name", layer),
-            getattr(layer, "_dlc_store", None) is not None,
+            self.get_store(layer) is not None,
             md.get("project"),
             md.get("root"),
             len(md.get("paths", [])),
@@ -1380,6 +1419,10 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
     def register_managed_points_layer(self, layer: Points, store: KeypointStore, **resources: Any) -> None:
         """Register a managed Points layer if not already registered."""
+        # The registry keys on the unwrapped layer, so build the runtime with the same
+        # identity or its layer_id consistency check rejects the registration
+        layer = unwrap(layer)
+
         if self.registry.is_managed(layer):
             return
 
@@ -1395,7 +1438,15 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
     def unregister_managed_layer(self, layer_or_id: Any) -> Any | None:
         """Unregister a managed layer by layer object or layer id."""
         runtime = self.registry.unregister(layer_or_id)
-        return None if runtime is None else runtime.store
+        if runtime is None:
+            return None
+
+        if not isinstance(layer_or_id, int):
+            # Keep the store reachable while the layer object lives, so re-adding the
+            # same layer resumes with it instead of starting a fresh store.
+            self._detach_store(layer_or_id, runtime.store)
+
+        return runtime.store
 
     # ------------------------------------------------------------------ #
     # Event entry points                                                 #

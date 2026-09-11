@@ -48,6 +48,7 @@ from qtpy.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMainWindow,
     QMessageBox,
     QPushButton,
     QRadioButton,
@@ -144,30 +145,16 @@ class KeypointControls(ViewerSingletonWidget):
         self._debug_recorder = install_debug_recorder()
         self._debug_window = None
         ###########
-        status_bar = self.viewer.window._qt_window.statusBar()
         self.last_saved_label = QLabel("")
         self.last_saved_label.hide()
-        status_bar.addPermanentWidget(self.last_saved_label)
 
         self._color_mode = keypoints.ColorMode.default()
         self._label_mode = keypoints.LabelMode.default()
 
-        # Intercept close event if data were not saved
-        qt_win = self.viewer.window._qt_window
-        orig_close_event = qt_win.closeEvent
-
-        # Wrap event without overriding the original
-        # for future-proofing
-        def _close_event(event):
-            self.on_close(event)
-            points_inter = getattr(self, "_points_interactions", None)
-            if points_inter is not None:
-                points_inter.close()
-            # if accepted, call original
-            if event.isAccepted():
-                orig_close_event(event)
-
-        qt_win.closeEvent = _close_event
+        # The dock is created after this constructor returns, so the main window is not
+        # reachable through the Qt parent chain yet.
+        self._main_window_hooked = False
+        self._single_shot_owned(0, self._ensure_main_window_hooks)
 
         # Storage for extra image metadata that are relevant to other layers.
         # These are updated anytime images are added to the Viewer
@@ -549,13 +536,80 @@ class KeypointControls(ViewerSingletonWidget):
         except Exception:
             logger.debug("Failed to refresh widget state after merged points update", exc_info=True)
 
-    @staticmethod
-    def get_layer_controls(layer: Points) -> KeypointControls | None:
-        return getattr(layer, "_dlc_controls", None)
+    def _main_window(self) -> QMainWindow | None:
+        """napari's main window, reached through Qt's parent chain.
 
-    @staticmethod
-    def get_layer_store(layer: Points) -> keypoints.KeypointStore | None:
-        return getattr(layer, "_dlc_store", None)
+        Once this widget is docked, `QWidget.window()` is napari's main window. That is
+        plain Qt and owes nothing to napari's internals, unlike `window._qt_window`
+        (private) or `window.qt_viewer` (public but deprecated for removal).
+        """
+        window = self.window()
+        return window if isinstance(window, QMainWindow) else None
+
+    def _ensure_main_window_hooks(self) -> None:
+        """Attach the status-bar label and close interception, once docked.
+
+        Idempotent, and also called lazily before the label is first shown: an
+        unparented QLabel would otherwise pop up as its own top-level window.
+        """
+        if self._main_window_hooked:
+            return
+
+        window = self._main_window()
+        if window is None:
+            logger.debug("Main window not reachable yet; status bar and close interception not installed.")
+            return
+
+        # Wrap the close event rather than overriding it, so napari's own handler runs.
+        orig_close_event = window.closeEvent
+
+        def _close_event(event):
+            self.on_close(event)
+            points_inter = getattr(self, "_points_interactions", None)
+            if points_inter is not None:
+                points_inter.close()
+            # if accepted, call original
+            if event.isAccepted():
+                orig_close_event(event)
+
+        try:
+            window.statusBar().addPermanentWidget(self.last_saved_label)
+            window.closeEvent = _close_event
+        except RuntimeError:
+            # The window's C++ object can be gone during teardown. This runs from the
+            # save path, which must not fail because of it; the flag stays unset so a
+            # later call can retry.
+            logger.debug("Main window went away before hooks could be installed", exc_info=True)
+            return
+
+        self._main_window_hooked = True
+
+    @classmethod
+    def get_layer_controls(cls, layer: Points) -> KeypointControls | None:
+        """Controls that own this layer, from the lifecycle runtime bundle.
+
+        Stays class-level because callers resolve a layer to its owner without holding
+        a widget. Ownership is read from the runtime bundle rather than an attribute on
+        the layer, so the live singleton instances are the set to search.
+        """
+        for ref in list(cls._instance_registry().values()):
+            controls = ref()
+            if controls is None or not cls._is_qt_alive(controls):
+                continue
+
+            manager = getattr(controls, "layer_manager", None)
+            if manager is None:
+                continue
+
+            runtime = manager.get_live_runtime(layer)
+            if runtime is not None and runtime.resources.get("controls") is controls:
+                return controls
+
+        return None
+
+    def get_layer_store(self, layer: Points) -> keypoints.KeypointStore | None:
+        """Store for this layer, owned by the lifecycle registry."""
+        return self.layer_manager.get_store(layer)
 
     # ------------------------------------------------------------------ #
     # UI-only hooks used by LayerLifecycleManager                        #
@@ -640,7 +694,14 @@ class KeypointControls(ViewerSingletonWidget):
             )
             req.runtime_resources = resources
 
-            layer._dlc_controls = self
+            runtime = self.layer_manager.get_live_runtime(layer)
+            if runtime is not None:
+                runtime.resources["controls"] = self
+            else:
+                logger.debug(
+                    "No live runtime for layer=%r; controls not recorded.",
+                    getattr(layer, "name", layer),
+                )
 
             if self.layer_manager.managed_points_count() == 1 and self.layer_manager.is_multianimal(layer):
                 self._color_mode = keypoints.ColorMode.INDIVIDUAL
@@ -883,11 +944,14 @@ class KeypointControls(ViewerSingletonWidget):
         io.write_config(config_path, cfg)
         self.viewer.status = "Mapping to superkeypoint set successfully saved"
 
+    # Parent dialogs to the window this widget actually lives in. The previous
+    # `_qt_window.current()` was a class method returning the most recently created
+    # napari window, which is not necessarily ours.
     def start_tutorial(self):
-        Tutorial(self.viewer.window._qt_window.current()).show()
+        Tutorial(self._main_window()).show()
 
     def display_shortcuts(self):
-        Shortcuts(self.viewer.window._qt_window.current(), viewer=self.viewer).show()
+        Shortcuts(self._main_window(), viewer=self.viewer).show()
 
     def _move_image_layer_to_bottom(self, layer: Image):
         try:
@@ -1258,6 +1322,9 @@ class KeypointControls(ViewerSingletonWidget):
         self._is_saved = True
         if outcome.status_message:
             self.viewer.status = outcome.status_message
+        # Make sure the label is in the status bar before showing it; unparented it
+        # would appear as a floating window.
+        self._ensure_main_window_hooks()
         self.last_saved_label.setText(f"Last saved at {str(datetime.now().time()).split('.')[0]}")
         self.last_saved_label.show()
 
