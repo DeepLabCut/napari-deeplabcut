@@ -11,10 +11,14 @@ from .points_layer import (
     install_paste_patch,
     register_points_action,
 )
+from .proxy import unwrap
+from .window import qt_dock_widgets
 
 __all__ = [
     "apply_points_layer_ui_tweaks",
     "install_add_wrapper",
     "install_paste_patch",
+    "qt_dock_widgets",
     "register_points_action",
+    "unwrap",
 ]
