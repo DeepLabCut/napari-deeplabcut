@@ -38,13 +38,16 @@ def _write_minimal_png(path: Path, *, shape=(64, 64, 3)) -> None:
     imsave(str(path), img, check_contrast=False)
 
 
-def _make_minimal_dlc_project(tmp_path: Path):
+def _make_minimal_dlc_project(tmp_path: Path, *, bodyparts=("bodypart1", "bodypart2")):
     """
     Build a minimal DLC-like folder:
       project/
         config.yaml
         labeled-data/test/img000.png
-        labeled-data/test/CollectedData_John.h5 (bodypart1 labeled, bodypart2 NaN)
+        labeled-data/test/CollectedData_John.h5 (first bodypart labeled, second NaN)
+
+    ``bodyparts`` accepts non-string values so callers can build a project whose keypoint
+    names are numeric in both config.yaml and the H5 column level.
     """
     import yaml
 
@@ -58,7 +61,7 @@ def _make_minimal_dlc_project(tmp_path: Path):
 
     cfg = {
         "scorer": "John",
-        "bodyparts": ["bodypart1", "bodypart2"],
+        "bodyparts": list(bodyparts),
         "dotsize": 8,
         "pcutoff": 0.6,
         "colormap": "viridis",
@@ -67,7 +70,7 @@ def _make_minimal_dlc_project(tmp_path: Path):
     config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
 
     cols = pd.MultiIndex.from_product(
-        [["John"], ["bodypart1", "bodypart2"], ["x", "y"]],
+        [["John"], list(bodyparts), ["x", "y"]],
         names=["scorer", "bodyparts", "coords"],
     )
     idx = pd.MultiIndex.from_tuples([img_rel])

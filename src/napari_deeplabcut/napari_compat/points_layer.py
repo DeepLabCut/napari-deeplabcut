@@ -3,31 +3,65 @@ from __future__ import annotations
 
 import logging
 from copy import deepcopy
+from enum import Enum
 from types import MethodType
 from typing import Any
 
 import numpy as np
+from napari.utils.notifications import show_warning
 
 from napari_deeplabcut.core.keypoints import Keypoint
+from napari_deeplabcut.napari_compat.proxy import unwrap
 
 logger = logging.getLogger(__name__)
 
-# -----------------------------------------------------------------------------
-# Optional napari private import
-# -----------------------------------------------------------------------------
+ISSUE_URL = "https://github.com/DeepLabCut/napari-deeplabcut/issues"
 
-try:
-    from napari.layers.points._points_key_bindings import register_points_action
-except Exception:
+# Keys of compatibility problems already reported to the user this session.
+_reported_to_user: set[str] = set()
 
-    def register_points_action(*args, **kwargs):
-        def deco(fn):
-            return fn
 
-        return deco
+def warn_user_once(key: str, message: str) -> None:
+    """Surface a napari notification the first time a compat problem is hit."""
+    logger.warning(message)
 
-    logger.debug("napari private register_points_action unavailable; skipping action registration.")
+    if key in _reported_to_user:
+        return
+    _reported_to_user.add(key)
 
+    try:
+        show_warning(message)
+    except Exception:
+        logger.debug("Could not surface a napari notification", exc_info=True)
+
+
+class HideFailure(Enum):
+    """What it means when a napari Points control cannot be hidden.
+
+    The value is the level to log a failure at, or None to stay silent.
+    """
+
+    # The plugin owns this control. A still-visible napari control can disagree with it.
+    REQUIRED = logging.WARNING
+    # Untidy if it stays visible; nothing behaves differently.
+    COSMETIC = logging.DEBUG
+    # Absent on some supported napari versions. Absence is not a signal.
+    EXPECTED = None
+
+
+WIDGETS_TO_HIDE = (
+    # The plugin panel is the only point-size control, and napari's slider is
+    # selection-scoped, so the two disagree if both are live.
+    ("_current_size_slider_control", "size_slider", HideFailure.REQUIRED),
+    ("_current_size_slider_control", "size_slider_label", HideFailure.REQUIRED),
+    ("_face_color_control", "face_color_edit", HideFailure.COSMETIC),
+    ("_face_color_control", "face_color_label", HideFailure.COSMETIC),
+    ("_border_color_control", "border_color_edit", HideFailure.COSMETIC),
+    ("_border_color_control", "border_color_edit_label", HideFailure.COSMETIC),
+    # Removed in napari 0.9.
+    ("_out_slice_checkbox_control", "out_of_slice_checkbox", HideFailure.EXPECTED),
+    ("_out_slice_checkbox_control", "out_of_slice_checkbox_label", HideFailure.EXPECTED),
+)
 
 # -----------------------------------------------------------------------------
 # Compat constants
@@ -200,6 +234,16 @@ def _filter_text_payload(text: Any, mask: list[bool]) -> dict[str, Any] | None:
     return filtered
 
 
+def _features_as_properties(features: Any) -> dict[str, Any]:
+    """Convert a features DataFrame to the older properties mapping.
+
+    Replaces ``napari.layers.utils.layer_utils._features_to_properties``, which is
+    private and which napari's own docstring describes as producing a *deprecated*
+    properties dictionary.
+    """
+    return {name: series.to_numpy() for name, series in features.items()}
+
+
 def _get_clipboard_slice_point(indices: Any) -> Any:
     """Extract the copied slice point from old/new napari clipboard payloads."""
     if hasattr(indices, "point"):
@@ -273,9 +317,7 @@ def _append_widths(layer: Any, clipboard: dict[str, Any]) -> None:
 
 def _paste_colors(layer: Any, clipboard: dict[str, Any]) -> None:
     """Paste face/border colors compatibly across napari versions."""
-    from napari.layers.utils.layer_utils import _features_to_properties
-
-    props = _features_to_properties(clipboard["features"])
+    props = _features_as_properties(clipboard["features"])
 
     border_manager = _first_attr(layer, *_BORDER_MANAGERS)
     border_color_key = _first_present(clipboard, *_BORDER_COLOR_KEYS)
@@ -322,6 +364,34 @@ def _offset_pasted_data(
 # -----------------------------------------------------------------------------
 
 
+def hide_native_point_controls(point_controls: Any) -> list[str]:
+    """Hide the napari Points controls that conflict with the plugin's own panel.
+
+    Returns the names of the ``REQUIRED`` widgets that could not be hidden, so callers
+    and the compat smoke test can tell a real breakage from a cosmetic one. Widgets
+    graded ``EXPECTED`` are absent on some supported napari versions and are never
+    reported.
+    """
+    unhidden_required: list[str] = []
+
+    for parent_attr, widget_attr, on_failure in WIDGETS_TO_HIDE:
+        try:
+            parent = getattr(point_controls, parent_attr)
+            widget = getattr(parent, widget_attr)
+            widget.hide()
+        except Exception:
+            name = f"{parent_attr}.{widget_attr}"
+            if on_failure is HideFailure.REQUIRED:
+                unhidden_required.append(name)
+
+            level = on_failure.value
+            if level is None:
+                continue
+            logger.log(level, "Failed to hide widget %s in point controls.", name, exc_info=True)
+
+    return unhidden_required
+
+
 def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> object | None:
     """
     Returns
@@ -329,6 +399,9 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
     object | None
         The created colormap selector, or None if unavailable.
     """
+    viewer = unwrap(viewer)
+    layer = unwrap(layer)
+
     try:
         controls = viewer.window._qt_viewer.dockLayerControls
         point_controls = controls.widget().widgets[layer]
@@ -336,29 +409,15 @@ def apply_points_layer_ui_tweaks(viewer, layer, *, dropdown_cls, plt_module) -> 
         logger.debug("Failed to resolve point controls for layer UI tweaks", exc_info=True)
         return None
 
-    widgets_to_hide = [
-        ("_face_color_control", "face_color_edit"),
-        ("_face_color_control", "face_color_label"),
-        ("_border_color_control", "border_color_edit"),
-        ("_border_color_control", "border_color_edit_label"),
-        ("_out_slice_checkbox_control", "out_of_slice_checkbox"),
-        ("_out_slice_checkbox_control", "out_of_slice_checkbox_label"),
-        ("_current_size_slider_control", "size_slider"),
-        ("_current_size_slider_control", "size_slider_label"),
-    ]
-
-    for parent_attr, widget_attr in widgets_to_hide:
-        try:
-            parent = getattr(point_controls, parent_attr)
-            widget = getattr(parent, widget_attr)
-            widget.hide()
-        except Exception:
-            logger.debug(
-                "Failed to hide widget %s.%s in point controls",
-                parent_attr,
-                widget_attr,
-                exc_info=True,
-            )
+    unhidden = hide_native_point_controls(point_controls)
+    if unhidden:
+        warn_user_once(
+            "point-controls-hide",
+            "napari-deeplabcut could not hide napari's own point controls "
+            f"({', '.join(unhidden)}). napari's point size slider may now disagree with "
+            f"the plugin's. This usually means napari changed its layer controls - "
+            f"please report it at {ISSUE_URL}",
+        )
 
     try:
         cmap_source = plt_module.colormaps
@@ -389,6 +448,8 @@ def install_add_wrapper(layer, *, add_impl, schedule_recolor) -> None:
     schedule_recolor
         Callable(layer) -> None.
     """
+    layer = unwrap(layer)
+
     try:
 
         def add_and_recolor(this, *args, **kwargs):
@@ -405,13 +466,34 @@ def install_add_wrapper(layer, *, add_impl, schedule_recolor) -> None:
 
 
 def install_paste_patch(layer, *, paste_func) -> None:
+    """Replace napari's ``Points._paste_data`` with the keypoint-aware implementation.
+
+    napari offers no public interception point for paste, so this replaces the private
+    method napari's own Ctrl+V binding calls. If that method is not there to replace,
+    assigning it anyway would create an attribute nobody calls, and paste would silently
+    revert to napari's - which re-adds keypoints already annotated on the target frame,
+    the exact bug this patch exists to prevent. So check first, and say so out loud.
     """
-    Patch napari Points._paste_data with our safe implementation.
-    """
+    layer = unwrap(layer)
+
+    if not hasattr(layer, "_paste_data"):
+        warn_user_once(
+            "paste-patch-missing",
+            "napari-deeplabcut could not install its keypoint-aware paste on this napari "
+            "version, so pasting may duplicate keypoints that are already annotated on "
+            f"the target frame. Please report it at {ISSUE_URL}",
+        )
+        return
+
     try:
         layer._paste_data = MethodType(paste_func, layer)
     except Exception as e:
-        logger.debug("Skipping paste patch install: %r", e)
+        warn_user_once(
+            "paste-patch-failed",
+            "napari-deeplabcut failed to install its keypoint-aware paste "
+            f"({e!r}), so pasting may duplicate keypoints that are already annotated on "
+            f"the target frame. Please report it at {ISSUE_URL}",
+        )
 
 
 def make_paste_data(controls, *, store):

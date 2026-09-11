@@ -6,6 +6,7 @@ from napari.layers import Points
 
 from napari_deeplabcut.core import keypoints
 from napari_deeplabcut.core.layers import PointsInteractionObserver, populate_keypoint_layer_properties
+from napari_deeplabcut.napari_compat import unwrap
 
 
 @pytest.mark.usefixtures("qtbot")
@@ -224,17 +225,20 @@ def test_copy_paste_points_to_new_frame_does_not_crash_and_offsets_frame(
     qtbot.wait(0)
 
     layer.selected_data = {0, 1}
-    layer._copy_data()
+    # copy/paste are napari internals; reach them on the raw layer rather than through
+    # the PublicOnlyProxy the viewer fixture hands out.
+    raw_layer = unwrap(layer)
+    raw_layer._copy_data()
 
-    assert "data" in layer._clipboard
-    assert "features" in layer._clipboard
-    assert len(layer._clipboard["data"]) == 2
+    assert "data" in raw_layer._clipboard
+    assert "features" in raw_layer._clipboard
+    assert len(raw_layer._clipboard["data"]) == 2
 
     # move to frame 1 and paste
     viewer.dims.set_point(0, 1)
     qtbot.wait(0)
 
-    layer._paste_data()
+    raw_layer._paste_data()
     qtbot.wait(0)
 
     # original 2 + pasted 2
@@ -291,10 +295,11 @@ def test_copy_paste_same_frame_does_not_duplicate_existing_keypoints(
     qtbot.wait(0)
 
     layer.selected_data = {0, 1}
-    layer._copy_data()
+    raw_layer = unwrap(layer)
+    raw_layer._copy_data()
 
     before = len(layer.data)
-    layer._paste_data()
+    raw_layer._paste_data()
     qtbot.wait(0)
 
     # no duplicates expected on same frame

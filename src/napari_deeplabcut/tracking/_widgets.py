@@ -170,15 +170,6 @@ class TrackingControls(ViewerSingletonWidget):
         self._tracking_stop_button.setToolTip("Stop tracking")
         self._set_ref_button.setToolTip("Set reference frame")
 
-    def _dock_widget(self):
-        try:
-            for dock in self._viewer.window._dock_widgets.values():
-                if dock.widget() is self:
-                    return dock
-        except Exception:
-            return None
-        return None
-
     def _sync_from_viewer_dims(self) -> None:
         """Initialize/sync tracking controls from the current viewer dims."""
         try:
@@ -199,8 +190,7 @@ class TrackingControls(ViewerSingletonWidget):
     def _tracking_shortcuts_active(self) -> bool:
         if not TRACKING_SHORTCUTS_ENABLED:
             return False
-        dock = self._dock_widget()
-        return dock is not None and dock.isVisible()
+        return self.isVisible()
 
     def _setup_keybindings(self, viewer: "napari.viewer.Viewer"):
         if not TRACKING_SHORTCUTS_ENABLED:
@@ -655,10 +645,7 @@ class TrackingControls(ViewerSingletonWidget):
             self._start_worker()
 
         if not self.keypoint_widget:
-            for k, v in self._viewer.window._dock_widgets.items():
-                if "Keypoint controls" in k and "napari-deeplabcut" in k:
-                    self.keypoint_widget = v.widget()
-                    break
+            self.keypoint_widget = KeypointControls.get_existing(self._viewer)
 
         if self.is_tracking:
             return
