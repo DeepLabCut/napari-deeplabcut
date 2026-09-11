@@ -41,7 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           title="Weekly checks failing"
-          label="weekly-checks"
+          label="weekly checks"
           gh label create "$label" --repo "$REPO" --color B60205 \
             --description "Tracking issue for the weekly CI checks" --force
           existing=$(gh issue list --repo "$REPO" --state open --label "$label" --json number --jq '.[0].number // empty')
