@@ -56,7 +56,11 @@ jobs:
           run: |
             python -m pip install "$(ls dist/*.whl)[dev,tracking]"
             mkdir -p /tmp/wheeltest && cd /tmp/wheeltest
-            python -m pytest --pyargs napari_deeplabcut._tests -q -n auto --dist loadfile
+            # pyproject.toml is not in tmp, so pytest has no config
+            # Keep -o args in sync with [tool.pytest.ini_options].
+            python -m pytest --pyargs napari_deeplabcut._tests -q -n auto --dist loadfile \
+              -o qt_api=pyside6 \
+              -o "markers=e2e: end-to-end tests. Invoke napari viewer fixtures, slow."
 
       # Published by test_and_deploy.yml, so the bytes that were tested above are the
       # bytes that reach PyPI. Artifacts are scoped to the run, so a caller's other
