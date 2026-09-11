@@ -17,6 +17,7 @@ from vispy import keys
 from napari_deeplabcut import _widgets
 from napari_deeplabcut.core import io, keypoints
 from napari_deeplabcut.core.io import populate_keypoint_layer_properties
+from napari_deeplabcut.napari_compat import unwrap
 from napari_deeplabcut.ui.color_scheme_display import ColorSchemeDisplay
 from napari_deeplabcut.ui.dialogs import ShortcutRow
 from napari_deeplabcut.ui.labels_and_dropdown import KeypointsDropdownMenu, LabelPair
@@ -76,19 +77,20 @@ def test_store_crop_coordinates(keypoint_controls, viewer, images, config_path):
 @pytest.mark.usefixtures("qtbot")
 def test_toggle_face_color(viewer, points):
     viewer.layers.selection.add(points)
-    view = viewer.window._qt_viewer
+    view = unwrap(viewer).window._qt_viewer
+    raw_points = unwrap(points)
     # Shortcut 'F' toggles coloring between "id" and "label" for multi-animal datasets
-    assert points._face.color_properties.name == "id"
+    assert raw_points._face.color_properties.name == "id"
     view.canvas.events.key_press(key=keys.Key("F"))
-    assert points._face.color_properties.name == "label"
+    assert raw_points._face.color_properties.name == "label"
     view.canvas.events.key_press(key=keys.Key("F"))
-    assert points._face.color_properties.name == "id"
+    assert raw_points._face.color_properties.name == "id"
 
 
 @pytest.mark.usefixtures("qtbot")
 def test_toggle_edge_color(viewer, points):
     viewer.layers.selection.add(points)
-    view = viewer.window._qt_viewer
+    view = unwrap(viewer).window._qt_viewer
     # Shortcut 'E' toggles border width between 0 and 2
     np.testing.assert_array_equal(points.border_width, 0)
     view.canvas.events.key_press(key=keys.Key("E"))
