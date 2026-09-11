@@ -1,0 +1,58 @@
+# Weekly cron. Runs the scheduled checks and reports failures as a tracking issue.
+#
+# Each child workflow is also dispatchable on its own, with richer inputs, for
+# release validation. This orchestrator only ever calls them with defaults.
+
+name: weekly checks
+
+on:
+  schedule:
+    # Note: Scheduled workflows only ever run on the default branch
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  napari-breakage:
+    uses: ./.github/workflows/napari_breakage.yml
+
+  build-release:
+    uses: ./.github/workflows/build_release.yml
+
+  notify:
+    # A separate job so the notification cannot be lost to the failure it reports: a
+    # step-level `if: failure()` only runs if its job reaches that step, so a dead
+    # runner, a crashed step or a timeout would silently produce nothing.
+    #
+    # Scheduled runs only, no issue on manual dispatch.
+    needs: [napari-breakage, build-release]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      # One open issue at a time, commented on subsequent failures.
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Weekly checks failing"
+          label="weekly checks"
+          gh label create "$label" --repo "$REPO" --color B60205 \
+            --description "Tracking issue for the weekly CI checks" --force
+          existing=$(gh issue list --repo "$REPO" --state open --label "$label" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "Still failing: $RUN_URL"
+          else
+            body=$(printf '%s\n' \
+              "Weekly checks failed: $RUN_URL" \
+              "" \
+              "(Run against napari pre-releases and the built wheel.)" \
+              "" \
+              "Close this issue once the run is fixed.")
+            gh issue create --repo "$REPO" --title "$title" --body "$body" --label "$label"
+          fi

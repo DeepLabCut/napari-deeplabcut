@@ -1,0 +1,133 @@
+# Attempt to detect napari breakage.
+#
+# Two modes:
+#   scheduled (via weekly_checks.yml) - one cheap job: ubuntu / py3.12 / napari --pre,
+#     with napari's private-attribute deprecation treated as an error, so breakage
+#     surfaces during napari's RC window rather than on release.
+#   workflow_dispatch - full OS x Python matrix against a chosen napari version plus
+#     the declared floor and the latest stable ceiling. For validating a release
+#     candidate commit; deliberately heavier and not automatic.
+#
+# Never triggered by pull_request.
+
+name: napari breakage
+
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Plugin commit, tag or branch to test"
+        required: false
+        default: ""
+        type: string
+      napari-version:
+        description: 'pip specifier, e.g. "napari==0.9.1". Tested alongside floor and ceiling.'
+        required: false
+        default: "napari"
+        type: string
+
+jobs:
+  prerelease:
+    # Scheduled: cheap, single job, fails on deprecation as well as breakage.
+    if: inputs.napari-version == ''
+    name: napari --pre py3.12
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Empty ref means the branch this workflow was dispatched from
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: tlambert03/setup-qt-libs@v1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install setuptools tox
+
+      - name: Test against napari pre-release
+        uses: aganders3/headless-gui@v2
+        with:
+          run: python -m tox -e napari-pre
+
+  versions:
+    # Versions are deduplicated should the specified version match a default check
+    if: inputs.napari-version != ''
+    name: resolve napari versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      napari: ${{ steps.resolve.outputs.napari }}
+
+    steps:
+      - id: resolve
+        env:
+          CHOSEN: ${{ inputs.napari-version }}
+        run: |
+          set -euo pipefail
+          # awk keeps first occurrence, so the chosen version stays first; jq -Rn
+          # reads the surviving lines into a JSON array for fromJSON below.
+          list=$(printf '%s\n' \
+            "$CHOSEN" \
+            "napari==0.6.6" \
+            "napari" \
+            | awk 'NF && !seen[$0]++' | jq -Rnc '[inputs]')
+          echo "napari=$list" >> "$GITHUB_OUTPUT"
+
+  pinned:
+    # Manual: chosen version and both ends of the supported range
+    needs: [versions]
+    name: ${{ matrix.napari }} ${{ matrix.platform }} py${{ matrix.python-version }}
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+        # Chosen version, the floor declared in pyproject.toml, and the latest stable
+        # ceiling minus duplicates.
+        napari: ${{ fromJSON(needs.versions.outputs.napari) }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Empty ref means the branch this workflow was dispatched from
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: tlambert03/setup-qt-libs@v1
+
+      - name: Install Windows OpenGL
+        if: runner.os == 'Windows'
+        run: |
+          git clone --depth 1 https://github.com/pyvista/gl-ci-helpers.git
+          powershell gl-ci-helpers/appveyor/install_opengl.ps1
+          if (Test-Path -Path "C:\Windows\system32\opengl32.dll" -PathType Leaf) {Exit 0} else {Exit 1}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install setuptools tox
+
+      - name: Test against ${{ matrix.napari }}
+        uses: aganders3/headless-gui@v2
+        with:
+          run: python -m tox -e napari-pinned
+        env:
+          NAPARI_VERSION: ${{ matrix.napari }}
