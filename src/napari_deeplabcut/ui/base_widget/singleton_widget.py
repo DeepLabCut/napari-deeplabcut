@@ -5,6 +5,8 @@ from typing import ClassVar
 
 from qtpy.QtWidgets import QWidget
 
+from napari_deeplabcut.napari_compat.proxy import unwrap
+
 from ._qt_timers import OwnedTimersMixin
 
 
@@ -31,19 +33,8 @@ class ViewerSingletonWidget(QWidget, OwnedTimersMixin):
 
     @staticmethod
     def canonical_viewer(viewer):
-        current = viewer
-        seen = set()
-
-        while True:
-            wrapped = getattr(current, "__wrapped__", None)
-            if wrapped is None:
-                wrapped = getattr(current, "_obj", None)
-
-            if wrapped is None or wrapped is current or id(wrapped) in seen:
-                return current
-
-            seen.add(id(current))
-            current = wrapped
+        """Raw viewer behind napari's PublicOnlyProxy, used as the singleton key."""
+        return unwrap(viewer)
 
     # ------------------------------------------------------------------ #
     # Registry helpers                                                   #
