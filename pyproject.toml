@@ -29,7 +29,7 @@ dependencies = [
   "matplotlib>=3.3",
   "napari>=0.6.6",
   "natsort",
-  "numpy>=1.18.5,<2",
+  "numpy>=1.18.5",
   "opencv-python-headless",
   "pandas",
   "pyside6>=6.4.2",
