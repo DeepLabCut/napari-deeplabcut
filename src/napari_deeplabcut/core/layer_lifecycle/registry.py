@@ -257,19 +257,8 @@ class RuntimeRegistry(Generic[StoreT]):
         issues: list[RegistryAuditIssue] = []
         live_count = 0
         dead_count = 0
-        seen_ids: set[int] = set()
 
         for layer_id, entry in self._entries_by_id.items():
-            if layer_id in seen_ids:
-                issues.append(
-                    RegistryAuditIssue(
-                        code="duplicate-layer-id",
-                        message="Duplicate registry layer id detected",
-                        layer_id=layer_id,
-                    )
-                )
-            seen_ids.add(layer_id)
-
             resolved = entry.resolve_layer()
             if resolved is None:
                 dead_count += 1
@@ -283,17 +272,6 @@ class RuntimeRegistry(Generic[StoreT]):
                 continue
 
             live_count += 1
-
-            if entry.runtime.layer_id != layer_id:
-                issues.append(
-                    RegistryAuditIssue(
-                        code="runtime-layer-id-mismatch",
-                        message=(
-                            f"Runtime layer_id ({entry.runtime.layer_id}) does not match registry entry id ({layer_id})"
-                        ),
-                        layer_id=layer_id,
-                    )
-                )
 
         return RegistryAuditReport(
             live_count=live_count,
