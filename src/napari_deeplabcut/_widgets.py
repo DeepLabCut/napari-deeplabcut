@@ -559,12 +559,14 @@ class KeypointControls(ViewerSingletonWidget):
 
         def _close_event(event):
             self.on_close(event)
+            if not event.isAccepted():
+                return
+
             points_inter = getattr(self, "_points_interactions", None)
             if points_inter is not None:
                 points_inter.close()
-            # if accepted, call original
-            if event.isAccepted():
-                orig_close_event(event)
+
+            orig_close_event(event)
 
         try:
             window.statusBar().addPermanentWidget(self.last_saved_label)
