@@ -40,6 +40,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref }}
+        with:
           # Empty ref means the branch this workflow was dispatched from
           ref: ${{ inputs.ref }}
 
