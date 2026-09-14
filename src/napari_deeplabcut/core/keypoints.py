@@ -104,7 +104,6 @@ class KeypointStore:
 
         # Fallback if no resolver is provided
         self._layer_ref: weakref.ReferenceType[Points] | None = None
-        self._strong_layer_ref: Points | None = None  # Used to keep the layer alive if no resolver is provided
 
         self.layer = layer  # Use the setter to initialize keypoints and header
 
@@ -186,7 +185,7 @@ class KeypointStore:
         # Fallback for tests / legacy contexts.
         if self._layer_ref is not None:
             return self._layer_ref()
-        return self._strong_layer_ref
+        return None
 
     def require_layer(self) -> Points:
         layer = self.maybe_layer()
@@ -201,14 +200,7 @@ class KeypointStore:
     @layer.setter
     def layer(self, layer: Points):
         self._layer_id = id(layer)
-
-        try:
-            self._layer_ref = weakref.ref(layer)
-            self._strong_layer_ref = None
-        except TypeError:
-            # Fallback if a given object cannot be weak-referenced.
-            self._layer_ref = None
-            self._strong_layer_ref = layer
+        self._layer_ref = weakref.ref(layer)
 
         # Avoid repeated validated metadata reads when rebinding the same live layer.
         # NOTE: metadata/header may have changed even when layer is the same,
