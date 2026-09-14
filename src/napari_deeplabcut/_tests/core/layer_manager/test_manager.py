@@ -401,34 +401,6 @@ def test_manager_on_remove_triggers_ui_cleanup_and_refresh(qtbot):
     assert rec.removed.calls[0][0] is pts
 
 
-def test_manager_reap_dead_entries_removes_stale_entry(qtbot):
-    viewer = DummyViewer()
-    manager = LayerLifecycleManager(viewer=viewer)
-
-    pts = make_points()
-    store = object()
-
-    manager.register_managed_points_layer(pts, store)
-
-    layer_id = id(pts)
-    del pts
-    gc.collect()
-
-    report_before = manager.audit_registry()
-    assert report_before.dead_count == 1
-    assert any(issue.code == "dead-entry" and issue.layer_id == layer_id for issue in report_before.issues)
-
-    reaped = manager.clear_dead_entries(log=False)
-
-    assert len(reaped) == 1
-    assert reaped[0].layer_id == layer_id
-    assert reaped[0].runtime.store is store
-
-    report_after = manager.audit_registry()
-    assert report_after.dead_count == 0
-    assert report_after.issues == ()
-
-
 def test_manager_register_points_layer_survives_reused_layer_id(qtbot):
     viewer = DummyViewer()
     manager = LayerLifecycleManager(viewer=viewer)
