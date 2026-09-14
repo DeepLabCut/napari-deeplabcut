@@ -1174,16 +1174,12 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         store.set_label_mode_getter(lambda: self.label_mode)
 
         # Copy/paste patch
-        if not resources.paste_patch_installed:
-            paste_func = make_paste_data(controls, store=store)
-            install_paste_patch(layer, paste_func=paste_func)
-            resources.paste_patch_installed = True
+        paste_func = make_paste_data(controls, store=store)
+        install_paste_patch(layer, paste_func=paste_func)
 
         # Add layer to store
-        if not resources.add_wrapper_installed:
-            add_impl = MethodType(keypoints.KeypointStore.add, store)
-            install_add_wrapper(layer, add_impl=add_impl, schedule_recolor=schedule_recolor)
-            resources.add_wrapper_installed = True
+        add_impl = MethodType(keypoints.KeypointStore.add, store)
+        install_add_wrapper(layer, add_impl=add_impl, schedule_recolor=schedule_recolor)
 
         # layer-specific navigation event
         if not hasattr(layer.events, "query_next_frame"):

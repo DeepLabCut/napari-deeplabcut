@@ -52,8 +52,6 @@ class PointsRuntimeResources:
     """
 
     query_next_frame_connected: bool = False
-    add_wrapper_installed: bool = False
-    paste_patch_installed: bool = False
     keybindings_installed: bool = False
 
 
