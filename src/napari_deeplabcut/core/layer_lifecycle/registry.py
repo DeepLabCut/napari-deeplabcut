@@ -63,28 +63,6 @@ class PointsLayerSetupRequest:
     runtime_resources: PointsRuntimeResources | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class ClearedRegistryEntry(Generic[StoreT]):
-    """A registry entry that was removed because its layer was no longer live."""
-
-    layer_id: int
-    runtime: ManagedPointsRuntime[StoreT]
-
-
-@dataclass(frozen=True, slots=True)
-class RegistryAuditIssue:
-    code: str
-    message: str
-    layer_id: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class RegistryAuditReport:
-    live_count: int
-    dead_count: int
-    issues: tuple[RegistryAuditIssue, ...]
-
-
 @dataclass(slots=True)
 class _RegistryEntry(Generic[StoreT]):
     layer_id: int
@@ -194,65 +172,6 @@ class RuntimeRegistry(Generic[StoreT]):
             layer = entry.resolve_layer()
             if layer is not None:
                 yield layer, entry.runtime
-
-    # ------------------------------------------------------------------ #
-    # dead-entry handling / reporting                                    #
-    # ------------------------------------------------------------------ #
-
-    def clear_dead_entries(self, *, log: bool = True) -> tuple[ClearedRegistryEntry[StoreT], ...]:
-        """Remove dead entries and return what was reaped.
-
-        This is intentionally observable so lifecycle cleanup bugs are not silently hidden.
-        """
-        reaped: list[ClearedRegistryEntry[StoreT]] = []
-
-        for layer_id, entry in list(self._entries_by_id.items()):
-            if entry.resolve_layer() is not None:
-                continue
-            entry = self._entries_by_id.pop(layer_id, None)
-            if entry is None:
-                continue
-
-            item = ClearedRegistryEntry(layer_id=layer_id, runtime=entry.runtime)
-            reaped.append(item)
-
-            if log:
-                logger.warning(
-                    "Cleared dead managed layer entry without explicit unregister: layer_id=%s",
-                    layer_id,
-                )
-
-        return tuple(reaped)
-
-    # ------------------------------------------------------------------ #
-    # diagnostics / auditing                                             #
-    # ------------------------------------------------------------------ #
-
-    def audit(self) -> RegistryAuditReport:
-        issues: list[RegistryAuditIssue] = []
-        live_count = 0
-        dead_count = 0
-
-        for layer_id, entry in self._entries_by_id.items():
-            resolved = entry.resolve_layer()
-            if resolved is None:
-                dead_count += 1
-                issues.append(
-                    RegistryAuditIssue(
-                        code="dead-entry",
-                        message="Managed entry has no live layer",
-                        layer_id=layer_id,
-                    )
-                )
-                continue
-
-            live_count += 1
-
-        return RegistryAuditReport(
-            live_count=live_count,
-            dead_count=dead_count,
-            issues=tuple(issues),
-        )
 
     # ------------------------------------------------------------------ #
     # misc                                                               #
