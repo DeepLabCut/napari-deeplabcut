@@ -269,9 +269,12 @@ def store(points: Points) -> keypoints.KeypointStore:
     viewer = DummyViewerForStore(nsteps=nsteps)
     store = keypoints.KeypointStore(viewer, points)
 
-    # Mimic the minimal runtime wiring used by LOOP mode
+    # Mimic the minimal runtime wiring used by LOOP mode. The layer may already have been
+    # wired to the manager's own store, so take over the event the way attach_points_layer_runtime
+    # does rather than adding a second subscriber.
     if not hasattr(points.events, "query_next_frame"):
         points.events.add(query_next_frame=Event)
+    points.events.query_next_frame.disconnect()
     points.events.query_next_frame.connect(store._advance_step)
 
     return store

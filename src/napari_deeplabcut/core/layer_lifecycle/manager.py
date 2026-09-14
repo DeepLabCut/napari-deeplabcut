@@ -1177,12 +1177,8 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if not hasattr(layer.events, "query_next_frame"):
             layer.events.add(query_next_frame=Event)
 
-        if not resources.query_next_frame_connected:
-            try:
-                layer.events.query_next_frame.connect(store._advance_step)
-                resources.query_next_frame_connected = True
-            except Exception:
-                pass
+        layer.events.query_next_frame.disconnect()
+        layer.events.query_next_frame.connect(store._advance_step)
 
         if not resources.keybindings_installed:
             install_points_layer_keybindings(layer, controls, store, self.viewer)
