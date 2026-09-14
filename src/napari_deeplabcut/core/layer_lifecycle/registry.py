@@ -134,10 +134,6 @@ class RuntimeRegistry(Generic[StoreT]):
         resolved = entry.resolve_layer()
         return resolved is target
 
-    def contains_layer_id(self, layer_id: int) -> bool:
-        """Whether a registry entry exists for this id (live or stale)."""
-        return layer_id in self._entries_by_id
-
     def register(self, layer: Any, runtime: ManagedPointsRuntime[StoreT]) -> None:
         # A PublicOnlyProxy and the layer it wraps have different id()s,
         # so a caller holding either must register and resolve the same entry.
@@ -286,9 +282,6 @@ class RuntimeRegistry(Generic[StoreT]):
     # ------------------------------------------------------------------ #
     # misc                                                               #
     # ------------------------------------------------------------------ #
-
-    def clear(self) -> None:
-        self._entries_by_id.clear()
 
     @staticmethod
     def _coerce_layer_id(layer_or_id: Any) -> int:
