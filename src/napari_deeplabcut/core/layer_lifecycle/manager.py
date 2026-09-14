@@ -37,11 +37,9 @@ from ...utils.debug import log_timing
 from .display_settings import PointsDisplaySource, apply_points_display_role
 from .merge import PlaceholderConfigAction, PlaceholderConfigDecisionProvider
 from .registry import (
-    ClearedRegistryEntry,
     ManagedPointsRuntime,
     PointsLayerSetupRequest,
     PointsRuntimeResources,
-    RegistryAuditReport,
     RuntimeRegistry,
 )
 
@@ -151,12 +149,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
     def has_managed_points(self) -> bool:
         return any(True for _ in self.iter_managed_points())
-
-    def clear_dead_entries(self, *, log: bool = True) -> tuple[ClearedRegistryEntry[Any], ...]:
-        return self.registry.clear_dead_entries(log=log)
-
-    def audit_registry(self) -> RegistryAuditReport:
-        return self.registry.audit()
 
     def set_placeholder_config_decision_provider(
         self,

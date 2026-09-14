@@ -1329,18 +1329,11 @@ class KeypointControls(ViewerSingletonWidget):
                 "Data were not saved. Are you certain you want to leave?",
                 QMessageBox.Yes | QMessageBox.No,
             )
-            if choice == QMessageBox.Yes:
-                event.accept()
-            else:
+            if choice != QMessageBox.Yes:
                 event.ignore()
-        else:
-            event.accept()
-        cleared = self.layer_manager.clear_dead_entries(log=True)
-        if cleared:
-            logger.debug("Cleared %d dead entries from layer manager on close", len(cleared))
-        report = self.layer_manager.audit_registry()
-        if report.issues:
-            logger.warning("Layer manager audit on close reported issues:\n%s", report.issues)
+                return
+
+        event.accept()
 
         if self.layer_manager is not None:
             self.layer_manager.set_placeholder_config_decision_provider(None)
