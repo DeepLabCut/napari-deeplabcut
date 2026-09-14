@@ -79,6 +79,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
     """
 
     # UI signals for widget hooks
+    label_mode_changed = Signal(object)  # keypoints.LabelMode
     refresh_video_panel_requested = Signal()
     refresh_layer_status_requested = Signal()
     video_widget_visibility_requested = Signal(bool)
@@ -106,6 +107,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         self._placeholder_config_decision_provider: PlaceholderConfigDecisionProvider | None = None
 
         # Lifecycle-owned viewer/image context
+        self._label_mode = keypoints.LabelMode.default()
         self._active_dlc_image_layer_id: int | None = None
         self._image_meta = ImageMetadata()
         self._project_path: str | None = None
@@ -188,6 +190,17 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
     @property
     def image_name(self) -> str | None:
         return self._image_meta.name
+
+    @property
+    def label_mode(self) -> keypoints.LabelMode:
+        return self._label_mode
+
+    @label_mode.setter
+    def label_mode(self, value: str | keypoints.LabelMode) -> None:
+        new = keypoints.LabelMode(value)
+        if new != self._label_mode:
+            self._label_mode = new
+            self.label_mode_changed.emit(new)
 
     # ------------------------------------------------------------------ #
     # Lifecycle wiring                                                   #
@@ -1135,7 +1148,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         store: keypoints.KeypointStore,
         controls: Any,
         resolve_layer_by_id: Callable[[int], Points | None],
-        get_label_mode: Callable[[], Any],
         schedule_recolor: Callable[[Points], None],
         existing_resources: PointsRuntimeResources | None = None,
     ) -> PointsRuntimeResources:
@@ -1159,7 +1171,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         # Narrow lifecycle dependencies injected explicitly.
         store.attach_layer_resolver(resolve_layer_by_id)
-        store.set_label_mode_getter(get_label_mode)
+        store.set_label_mode_getter(lambda: self.label_mode)
 
         # Copy/paste patch
         if not resources.paste_patch_installed:

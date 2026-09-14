@@ -92,6 +92,7 @@ class KeypointStore:
         layer: Points,
         *,
         resolve_layer_by_id: Callable[[int], Points] | None = None,
+        reset_step: bool = True,
     ):
         self.viewer = viewer
         self._keypoints = []
@@ -99,6 +100,7 @@ class KeypointStore:
 
         self._layer_id: int | None = None
         self._resolve_layer_by_id = resolve_layer_by_id
+        self._get_label_mode: Callable[[], LabelMode] = LabelMode.default
 
         # Fallback if no resolver is provided
         self._layer_ref: weakref.ReferenceType[Points] | None = None
@@ -106,7 +108,8 @@ class KeypointStore:
 
         self.layer = layer  # Use the setter to initialize keypoints and header
 
-        self.viewer.dims.set_current_step(0, 0)
+        if reset_step:
+            self.viewer.dims.set_current_step(0, 0)
 
     def _set_current_keypoint_properties(
         self,
@@ -363,8 +366,7 @@ class KeypointStore:
         # Clear stale cross-frame selection before any logic
         self._clear_stale_selection_if_off_frame()
 
-        get_mode = getattr(self, "_get_label_mode", None)
-        label_mode = get_mode() if callable(get_mode) else None
+        label_mode = self._get_label_mode()
 
         layer = self.layer
         requested = self.current_keypoint
