@@ -146,7 +146,6 @@ class KeypointControls(ViewerSingletonWidget):
         self.last_saved_label.hide()
 
         self._color_mode = keypoints.ColorMode.default()
-        self._label_mode = keypoints.LabelMode.default()
 
         # The dock is created after this constructor returns, so the main window is not
         # reachable through the Qt parent chain yet.
@@ -284,7 +283,8 @@ class KeypointControls(ViewerSingletonWidget):
 
         # Modes init
         self.color_mode = self._color_mode
-        self.label_mode = self._label_mode
+        self.layer_manager.label_mode_changed.connect(self._on_label_mode_changed)
+        self._on_label_mode_changed(self.layer_manager.label_mode)
 
         # Substitute default menu action with custom one
         for action in self.viewer.window.file_menu.actions()[::-1]:
@@ -362,21 +362,20 @@ class KeypointControls(ViewerSingletonWidget):
 
     @property
     def label_mode(self):
-        return str(self._label_mode)
+        return str(self.layer_manager.label_mode)
 
     @label_mode.setter
     def label_mode(self, mode: str | keypoints.LabelMode):
-        self._label_mode = keypoints.LabelMode(mode)
-        self.viewer.status = self.label_mode
-        mode_ = str(mode).lower()
-        if mode_ == keypoints.LabelMode.LOOP.value.lower():
-            for menu in self._menus:
-                menu._locked = True
-        else:
-            for menu in self._menus:
-                menu._locked = False
+        self.layer_manager.label_mode = mode
+
+    def _on_label_mode_changed(self, mode: keypoints.LabelMode):
+        self.viewer.status = str(mode)
+
+        locked = mode is keypoints.LabelMode.LOOP
+        for menu in self._menus:
+            menu._locked = locked
         for btn in self._radio_group.buttons():
-            if btn.text().lower() == mode_:
+            if btn.text().lower() == str(mode):
                 btn.setChecked(True)
                 break
 
@@ -683,7 +682,6 @@ class KeypointControls(ViewerSingletonWidget):
                 store=store,
                 controls=self,
                 resolve_layer_by_id=self.layer_manager.resolve_live_layer,
-                get_label_mode=lambda: self._label_mode,
                 schedule_recolor=self._schedule_recolor,
                 existing_resources=req.existing_resources,
             )

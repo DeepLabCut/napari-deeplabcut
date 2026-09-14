@@ -36,6 +36,17 @@ def test_keypoint_controls(keypoint_controls):
 
 
 @pytest.mark.usefixtures("qtbot")
+def test_label_mode_set_on_controls_reaches_store(keypoint_controls, points):
+    """The mode the user picks must be the mode KeypointStore.add branches on."""
+    store = keypoint_controls.layer_manager.get_store(points)
+    assert store is not None
+
+    keypoint_controls.label_mode = "quick"
+
+    assert store._get_label_mode() is keypoints.LabelMode.QUICK
+
+
+@pytest.mark.usefixtures("qtbot")
 def test_save_layers(viewer, keypoint_controls, points):
     viewer.layers.selection.add(points)
     keypoint_controls._save_layers_dialog()
