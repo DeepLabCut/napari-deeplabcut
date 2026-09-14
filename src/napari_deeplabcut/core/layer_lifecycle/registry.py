@@ -177,18 +177,14 @@ class RuntimeRegistry(Generic[StoreT]):
             return None
         return entry.runtime
 
-    def require_live_runtime(self, layer_or_id: Any) -> ManagedPointsRuntime[StoreT]:
-        runtime = self.get_live_runtime(layer_or_id)
-        if runtime is None:
-            raise KeyError(f"Managed live runtime not found: {layer_or_id!r}")
-        return runtime
-
     def get_store(self, layer_or_id: Any) -> StoreT | None:
         runtime = self.get_live_runtime(layer_or_id)
         return None if runtime is None else runtime.store
 
     def require_store(self, layer_or_id: Any) -> StoreT:
-        runtime = self.require_live_runtime(layer_or_id)
+        runtime = self.get_live_runtime(layer_or_id)
+        if runtime is None:
+            raise KeyError(f"Managed live runtime not found: {layer_or_id!r}")
         return runtime.store
 
     # ------------------------------------------------------------------ #
@@ -214,14 +210,6 @@ class RuntimeRegistry(Generic[StoreT]):
     # dead-entry handling / reporting                                    #
     # ------------------------------------------------------------------ #
 
-    def dead_layer_ids(self) -> tuple[int, ...]:
-        """Return ids whose registered layer object is no longer live."""
-        dead: list[int] = []
-        for layer_id, entry in self._entries_by_id.items():
-            if entry.resolve_layer() is None:
-                dead.append(layer_id)
-        return tuple(dead)
-
     def clear_dead_entries(self, *, log: bool = True) -> tuple[ClearedRegistryEntry[StoreT], ...]:
         """Remove dead entries and return what was reaped.
 
@@ -229,7 +217,9 @@ class RuntimeRegistry(Generic[StoreT]):
         """
         reaped: list[ClearedRegistryEntry[StoreT]] = []
 
-        for layer_id in list(self.dead_layer_ids()):
+        for layer_id, entry in list(self._entries_by_id.items()):
+            if entry.resolve_layer() is not None:
+                continue
             entry = self._entries_by_id.pop(layer_id, None)
             if entry is None:
                 continue
