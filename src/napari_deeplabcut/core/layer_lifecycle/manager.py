@@ -1189,7 +1189,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         # layer-specific navigation event
         if not hasattr(layer.events, "query_next_frame"):
             layer.events.add(query_next_frame=Event)
-            resources.query_next_frame_event_added = True
 
         if not resources.query_next_frame_connected:
             try:
