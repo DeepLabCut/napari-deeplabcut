@@ -51,7 +51,6 @@ class PointsRuntimeResources:
     Intended to fit in ManagedPointsRuntime.resources.
     """
 
-    query_next_frame_connected: bool = False
     keybindings_installed: bool = False
 
 
