@@ -429,6 +429,27 @@ def test_manager_reap_dead_entries_removes_stale_entry(qtbot):
     assert report_after.issues == ()
 
 
+def test_manager_register_points_layer_survives_reused_layer_id(qtbot):
+    viewer = DummyViewer()
+    manager = LayerLifecycleManager(viewer=viewer)
+
+    stale = make_points("stale")
+    manager.register_managed_points_layer(stale, object())
+
+    entry = manager.registry._entries_by_id.pop(id(stale))
+    pts_b = make_points("pts-b")
+    entry.layer_id = id(pts_b)
+    manager.registry._entries_by_id[id(pts_b)] = entry
+
+    del stale
+    gc.collect()
+
+    store_b = object()
+    manager.register_managed_points_layer(pts_b, store_b)
+
+    assert manager.get_store(pts_b) is store_b
+
+
 @pytest.mark.parametrize(
     ("event_factory", "expected_name"),
     [

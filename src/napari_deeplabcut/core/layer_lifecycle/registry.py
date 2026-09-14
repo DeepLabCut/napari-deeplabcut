@@ -131,8 +131,13 @@ class RuntimeRegistry(Generic[StoreT]):
         # so a caller holding either must register and resolve the same entry.
         layer = unwrap(layer)
         layer_id = id(layer)
-        if layer_id in self._entries_by_id:
-            raise ValueError(f"Layer already registered: id={layer_id}")
+
+        existing = self._entries_by_id.get(layer_id)
+        if existing is not None:
+            if existing.resolve_layer() is not None:
+                raise ValueError(f"Layer already registered and live: id={layer_id}")
+            logger.warning(f"Removed dead layer entry with id={layer_id}")
+            del self._entries_by_id[layer_id]
 
         if runtime.layer_id != layer_id:
             raise ValueError(f"Runtime layer_id mismatch: runtime.layer_id={runtime.layer_id}, actual={layer_id}")

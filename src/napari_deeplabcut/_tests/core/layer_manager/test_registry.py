@@ -128,3 +128,25 @@ def test_registry_audit_reports_dead_entry_before_reap():
     assert report_after.live_count == 0
     assert report_after.dead_count == 0
     assert report_after.issues == ()
+
+
+def test_registry_register_removes_dead_entry_at_reused_id():
+    registry = RuntimeRegistry()
+
+    stale = DummyLayer()
+    registry.register(stale, ManagedPointsRuntime(layer_id=id(stale), store="stale"))
+
+    entry = registry._entries_by_id.pop(id(stale))
+    layer_b = DummyLayer()
+    entry.layer_id = id(layer_b)
+    registry._entries_by_id[id(layer_b)] = entry
+
+    del stale
+    gc.collect()
+
+    assert registry.is_managed(layer_b) is False
+
+    registry.register(layer_b, ManagedPointsRuntime(layer_id=id(layer_b), store="new"))
+
+    assert registry.is_managed(layer_b) is True
+    assert registry.get_store(layer_b) == "new"
