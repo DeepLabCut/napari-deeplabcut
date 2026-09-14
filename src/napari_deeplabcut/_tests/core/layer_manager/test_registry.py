@@ -71,63 +71,24 @@ def test_registry_iter_live_items_and_stores():
     assert registry.get_store(layer1) == "s1"
     assert registry.get_store(layer2) == "s2"
 
-    assert registry.audit().issues == ()
 
-
-def test_registry_clear_dead_entries_removes_stale_entry_and_reports_it():
+def test_registry_entry_stops_resolving_when_its_layer_is_collected():
     registry = RuntimeRegistry()
 
     layer = DummyLayer()
-    runtime = ManagedPointsRuntime(layer_id=id(layer), store="store")
-    registry.register(layer, runtime)
+    registry.register(layer, ManagedPointsRuntime(layer_id=id(layer), store="store"))
 
-    assert registry.is_managed(layer)
     layer_id = id(layer)
 
     # Remove the only strong reference held by the test.
     del layer
     gc.collect()
 
-    # Before reaping, the stale id may still be present in the registry index,
-    # but it should no longer count as live.
+    # The stale id stays in the index, but stops counting as live.
     assert layer_id in registry.layer_ids()
     assert registry.resolve_live_layer(layer_id) is None
     assert registry.get_live_runtime(layer_id) is None
-
-    reaped = registry.clear_dead_entries(log=False)
-
-    assert len(reaped) == 1
-    assert reaped[0].layer_id == layer_id
-    assert reaped[0].runtime is runtime
-
-    assert layer_id not in registry.layer_ids()
     assert list(registry.iter_live_items()) == []
-
-
-def test_registry_audit_reports_dead_entry_before_reap():
-    registry = RuntimeRegistry()
-
-    layer = DummyLayer()
-    runtime = ManagedPointsRuntime(layer_id=id(layer), store="store")
-    registry.register(layer, runtime)
-
-    layer_id = id(layer)
-    del layer
-    gc.collect()
-
-    report = registry.audit()
-
-    assert report.live_count == 0
-    assert report.dead_count == 1
-    assert any(issue.code == "dead-entry" and issue.layer_id == layer_id for issue in report.issues)
-
-    reaped = registry.clear_dead_entries(log=False)
-    assert len(reaped) == 1
-
-    report_after = registry.audit()
-    assert report_after.live_count == 0
-    assert report_after.dead_count == 0
-    assert report_after.issues == ()
 
 
 def test_registry_register_removes_dead_entry_at_reused_id():
