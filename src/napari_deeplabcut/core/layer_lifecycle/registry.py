@@ -51,12 +51,10 @@ class PointsRuntimeResources:
     Intended to fit in ManagedPointsRuntime.resources.
     """
 
-    query_next_frame_event_added: bool = False
     query_next_frame_connected: bool = False
     add_wrapper_installed: bool = False
     paste_patch_installed: bool = False
     keybindings_installed: bool = False
-    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -116,10 +114,6 @@ class RuntimeRegistry(Generic[StoreT]):
     # ------------------------------------------------------------------ #
     # core identity / registration                                       #
     # ------------------------------------------------------------------ #
-
-    def __len__(self) -> int:
-        """Number of currently live entries."""
-        return sum(1 for _layer, _runtime in self.iter_live_items())
 
     def layer_ids(self) -> tuple[int, ...]:
         """All currently registered entry ids, including stale/dead ones."""
@@ -198,14 +192,6 @@ class RuntimeRegistry(Generic[StoreT]):
             if layer is not None:
                 yield layer, entry.runtime
 
-    def iter_live_layers(self) -> Iterator[Any]:
-        for layer, _runtime in self.iter_live_items():
-            yield layer
-
-    def iter_live_runtimes(self) -> Iterator[ManagedPointsRuntime[StoreT]]:
-        for _layer, runtime in self.iter_live_items():
-            yield runtime
-
     # ------------------------------------------------------------------ #
     # dead-entry handling / reporting                                    #
     # ------------------------------------------------------------------ #
@@ -264,10 +250,6 @@ class RuntimeRegistry(Generic[StoreT]):
             dead_count=dead_count,
             issues=tuple(issues),
         )
-
-    def assert_consistent(self) -> None:
-        report = self.audit()
-        assert not report.issues, f"Registry consistency issues: {report.issues!r}"
 
     # ------------------------------------------------------------------ #
     # misc                                                               #
