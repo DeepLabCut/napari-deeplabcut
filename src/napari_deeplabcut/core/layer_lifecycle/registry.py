@@ -92,14 +92,11 @@ class RegistryAuditReport:
 @dataclass(slots=True)
 class _RegistryEntry(Generic[StoreT]):
     layer_id: int
-    layer_ref: weakref.ReferenceType[Any] | None
-    strong_layer: Any | None
+    layer_ref: weakref.ReferenceType[Any]
     runtime: ManagedPointsRuntime[StoreT]
 
-    def resolve_layer(self) -> Any | None:
-        if self.layer_ref is not None:
-            return self.layer_ref()
-        return self.strong_layer
+    def resolve_layer(self) -> Any:
+        return self.layer_ref()
 
 
 class RuntimeRegistry(Generic[StoreT]):
@@ -152,20 +149,11 @@ class RuntimeRegistry(Generic[StoreT]):
         if runtime.layer_id != layer_id:
             raise ValueError(f"Runtime layer_id mismatch: runtime.layer_id={runtime.layer_id}, actual={layer_id}")
 
-        try:
-            layer_ref: weakref.ReferenceType[Any] | None = weakref.ref(layer)
-            strong_layer = None
-        except TypeError:
-            logger.error("Could not cleanly register layer as a weakref; storing strong reference instead: %r", layer)
-            # Fallback for objects that do not support weakref.
-            # This means the registry *will* strongly hold such layers.
-            layer_ref = None
-            strong_layer = layer
+        layer_ref: weakref.ReferenceType[Any] | None = weakref.ref(layer)
 
         self._entries_by_id[layer_id] = _RegistryEntry(
             layer_id=layer_id,
             layer_ref=layer_ref,
-            strong_layer=strong_layer,
             runtime=runtime,
         )
 
