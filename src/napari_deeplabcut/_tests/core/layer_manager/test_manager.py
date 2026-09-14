@@ -14,6 +14,7 @@ from napari_deeplabcut.core.layer_lifecycle.display_settings import (
     MACHINE_LABELS_POINTS_DISPLAY,
     PointsDisplaySource,
 )
+from napari_deeplabcut.core.layer_lifecycle.manager import PointsRuntimeResources
 from napari_deeplabcut.tracking.core.data import build_tracking_result_metadata
 
 
@@ -642,3 +643,44 @@ def test_setup_points_layer_styles_machine_labels_using_config(
 
     if MACHINE_LABELS_POINTS_DISPLAY.border_color is not None:
         assert getattr(pts, "border_color", None) is not None
+
+
+def test_attach_points_layer_runtime_reattach_rebinds_to_current_store(qtbot, monkeypatch):
+    """Re-attaching rebinds the add wrapper to the store passed."""
+    from napari_deeplabcut.core.layer_lifecycle import manager as manager_module
+
+    class RecordingStore(FakeStore):
+        def __init__(self, viewer, layer):
+            super().__init__(viewer, layer)
+            self.added = []
+
+        def add(self, coord):
+            self.added.append(coord)
+
+    monkeypatch.setattr(manager_module.keypoints, "KeypointStore", RecordingStore)
+
+    viewer = DummyViewer()
+    manager = LayerLifecycleManager(viewer=viewer)
+    manager.viewer_keybinds_installed = True
+
+    layer = make_points()
+    first = RecordingStore(viewer, layer)
+    second = RecordingStore(viewer, layer)
+
+    def attach(store, resources):
+        return manager.attach_points_layer_runtime(
+            layer=layer,
+            store=store,
+            controls=SimpleNamespace(),
+            resolve_layer_by_id=lambda _layer_id: layer,
+            schedule_recolor=lambda _layer: None,
+            existing_resources=resources,
+        )
+
+    resources = attach(first, PointsRuntimeResources(keybindings_installed=True))
+    attach(second, resources)
+
+    layer.add(np.zeros((1, 3)))
+
+    assert first.added == []
+    assert len(second.added) == 1
