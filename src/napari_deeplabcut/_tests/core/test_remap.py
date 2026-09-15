@@ -309,6 +309,37 @@ def test_ambiguous_depth1_remap_is_rejected_and_refuses_paths_update():
     assert res.changed is False
 
 
+def test_dataset_scoped_policy_refuses_a_clean_basename_only_match():
+    """The dangerous case: a perfect 1:1 match that proves nothing about identity.
+
+    ORDERED_DEPTHS accepts this and would migrate the data onto another dataset's frames.
+    """
+    old_paths = ["p/labeled-data/videoA/img000.png", "p/labeled-data/videoA/img001.png"]
+    new_paths = ["p/labeled-data/videoB/img000.png", "p/labeled-data/videoB/img001.png"]
+    data = np.array([[0.0, 1.0, 2.0], [1.0, 3.0, 4.0]], dtype=float)
+
+    permissive = remap_layer_data_by_paths(
+        data=data,
+        old_paths=old_paths,
+        new_paths=new_paths,
+        time_col=0,
+        policy=PathMatchPolicy.ORDERED_DEPTHS,
+    )
+    assert permissive.depth_used == 1
+    assert permissive.accept_paths_update is True
+
+    scoped = remap_layer_data_by_paths(
+        data=data,
+        old_paths=old_paths,
+        new_paths=new_paths,
+        time_col=0,
+        policy=PathMatchPolicy.DATASET_SCOPED,
+    )
+    assert scoped.depth_used is None
+    assert scoped.accept_paths_update is False
+    assert scoped.applied is False
+
+
 def test_no_overlap_remap_refuses_paths_update():
     """The other rejection path callers depend on: nothing matched at any depth."""
     res = remap_layer_data_by_paths(

@@ -758,16 +758,51 @@ def test_remap_frame_indices_leaves_metadata_alone_when_match_is_ambiguous(monke
 
 
 def test_remap_frame_indices_adopts_root_and_paths_together_when_frames_map():
-    new_paths = ["labeled-data/videoB/imgA000.png"]
-    layer = _points_bound_to(["labeled-data/videoA/imgA000.png"], root="C:/project/labeled-data/videoA")
+    new_paths = ["labeled-data/videoA/imgA000.png"]
+    layer = _points_bound_to(["old/labeled-data/videoA/imgA000.png"], root="D:/moved/labeled-data/videoA")
 
     manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
-    manager._image_meta = ImageMetadata(paths=new_paths, root="C:/project/labeled-data/videoB")
+    manager._image_meta = ImageMetadata(paths=new_paths, root="C:/project/labeled-data/videoA")
 
     manager._remap_frame_indices(layer)
 
     assert layer.metadata["paths"] == new_paths
-    assert layer.metadata["root"] == "C:/project/labeled-data/videoB"
+    assert layer.metadata["root"] == "C:/project/labeled-data/videoA"
+
+
+def test_remap_frame_indices_refuses_a_different_folder_with_the_same_frame_names(monkeypatch):
+    """DLC frame names repeat across datasets, so a full basename match is not identity."""
+    old_paths = ["labeled-data/videoA/img000.png", "labeled-data/videoA/img001.png"]
+    layer = _points_bound_to(old_paths, root="C:/project/labeled-data/videoA")
+
+    manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
+    manager._image_meta = ImageMetadata(
+        paths=["labeled-data/videoB/img000.png", "labeled-data/videoB/img001.png"],
+        root="C:/project/labeled-data/videoB",
+    )
+
+    warned = []
+    monkeypatch.setattr(manager, "_report_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
+
+    manager._remap_frame_indices(layer)
+
+    assert layer.metadata["paths"] == old_paths
+    assert layer.metadata["root"] == "C:/project/labeled-data/videoA"
+    assert warned == [layer]
+
+
+def test_remap_frame_indices_allows_basename_match_within_the_same_dataset_folder():
+    """A rewritten prefix is the case depth-1 matching exists to repair."""
+    new_paths = ["/mnt/moved/labeled-data/videoA/img000.png"]
+    layer = _points_bound_to(["img000.png"], root="C:/project/labeled-data/videoA")
+
+    manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
+    manager._image_meta = ImageMetadata(paths=new_paths, root="/mnt/moved/labeled-data/videoA")
+
+    manager._remap_frame_indices(layer)
+
+    assert layer.metadata["paths"] == new_paths
+    assert layer.metadata["root"] == "/mnt/moved/labeled-data/videoA"
 
 
 def test_dataset_mismatch_is_reported_once_per_target_folder(qtbot):
