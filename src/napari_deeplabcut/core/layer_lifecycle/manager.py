@@ -4,8 +4,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterator
 from enum import Enum
+from pathlib import Path
 from types import MethodType
 from typing import TYPE_CHECKING, Any
+from weakref import WeakKeyDictionary
 
 import numpy as np
 from napari.layers import Image, Layer, Points, Tracks
@@ -26,7 +28,7 @@ from ...core.metadata import (
     sync_points_from_image,
     write_points_meta,
 )
-from ...core.project_paths import PathMatchPolicy
+from ...core.project_paths import PathMatchPolicy, is_same_dataset
 from ...core.remap import remap_layer_data_by_paths
 from ...napari_compat import install_add_wrapper, install_paste_patch
 from ...napari_compat.points_layer import make_paste_data
@@ -97,6 +99,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
     # Session management
     session_conflict_rejected = Signal(str)  # if a new DLC folder is loaded on top of the current one
+    layer_dataset_mismatch = Signal(str)  # if a layer could not follow the newly opened folder
 
     def __init__(self, viewer: napari.Viewer, *, parent: QObject | None = None) -> None:
         super().__init__(parent=parent)
@@ -108,7 +111,11 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         # Lifecycle-owned viewer/image context
         self._active_dlc_image_layer_id: int | None = None
         self._image_meta = ImageMetadata()
+        self._image_dataset_key: str | None = None
         self._project_path: str | None = None
+
+        # Last folder each layer was warned about failing to follow
+        self._dataset_mismatch_warned: WeakKeyDictionary[Layer, str] = WeakKeyDictionary()
 
         self._attached = False
         self.viewer_keybinds_installed = False
@@ -354,6 +361,46 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             "If you meant to switch to a different project/video, "
             "please save and clear the current layers before loading the new labeled data folder.",
         )
+
+    def _belongs_to_current_dataset(self, layer_dataset_key: str | None) -> bool:
+        """Return True if a layer may follow the image context now loaded.
+
+        A layer with no key is unbound (a config placeholder, say) and adopts what is
+        open.
+        """
+        if layer_dataset_key is None:
+            return True
+
+        return is_same_dataset(layer_dataset_key, self._image_dataset_key)
+
+    def _report_layer_left_on_previous_dataset(self, layer: Any) -> None:
+        """Report that a layer did not follow the newly opened folder.
+
+        The remap sweep visits every non-Image layer on every qualifying insert, so one
+        folder open reaches this more than once for the same layer. Report only the first
+        time a given layer fails to follow a given folder; the log records every pass.
+        """
+        root = (layer.metadata or {}).get("root")
+        dataset = Path(str(root)).name if root else "its original folder"
+        target = self._image_dataset_key or str(self._image_meta.root or "")
+
+        if self._dataset_mismatch_warned.get(layer) == target:
+            logger.debug(
+                "Extra dataset-mismatch notification for layer=%r folder=%r",
+                getattr(layer, "name", layer),
+                target,
+            )
+            return
+
+        self._dataset_mismatch_warned[layer] = target
+        reason = (
+            f"'{getattr(layer, 'name', layer)}' could not be matched to the frames in the folder "
+            f"that was opened; it will still save as '{dataset}'.\n"
+            "Please clear it before labelling the new folder."
+        )
+        self.viewer.status = reason
+
+        self._single_shot_owned(0, lambda: self.layer_dataset_mismatch.emit(reason))
 
     def _reject_conflicting_dlc_image_layer(self, layer: Image, reason: str) -> None:
         """Reject a conflicting DLC session image safely.
@@ -640,6 +687,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 pass
 
         self._active_dlc_image_layer_id = id(layer)
+        self._image_dataset_key = (layer.metadata or {}).get("dataset_key")
         context_changed = self._update_image_meta_from_layer(layer)
 
         if not self._project_path:
@@ -847,6 +895,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 if self._active_dlc_image_layer_id == id(layer):
                     self._active_dlc_image_layer_id = None
                     self._image_meta = ImageMetadata()
+                    self._image_dataset_key = None
                     self._project_path = None
 
                     paths = layer.metadata.get("paths")
@@ -876,18 +925,42 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             md = layer.metadata
             old_paths = md.get("paths") or []
 
-            try:
-                safe_image_meta = self._image_meta.model_dump(exclude_none=True)
-                safe_image_meta.pop("paths", None)
-                layer.metadata.update(safe_image_meta)
-            except Exception:
-                logger.debug(
-                    "Failed to sync non-path image metadata for layer=%r",
+            if not self._belongs_to_current_dataset(md.get("dataset_key")):
+                logger.warning(
+                    "Layer %r belongs to %s, not to the folder just opened (%s); leaving it alone.",
                     getattr(layer, "name", str(layer)),
-                    exc_info=True,
+                    md.get("dataset_key"),
+                    self._image_dataset_key,
                 )
+                self._report_layer_left_on_previous_dataset(layer)
+                return
+
+            def _adopt_image_context() -> None:
+                """Take root/shape/name from the image context, and bind the dataset.
+
+                Only safe alongside a `paths` update: a layer whose root names one dataset
+                while its paths name another saves into the first and is indexed against
+                the second.
+
+                Binding matters for layers that start unbound, such as the config.yaml
+                placeholder.
+                """
+                try:
+                    safe_image_meta = self._image_meta.model_dump(exclude_none=True)
+                    safe_image_meta.pop("paths", None)
+                    layer.metadata.update(safe_image_meta)
+                    if layer.metadata.get("dataset_key") is None and self._image_dataset_key is not None:
+                        layer.metadata["dataset_key"] = self._image_dataset_key
+                except Exception:
+                    logger.debug(
+                        "Failed to sync non-path image metadata for layer=%r",
+                        getattr(layer, "name", str(layer)),
+                        exc_info=True,
+                    )
 
             if not old_paths:
+                # Not yet bound to any dataset, so there is nothing to contradict.
+                _adopt_image_context()
                 logger.debug(
                     "Skipping remap for layer=%r: no existing layer metadata paths.",
                     getattr(layer, "name", str(layer)),
@@ -908,6 +981,8 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                     int(np.nanmax(arr_before[:, time_col])) if arr_before.size else None,
                 )
 
+            # Matching on bare filenames is only meaningful once we know both sides are the
+            # same dataset; so extract_frames's fixed frame naming cannot make unrelated folders match.
             res = remap_layer_data_by_paths(
                 data=layer.data,
                 old_paths=old_paths,
@@ -930,9 +1005,20 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 layer.data = res.data
 
             if res.accept_paths_update:
+                _adopt_image_context()
                 layer.metadata["paths"] = list(new_paths)
                 if isinstance(layer, Points):
                     mark_layer_presentation_changed(layer)
+
+            else:
+                # Either no overlap at all, or a match too ambiguous to trust
+                logger.warning(
+                    "Remap rejected for %s: %s Leaving it bound to %s.",
+                    getattr(layer, "name", str(layer)),
+                    res.message,
+                    md.get("root"),
+                )
+                self._report_layer_left_on_previous_dataset(layer)
 
             if res.depth_used is None:
                 logger.debug("Remap skipped for %s: %s", getattr(layer, "name", str(layer)), res.message)

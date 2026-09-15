@@ -559,6 +559,15 @@ class PointsMetadata(BaseModel):
     shape: tuple[int, ...] | None = None
     name: str | None = None
 
+    dataset_key: str | None = Field(
+        default=None,
+        description=(
+            "Absolute folder this layer was read from, assigned once at read time and never "
+            "rewritten. Unlike root and paths, which are overwritten when a layer adopts a new "
+            "image context, this can be used to decide whether that adoption should happen. "
+        ),
+    )
+
     project: str | None = None
     header: DLCHeaderModel | None = None
     io: IOProvenance | None = None

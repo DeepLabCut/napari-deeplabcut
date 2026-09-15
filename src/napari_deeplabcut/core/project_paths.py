@@ -19,6 +19,7 @@ Therefore the root anchor must be inferable from what the user opened:
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterable
 from enum import Enum
 from pathlib import Path, PureWindowsPath
@@ -91,6 +92,11 @@ class PathMatchPolicy(Enum):
     - Try matching with depth=3
     - If no overlap, try depth=2
     - If still no overlap, try depth=1
+
+    Depth=1 compares bare filenames, and DLC names are standard for extracted frames
+    (img000.png, img001.png, ...) in every dataset folder of every project, so a match
+    there does not inform about actual data provenance.
+    Use this only to realign frames within a dataset already known to be the same.
     """
 
     ORDERED_DEPTHS = "ordered_depths"
@@ -732,6 +738,45 @@ def infer_dlc_project_from_video_path(
 # -----------------------------------------------------------------------------
 # Lifecycle/session helpers
 # -----------------------------------------------------------------------------
+def dataset_key_for_folder(folder: str | Path | None) -> str | None:
+    """Stable identity of the dataset folder a layer was read from.
+
+    Assigned once at read time and never rewritten. ``root`` and ``paths`` cannot serve
+    this purpose: adopting a new image context overwrites them, so using them as evidence
+    for whether that adoption should happen is circular.
+
+    Note this is dataset-level, not project-level: `session_key_from_project_context`
+    resolves to the project root and so cannot tell two videos in one project apart.
+    """
+    if not folder:
+        return None
+
+    try:
+        return str(Path(folder).expanduser().resolve())
+    except Exception:
+        logger.debug("Could not resolve dataset folder %r", folder, exc_info=True)
+        return str(folder)
+
+
+def is_same_dataset(a: str | None, b: str | None) -> bool:
+    """Return True if two dataset keys name the same folder on disk.
+
+    The same folder reaches us under more than one spelling: differing case or separators
+    on Windows, and a mapped drive against the UNC path behind it.
+    """
+    if a is None or b is None:
+        return False
+
+    if os.path.normcase(a) == os.path.normcase(b):
+        return True
+
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        logger.debug("Could not compare dataset folders %r and %r on disk", a, b, exc_info=True)
+        return False
+
+
 def session_key_from_project_context(ctx: DLCProjectContext | None) -> str | None:
     """
     Build a stable session key from the strongest available project context hint.
