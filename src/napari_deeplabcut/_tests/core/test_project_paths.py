@@ -87,39 +87,28 @@ def test_path_match_policy_ordered_depths():
     assert paths_mod.PathMatchPolicy.ORDERED_DEPTHS.depths == (3, 2, 1)
 
 
-def test_path_match_policy_dataset_scoped_stops_above_basenames():
-    assert paths_mod.PathMatchPolicy.DATASET_SCOPED.depths == (3, 2)
+def test_dataset_key_is_absolute_two_projects_stay_distinct(tmp_path: Path):
+    """The dataset folder name alone repeats across projects; the resolved path does not."""
+    a = tmp_path / "project-A" / "labeled-data" / "mouse1"
+    b = tmp_path / "project-B" / "labeled-data" / "mouse1"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+
+    key_a = paths_mod.dataset_key_for_folder(a)
+    key_b = paths_mod.dataset_key_for_folder(b)
+
+    assert key_a != key_b
+    assert key_a == paths_mod.dataset_key_for_folder(str(a))
+    assert paths_mod.dataset_key_for_folder(None) is None
 
 
-def test_find_matching_depth_dataset_scoped_refuses_basename_only_overlap():
-    """DLC frame names collide across datasets, so a basename match proves nothing."""
-    old_paths = ["/project/labeled-data/videoA/img001.png"]
-    new_paths = ["/project/labeled-data/videoB/img001.png"]
+def test_points_metadata_round_trip_preserves_dataset_key():
+    """Identity must survive the metadata sync that runs on every image insert."""
+    from napari_deeplabcut.config.models import PointsMetadata
 
-    assert paths_mod.find_matching_depth(old_paths, new_paths) == 1
-    assert (
-        paths_mod.find_matching_depth(
-            old_paths,
-            new_paths,
-            policy=paths_mod.PathMatchPolicy.DATASET_SCOPED,
-        )
-        is None
-    )
+    meta = PointsMetadata(root="C:/p/labeled-data/videoA", dataset_key="C:/p/labeled-data/videoA")
 
-
-def test_find_matching_depth_dataset_scoped_still_matches_a_moved_project():
-    """Only the prefix changed, so depth=2 still identifies the dataset."""
-    old_paths = ["C:/old/labeled-data/videoA/img001.png"]
-    new_paths = ["/mnt/new/place/labeled-data/videoA/img001.png"]
-
-    assert (
-        paths_mod.find_matching_depth(
-            old_paths,
-            new_paths,
-            policy=paths_mod.PathMatchPolicy.DATASET_SCOPED,
-        )
-        == 3
-    )
+    assert PointsMetadata(**meta.model_dump()).dataset_key == "C:/p/labeled-data/videoA"
 
 
 def test_find_matching_depth_prefers_deepest_first_match():
