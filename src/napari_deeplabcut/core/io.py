@@ -67,6 +67,7 @@ from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
 from napari_deeplabcut.core.metadata import attach_source_and_io_to_layer_kwargs, parse_points_metadata
 from napari_deeplabcut.core.project_paths import (
     canonicalize_path,
+    dataset_key_for_folder,
     find_nearest_config,
     infer_dlc_project_from_points_meta,
 )
@@ -247,6 +248,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     )
     layer_props["name"] = file.stem
     layer_props["metadata"]["root"] = str(file.parent)
+    layer_props["metadata"]["dataset_key"] = dataset_key_for_folder(file.parent)
     layer_props["metadata"]["name"] = layer_props["name"]
     layer_props["metadata"]["config_colormap"] = config_colormap
 
@@ -852,6 +854,7 @@ def _build_image_layer_kwargs(
     metadata = {
         "paths": [canonicalize_path(fp, 3) for fp in filepaths],
         "root": str(filepaths[0].parent),
+        "dataset_key": dataset_key_for_folder(filepaths[0].parent),
     }
     if dlc_meta is not None:
         metadata["dlc"] = dlc_meta

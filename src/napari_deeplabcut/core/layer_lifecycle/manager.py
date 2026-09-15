@@ -112,6 +112,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         self._label_mode = keypoints.LabelMode.default()
         self._active_dlc_image_layer_id: int | None = None
         self._image_meta = ImageMetadata()
+        self._image_dataset_key: str | None = None
         self._project_path: str | None = None
 
         # Last folder each layer was warned about failing to follow
@@ -367,22 +368,16 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             "please save and clear the current layers before loading the new labeled data folder.",
         )
 
-    def _same_dataset_folder(self, layer_root: str | None) -> bool:
-        """Return True if a layer's root and the image context name the same dataset folder.
+    def _belongs_to_current_dataset(self, layer_dataset_key: str | None) -> bool:
+        """Return True if a layer may follow the image context now loaded.
 
-        Compares the folder name rather than the whole path.
-        Only case where we must match frames on filename alone is a rewritten prefix
-        (project moved between machines, labeled-data renamed).
+        A layer with no key is unbound (a config placeholder, say) and adopts what is
+        open.
         """
-        image_root = self._image_meta.root
-        if not layer_root or not image_root:
-            return False
+        if layer_dataset_key is None:
+            return True
 
-        try:
-            return Path(str(layer_root)).name.casefold() == Path(str(image_root)).name.casefold()
-        except Exception:
-            logger.debug("Could not compare dataset folders %r and %r", layer_root, image_root, exc_info=True)
-            return False
+        return layer_dataset_key == self._image_dataset_key
 
     def _report_layer_left_on_previous_dataset(self, layer: Any) -> None:
         """Report that a layer did not follow the newly opened folder.
@@ -698,6 +693,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 pass
 
         self._active_dlc_image_layer_id = layer_key(layer)
+        self._image_dataset_key = (layer.metadata or {}).get("dataset_key")
         context_changed = self._update_image_meta_from_layer(layer)
 
         if not self._project_path:
@@ -901,6 +897,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 if self._active_dlc_image_layer_id == layer_key(layer):
                     self._active_dlc_image_layer_id = None
                     self._image_meta = ImageMetadata()
+                    self._image_dataset_key = None
                     self._project_path = None
 
                     paths = layer.metadata.get("paths")
@@ -929,6 +926,16 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
             md = layer.metadata
             old_paths = md.get("paths") or []
+
+            if not self._belongs_to_current_dataset(md.get("dataset_key")):
+                logger.warning(
+                    "Layer %r belongs to %s, not to the folder just opened (%s); leaving it alone.",
+                    getattr(layer, "name", str(layer)),
+                    md.get("dataset_key"),
+                    self._image_dataset_key,
+                )
+                self._report_layer_left_on_previous_dataset(layer)
+                return
 
             def _adopt_image_context() -> None:
                 """Take root/shape/name from the image context.
@@ -972,19 +979,13 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 )
 
             # Matching on bare filenames is only meaningful once we know both sides are the
-            # same dataset; otherwise DLC's fixed frame naming makes unrelated folders match.
-            policy = (
-                PathMatchPolicy.ORDERED_DEPTHS
-                if self._same_dataset_folder(md.get("root"))
-                else PathMatchPolicy.DATASET_SCOPED
-            )
-
+            # same dataset; to avoid fixed frame naming making unrelated folders match.
             res = remap_layer_data_by_paths(
                 data=layer.data,
                 old_paths=old_paths,
                 new_paths=new_paths,
                 time_col=time_col,
-                policy=policy,
+                policy=PathMatchPolicy.ORDERED_DEPTHS,
             )
 
             logger.debug(
