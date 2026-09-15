@@ -849,3 +849,33 @@ def test_dataset_mismatch_is_reported_once_per_target_folder(qtbot):
     manager._remap_frame_indices(layer)
 
     assert rec.dataset_mismatch.count == 2
+
+
+def test_an_unbound_layer_binds_to_the_dataset_it_adopts(monkeypatch):
+    """A config placeholder must stop being unbound once it takes a folder."""
+    layer = make_points("placeholder")
+    layer.metadata = {"project": "C:/project"}
+
+    manager = _manager_showing(
+        layer,
+        paths=["labeled-data/videoA/img000.png"],
+        root="C:/project/labeled-data/videoA",
+    )
+    manager._remap_frame_indices(layer)
+
+    assert layer.metadata["dataset_key"] == "C:/project/labeled-data/videoA"
+
+    # Now a different folder reusing the same frame names must be refused.
+    manager._image_meta = ImageMetadata(
+        paths=["labeled-data/videoB/img000.png"],
+        root="C:/project/labeled-data/videoB",
+    )
+    manager._image_dataset_key = "C:/project/labeled-data/videoB"
+
+    warned = []
+    monkeypatch.setattr(manager, "_report_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
+
+    manager._remap_frame_indices(layer)
+
+    assert layer.metadata["root"] == "C:/project/labeled-data/videoA"
+    assert warned == [layer]
