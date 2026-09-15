@@ -94,11 +94,14 @@ class PathMatchPolicy(Enum):
     """
 
     ORDERED_DEPTHS = "ordered_depths"
+    DATASET_SCOPED = "dataset_scoped"
 
     @property
     def depths(self) -> tuple[int, ...]:
         if self is PathMatchPolicy.ORDERED_DEPTHS:
             return (3, 2, 1)
+        if self is PathMatchPolicy.DATASET_SCOPED:
+            return (3, 2)
         raise NotImplementedError(f"Unhandled PathMatchPolicy: {self}")
 
 

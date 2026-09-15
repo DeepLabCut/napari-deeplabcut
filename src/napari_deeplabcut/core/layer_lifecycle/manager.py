@@ -361,6 +361,23 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             "please save and clear the current layers before loading the new labeled data folder.",
         )
 
+    def _same_dataset_folder(self, layer_root: str | None) -> bool:
+        """Return True if a layer's root and the image context name the same dataset folder.
+
+        Compares the folder name rather than the whole path.
+        Only case where we must match frames on filename alone is a rewritten prefix
+        (project moved between machines, labeled-data renamed).
+        """
+        image_root = self._image_meta.root
+        if not layer_root or not image_root:
+            return False
+
+        try:
+            return Path(str(layer_root)).name.casefold() == Path(str(image_root)).name.casefold()
+        except Exception:
+            logger.debug("Could not compare dataset folders %r and %r", layer_root, image_root, exc_info=True)
+            return False
+
     def _report_layer_left_on_previous_dataset(self, layer: Any) -> None:
         """Report that a layer did not follow the newly opened folder.
 
@@ -952,12 +969,20 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                     int(np.nanmax(arr_before[:, time_col])) if arr_before.size else None,
                 )
 
+            # Matching on bare filenames is only meaningful once we know both sides are the
+            # same dataset; otherwise DLC's fixed frame naming makes unrelated folders match.
+            policy = (
+                PathMatchPolicy.ORDERED_DEPTHS
+                if self._same_dataset_folder(md.get("root"))
+                else PathMatchPolicy.DATASET_SCOPED
+            )
+
             res = remap_layer_data_by_paths(
                 data=layer.data,
                 old_paths=old_paths,
                 new_paths=new_paths,
                 time_col=time_col,
-                policy=PathMatchPolicy.ORDERED_DEPTHS,
+                policy=policy,
             )
 
             logger.debug(
