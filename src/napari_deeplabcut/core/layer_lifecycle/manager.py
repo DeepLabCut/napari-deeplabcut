@@ -388,20 +388,20 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         """
         root = (layer.metadata or {}).get("root")
         dataset = Path(str(root)).name if root else "its original folder"
-        new_root = str(self._image_meta.root or "")
+        target = self._image_dataset_key or str(self._image_meta.root or "")
 
-        if self._dataset_mismatch_warned.get(layer) == new_root:
+        if self._dataset_mismatch_warned.get(layer) == target:
             logger.debug(
                 "Extra dataset-mismatch notification for layer=%r folder=%r",
                 getattr(layer, "name", layer),
-                new_root,
+                target,
             )
             return
 
-        self._dataset_mismatch_warned[layer] = new_root
+        self._dataset_mismatch_warned[layer] = target
         reason = (
             f"'{getattr(layer, 'name', layer)}' does not contain any of the frames in the folder "
-            f"you just opened, so it still will save to '{dataset}'.\n"
+            f"you just opened; it will still save as '{dataset}'.\n"
             "Clear it before labelling the new folder."
         )
         self.viewer.status = reason
@@ -979,7 +979,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 )
 
             # Matching on bare filenames is only meaningful once we know both sides are the
-            # same dataset; to avoid fixed frame naming making unrelated folders match.
+            # same dataset; so extract_frames's fixed frame naming cannot make unrelated folders match.
             res = remap_layer_data_by_paths(
                 data=layer.data,
                 old_paths=old_paths,
