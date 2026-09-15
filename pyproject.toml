@@ -52,6 +52,7 @@ dev = [
   "pytest",
   "pytest-cov",
   "pytest-qt",
+  "pytest-xdist",
   "tox",
 ]
 tracking = [

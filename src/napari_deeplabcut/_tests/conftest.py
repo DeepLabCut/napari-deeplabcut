@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,11 +13,12 @@ import numpy as np
 import pandas as pd
 import pytest
 from napari.utils.events import Event
+from qtpy.QtCore import QSettings
 from qtpy.QtWidgets import QApplication, QDockWidget
 from skimage.io import imsave
 
 from napari_deeplabcut.config.models import DLCHeaderModel
-from napari_deeplabcut.config.settings import set_auto_open_keypoint_controls
+from napari_deeplabcut.config.settings import get_auto_open_keypoint_controls, set_auto_open_keypoint_controls
 from napari_deeplabcut.core import io as io
 from napari_deeplabcut.core import keypoints
 
@@ -36,6 +38,22 @@ os.environ["NAPARI_ASYNC"] = "0"  # avoid async teardown surprises in tests
 # os.environ["PYTEST_QT_API"] = "pyqt6" # only for local testing with pyqt6, we use pyside6 otherwise
 logging.getLogger("napari_deeplabcut").propagate = True
 # logging.getLogger("napari-deeplabcut").propagate = True # use the underscore variant to match __name__ throughout.
+
+# Keep the suite out of the real settings store.
+_settings_tmp = tempfile.TemporaryDirectory(prefix="napari-dlc-test-settings-", ignore_cleanup_errors=True)
+QSettings.setDefaultFormat(QSettings.Format.IniFormat)  # because of Win registry
+QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, _settings_tmp.name)
+
+
+def pytest_report_header(config):
+    """Point developers at parallel runs; the napari viewer fixture dominates runtime."""
+    if getattr(config.option, "numprocesses", None):
+        return None
+    return (
+        "napari-deeplabcut: running serially (~5x slower). "
+        "Use `pytest -n auto --dist loadfile` - pytest-xdist is in the dev extra. "
+        "Note: breakpoints and Debug Test do not work under xdist."
+    )
 
 
 def force_show(widget, qtbot, *, process_ms: int = 50):
@@ -69,7 +87,8 @@ def force_show(widget, qtbot, *, process_ms: int = 50):
 @pytest.fixture(autouse=True)
 def disable_auto_open_keypoint_controls():
     """Disable auto-opening of keypoint controls in tests by default."""
-    original_value = set_auto_open_keypoint_controls(False)
+    original_value = get_auto_open_keypoint_controls()
+    set_auto_open_keypoint_controls(False)
     yield
     set_auto_open_keypoint_controls(original_value)
 
@@ -93,7 +112,7 @@ def only_deeplabcut_debug_logs():
             original_levels[name] = logger.level
 
             if not (name.startswith("napari_deeplabcut") or name.startswith("napari-deeplabcut")):
-                logger.setLevel(logging.INFO)
+                logger.setLevel(max(logger.getEffectiveLevel(), logging.INFO))
 
         # Ensure our plugin is verbose
         logging.getLogger("napari_deeplabcut").setLevel(logging.DEBUG)
