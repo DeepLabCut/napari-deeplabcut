@@ -1,0 +1,73 @@
+# Build the distribution and test it as installed.
+#
+# Packaging is otherwise only exercised by the deploy job in test_and_deploy.yml,
+# which runs on tags - so a broken sdist, bad metadata, or a file missing from
+# package-data is discovered mid-release. This also catches package data that the
+# test suite reads from the source tree but that never reaches the wheel.
+#
+# Called weekly by weekly_checks.yml, and dispatchable against a specific commit to
+# validate a release candidate before tagging.
+
+name: build and test release
+
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Plugin commit, tag or branch to build"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  build-and-test-wheel:
+    name: wheel install py3.12
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Empty ref means the branch this workflow was dispatched from.
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0 # setuptools_scm needs tags to resolve a version
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: tlambert03/setup-qt-libs@v1
+
+      - name: Build and check metadata
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check --strict dist/*
+
+      - name: Install the wheel and run its tests
+        uses: aganders3/headless-gui@v2
+        with:
+          # --pyargs runs the tests that shipped inside the wheel, and the cd out of
+          # the repo stops src/ shadowing the installed package - without it this
+          # would silently retest the source tree and prove nothing.
+          run: |
+            python -m pip install "$(ls dist/*.whl)[dev,tracking]"
+            mkdir -p /tmp/wheeltest && cd /tmp/wheeltest
+            # pyproject.toml is not in tmp, so pytest has no config
+            # Keep -o args in sync with [tool.pytest.ini_options].
+            python -m pytest --pyargs napari_deeplabcut._tests -q -n auto --dist loadfile \
+              -o qt_api=pyside6 \
+              -o "markers=e2e: end-to-end tests. Invoke napari viewer fixtures, slow."
+
+      # Published by test_and_deploy.yml, so the bytes that were tested above are the
+      # bytes that reach PyPI. Artifacts are scoped to the run, so a caller's other
+      # jobs can download this.
+      - name: Upload the distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error

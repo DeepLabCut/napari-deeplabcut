@@ -107,6 +107,7 @@ generate_python_version_classifiers = true
 table_format = "long"
 
 [tool.pytest.ini_options]
+# Keep in sync with build_release workflow
 qt_api = "pyside6"
 testpaths = [ "src/napari_deeplabcut/_tests" ]
 markers = [
