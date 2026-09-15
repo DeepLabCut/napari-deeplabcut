@@ -400,9 +400,9 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         self._dataset_mismatch_warned[layer] = target
         reason = (
-            f"'{getattr(layer, 'name', layer)}' does not contain any of the frames in the folder "
-            f"you just opened; it will still save as '{dataset}'.\n"
-            "Clear it before labelling the new folder."
+            f"'{getattr(layer, 'name', layer)}' could not be matched to the frames in the folder "
+            f"that was opened; it will still save as '{dataset}'.\n"
+            "Please clear it before labelling the new folder."
         )
         self.viewer.status = reason
 
