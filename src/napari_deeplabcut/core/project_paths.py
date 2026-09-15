@@ -91,17 +91,19 @@ class PathMatchPolicy(Enum):
     - Try matching with depth=3
     - If no overlap, try depth=2
     - If still no overlap, try depth=1
+
+    Depth=1 compares bare filenames, and DLC names are standard for extracted frames
+    (img000.png, img001.png, ...) in every dataset folder of every project, so a match
+    there does not inform about actual data provenance.
+    Use this only to realign frames within a dataset already known to be the same.
     """
 
     ORDERED_DEPTHS = "ordered_depths"
-    DATASET_SCOPED = "dataset_scoped"
 
     @property
     def depths(self) -> tuple[int, ...]:
         if self is PathMatchPolicy.ORDERED_DEPTHS:
             return (3, 2, 1)
-        if self is PathMatchPolicy.DATASET_SCOPED:
-            return (3, 2)
         raise NotImplementedError(f"Unhandled PathMatchPolicy: {self}")
 
 
@@ -735,6 +737,26 @@ def infer_dlc_project_from_video_path(
 # -----------------------------------------------------------------------------
 # Lifecycle/session helpers
 # -----------------------------------------------------------------------------
+def dataset_key_for_folder(folder: str | Path | None) -> str | None:
+    """Stable identity of the dataset folder a layer was read from.
+
+    Assigned once at read time and never rewritten. ``root`` and ``paths`` cannot serve
+    this purpose: adopting a new image context overwrites them, so using them as evidence
+    for whether that adoption should happen is circular.
+
+    Note this is dataset-level, not project-level: `session_key_from_project_context`
+    resolves to the project root and so cannot tell two videos in one project apart.
+    """
+    if not folder:
+        return None
+
+    try:
+        return str(Path(folder).expanduser().resolve())
+    except Exception:
+        logger.debug("Could not resolve dataset folder %r", folder, exc_info=True)
+        return str(folder)
+
+
 def session_key_from_project_context(ctx: DLCProjectContext | None) -> str | None:
     """
     Build a stable session key from the strongest available project context hint.
