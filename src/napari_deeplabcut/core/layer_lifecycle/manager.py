@@ -936,16 +936,21 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 return
 
             def _adopt_image_context() -> None:
-                """Take root/shape/name from the image context.
+                """Take root/shape/name from the image context, and bind the dataset.
 
                 Only safe alongside a `paths` update: a layer whose root names one dataset
                 while its paths name another saves into the first and is indexed against
                 the second.
+
+                Binding matters for layers that start unbound, such as the config.yaml
+                placeholder.
                 """
                 try:
                     safe_image_meta = self._image_meta.model_dump(exclude_none=True)
                     safe_image_meta.pop("paths", None)
                     layer.metadata.update(safe_image_meta)
+                    if layer.metadata.get("dataset_key") is None and self._image_dataset_key is not None:
+                        layer.metadata["dataset_key"] = self._image_dataset_key
                 except Exception:
                     logger.debug(
                         "Failed to sync non-path image metadata for layer=%r",
