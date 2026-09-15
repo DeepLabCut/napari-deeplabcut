@@ -39,42 +39,6 @@ class DummyLayer:
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("path_str", "expected"),
-    [
-        ("project/labeled-data/mouse1", True),
-        ("project/LABELED-DATA/mouse1", True),
-        ("project/labeled-data", False),
-        ("project/images/mouse1", False),
-    ],
-)
-def test_is_dlc_dataset_root(path_str: str, expected: bool):
-    assert metadata_mod._is_dlc_dataset_root(Path(path_str)) is expected
-
-
-@pytest.mark.parametrize(
-    ("paths", "expected"),
-    [
-        (None, False),
-        ([], False),
-        (["images/img001.png"], False),
-        (["labeled-data/test/img001.png"], True),
-        ([r"labeled-data\test\img001.png"], True),
-    ],
-)
-def test_paths_look_like_labeled_data(paths, expected):
-    assert metadata_mod._paths_look_like_labeled_data(paths) is expected
-
-
-def test_looks_like_project_root_true_when_same_path(tmp_path: Path):
-    assert metadata_mod._looks_like_project_root(str(tmp_path), str(tmp_path)) is True
-
-
-def test_looks_like_project_root_false_when_different(tmp_path: Path):
-    other = tmp_path / "other"
-    assert metadata_mod._looks_like_project_root(str(tmp_path), str(other)) is False
-
-
 def test_infer_image_root_prefers_explicit_root(tmp_path: Path):
     p = tmp_path / "images" / "img001.png"
     p.parent.mkdir(parents=True)
@@ -188,27 +152,7 @@ def test_sync_points_from_image_fills_missing_fields():
     assert synced.name == "images"
 
 
-def test_sync_points_from_image_overrides_project_root_with_dataset_root(tmp_path: Path):
-    project_root = tmp_path / "project"
-    dataset_root = project_root / "labeled-data" / "mouse1"
-    dataset_root.mkdir(parents=True)
-
-    image_meta = ImageMetadata(
-        root=str(dataset_root),
-        paths=[str(dataset_root / "img001.png")],
-        name="images",
-    )
-    points_meta = PointsMetadata(
-        root=str(project_root),  # stale / wrong
-        project=str(project_root),
-    )
-
-    synced = metadata_mod.sync_points_from_image(image_meta, points_meta)
-
-    assert synced.root == str(dataset_root)
-
-
-def test_sync_points_from_image_keeps_existing_dataset_root_when_already_good(tmp_path: Path):
+def test_sync_points_from_image_never_rewrites_a_root_that_is_already_set(tmp_path: Path):
     project_root = tmp_path / "project"
     good_points_root = project_root / "labeled-data" / "mouse1"
     other_dataset_root = project_root / "labeled-data" / "mouse2"
@@ -223,7 +167,7 @@ def test_sync_points_from_image_keeps_existing_dataset_root_when_already_good(tm
 
     synced = metadata_mod.sync_points_from_image(image_meta, points_meta)
 
-    # already a valid dataset root -> do not overwrite
+    # Which dataset a layer belongs to is settled by dataset_key, not re-derived here.
     assert synced.root == str(good_points_root)
 
 
