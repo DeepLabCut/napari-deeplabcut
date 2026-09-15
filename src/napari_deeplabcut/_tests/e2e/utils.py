@@ -38,6 +38,37 @@ def _write_minimal_png(path: Path, *, shape=(64, 64, 3)) -> None:
     imsave(str(path), img, check_contrast=False)
 
 
+def _write_dlc_config(
+    project: Path,
+    *,
+    scorer: str = "John",
+    bodyparts: tuple[str, ...] = ("bodypart1", "bodypart2"),
+    colormap: str = "viridis",
+) -> Path:
+    """Write a minimal DLC config.yaml at the project root."""
+    import yaml
+
+    project.mkdir(parents=True, exist_ok=True)
+    cfg = {
+        "scorer": scorer,
+        "bodyparts": list(bodyparts),
+        "dotsize": 8,
+        "pcutoff": 0.6,
+        "colormap": colormap,
+    }
+    config_path = project / "config.yaml"
+    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    return config_path
+
+
+def _write_frames(folder: Path, names: tuple[str, ...]) -> Path:
+    """Populate a labeled-data folder with tiny frames and return it."""
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        _write_minimal_png(folder / name)
+    return folder
+
+
 def _make_minimal_dlc_project(tmp_path: Path):
     """
     Build a minimal DLC-like folder:
@@ -46,36 +77,15 @@ def _make_minimal_dlc_project(tmp_path: Path):
         labeled-data/test/img000.png
         labeled-data/test/CollectedData_John.h5 (bodypart1 labeled, bodypart2 NaN)
     """
-    import yaml
-
     project = tmp_path / "project"
-    labeled = project / "labeled-data" / "test"
-    labeled.mkdir(parents=True, exist_ok=True)
+    labeled = _write_frames(project / "labeled-data" / "test", ("img000.png",))
+    config_path = _write_dlc_config(project)
 
-    img_rel = ("labeled-data", "test", "img000.png")
-    img_path = project / Path(*img_rel)
-    _write_minimal_png(img_path)
-
-    cfg = {
-        "scorer": "John",
-        "bodyparts": ["bodypart1", "bodypart2"],
-        "dotsize": 8,
-        "pcutoff": 0.6,
-        "colormap": "viridis",
-    }
-    config_path = project / "config.yaml"
-    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
-
-    cols = pd.MultiIndex.from_product(
-        [["John"], ["bodypart1", "bodypart2"], ["x", "y"]],
-        names=["scorer", "bodyparts", "coords"],
+    h5_path = _write_keypoints_h5(
+        labeled / "CollectedData_John.h5",
+        scorer="John",
+        img_rel=("labeled-data", "test", "img000.png"),
     )
-    idx = pd.MultiIndex.from_tuples([img_rel])
-    df0 = pd.DataFrame([[10.0, 20.0, np.nan, np.nan]], index=idx, columns=cols)
-
-    h5_path = labeled / "CollectedData_John.h5"
-    df0.to_hdf(h5_path, key="df_with_missing", mode="w")
-    df0.to_csv(str(h5_path).replace(".h5", ".csv"))
 
     return project, config_path, labeled, h5_path
 
@@ -188,26 +198,41 @@ def _make_project_config_and_frames_no_gt(tmp_path: Path):
       project/labeled-data/test/img000.png
     No CollectedData*.h5 initially.
     """
-    import yaml
-
     project = tmp_path / "project"
-    labeled = project / "labeled-data" / "test"
-    labeled.mkdir(parents=True, exist_ok=True)
-
-    img_rel = ("labeled-data", "test", "img000.png")
-    _write_minimal_png(project / Path(*img_rel))
-
-    cfg = {
-        "scorer": "John",
-        "bodyparts": ["bodypart1", "bodypart2"],
-        "dotsize": 8,
-        "pcutoff": 0.6,
-        "colormap": "magma",
-    }
-    config_path = project / "config.yaml"
-    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    labeled = _write_frames(project / "labeled-data" / "test", ("img000.png",))
+    config_path = _write_dlc_config(project, colormap="magma")
 
     return project, config_path, labeled
+
+
+def _make_project_with_two_labeled_folders(
+    tmp_path: Path,
+    *,
+    b_frames: tuple[str, ...] = ("imgB000.png", "imgB001.png", "imgB002.png"),
+):
+    """
+    Project with two labeled-data folders:
+
+      project/config.yaml
+      project/labeled-data/videoA/imgA000.png
+      project/labeled-data/videoA/CollectedData_John.h5   (bodypart1 labeled)
+      project/labeled-data/videoB/<b_frames>              (no annotations)
+
+    By default videoB's frame names do not overlap videoA's. Pass ``b_frames`` matching
+    videoA's names to build the basename-collision case instead.
+    """
+    project = tmp_path / "project"
+    folder_a = _write_frames(project / "labeled-data" / "videoA", ("imgA000.png",))
+    folder_b = _write_frames(project / "labeled-data" / "videoB", b_frames)
+    config_path = _write_dlc_config(project, colormap="magma")
+
+    gt_path = _write_keypoints_h5(
+        folder_a / "CollectedData_John.h5",
+        scorer="John",
+        img_rel=("labeled-data", "videoA", "imgA000.png"),
+    )
+
+    return project, config_path, folder_a, folder_b, gt_path
 
 
 def _read_h5_keypoints(path: Path) -> pd.DataFrame:
