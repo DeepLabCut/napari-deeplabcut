@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -109,6 +110,46 @@ def test_points_metadata_round_trip_preserves_dataset_key():
     meta = PointsMetadata(root="C:/p/labeled-data/videoA", dataset_key="C:/p/labeled-data/videoA")
 
     assert PointsMetadata(**meta.model_dump()).dataset_key == "C:/p/labeled-data/videoA"
+
+
+def test_is_same_dataset_matches_identical_and_rejects_distinct(tmp_path: Path):
+    a = tmp_path / "labeled-data" / "videoA"
+    b = tmp_path / "labeled-data" / "videoB"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+
+    assert paths_mod.is_same_dataset(str(a), str(a)) is True
+    assert paths_mod.is_same_dataset(str(a), str(b)) is False
+    assert paths_mod.is_same_dataset(None, str(a)) is False
+    assert paths_mod.is_same_dataset(str(a), None) is False
+
+
+def test_is_same_dataset_fails_closed_for_missing_folders(tmp_path: Path):
+    """Two spellings that cannot be compared on disk are not assumed to be the same."""
+    assert paths_mod.is_same_dataset(str(tmp_path / "gone-a"), str(tmp_path / "gone-b")) is False
+
+
+def test_is_same_dataset_sees_through_a_second_route_to_one_folder(tmp_path: Path):
+    """A mapped drive against its UNC path is the real case; a symlink stands in for it."""
+    real = tmp_path / "labeled-data" / "videoA"
+    real.mkdir(parents=True)
+    link = tmp_path / "via-link"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation not permitted here")
+
+    # Deliberately unresolved, so the strings differ and the on-disk check is what decides.
+    assert str(link) != str(real)
+    assert paths_mod.is_same_dataset(str(link), str(real)) is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="path case is only insensitive on Windows")
+def test_is_same_dataset_ignores_case_on_windows(tmp_path: Path):
+    a = tmp_path / "labeled-data" / "videoA"
+    a.mkdir(parents=True)
+
+    assert paths_mod.is_same_dataset(str(a), str(a).upper()) is True
 
 
 def test_find_matching_depth_prefers_deepest_first_match():

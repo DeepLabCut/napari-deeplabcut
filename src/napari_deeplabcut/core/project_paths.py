@@ -19,6 +19,7 @@ Therefore the root anchor must be inferable from what the user opened:
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterable
 from enum import Enum
 from pathlib import Path, PureWindowsPath
@@ -755,6 +756,25 @@ def dataset_key_for_folder(folder: str | Path | None) -> str | None:
     except Exception:
         logger.debug("Could not resolve dataset folder %r", folder, exc_info=True)
         return str(folder)
+
+
+def is_same_dataset(a: str | None, b: str | None) -> bool:
+    """Return True if two dataset keys name the same folder on disk.
+
+    The same folder reaches us under more than one spelling: differing case or separators
+    on Windows, and a mapped drive against the UNC path behind it.
+    """
+    if a is None or b is None:
+        return False
+
+    if os.path.normcase(a) == os.path.normcase(b):
+        return True
+
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        logger.debug("Could not compare dataset folders %r and %r on disk", a, b, exc_info=True)
+        return False
 
 
 def session_key_from_project_context(ctx: DLCProjectContext | None) -> str | None:
