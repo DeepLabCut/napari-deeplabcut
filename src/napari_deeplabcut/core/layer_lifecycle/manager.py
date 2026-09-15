@@ -974,8 +974,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                     mark_layer_presentation_changed(layer)
 
             else:
-                # Either no overlap at all, or a match too ambiguous to trust. Both leave
-                # the layer on its own dataset, so both are worth telling the user about.
+                # Either no overlap at all, or a match too ambiguous to trust
                 logger.warning(
                     "Remap rejected for %s: %s Leaving it bound to %s.",
                     getattr(layer, "name", str(layer)),

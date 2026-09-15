@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 from napari.layers import Image, Points
 
-from napari_deeplabcut.config.models import AnnotationKind
+import napari_deeplabcut.core.layer_lifecycle.manager as manager_mod
+from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata
 from napari_deeplabcut.core.layer_lifecycle import LayerLifecycleManager
 from napari_deeplabcut.core.layer_lifecycle.display_settings import (
     MACHINE_LABELS_POINTS_DISPLAY,
@@ -702,3 +703,95 @@ def test_attach_points_layer_runtime_reattach_rebinds_to_current_store(qtbot, mo
 
     for key in ("M", "F"):
         assert keymap[key].__self__ is second_controls, f"{key} still bound to the previous controls"
+
+
+# ---------------------------------------------------------------------------
+# _remap_frame_indices: root and paths must move together
+# ---------------------------------------------------------------------------
+def _points_bound_to(paths, *, root):
+    layer = make_nonempty_points("bound")
+    layer.metadata = {"paths": list(paths), "root": root}
+    return layer
+
+
+def test_remap_frame_indices_leaves_metadata_alone_when_nothing_maps(monkeypatch):
+    old_paths = ["labeled-data/videoA/imgA000.png"]
+    layer = _points_bound_to(old_paths, root="C:/project/labeled-data/videoA")
+
+    manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
+    manager._image_meta = ImageMetadata(
+        paths=["labeled-data/videoB/imgB000.png"],
+        root="C:/project/labeled-data/videoB",
+    )
+
+    warned = []
+    monkeypatch.setattr(manager, "_warn_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
+
+    manager._remap_frame_indices(layer)
+
+    assert layer.metadata["paths"] == old_paths
+    assert layer.metadata["root"] == "C:/project/labeled-data/videoA"
+    assert warned == [layer]
+
+
+def test_remap_frame_indices_leaves_metadata_alone_when_match_is_ambiguous(monkeypatch):
+    # Both old paths collapse onto the same basename, so the only available match is a
+    # depth-1 one that remap refuses.
+    old_paths = ["labeled-data/videoA/img0.png", "labeled-data/videoB/img0.png"]
+    layer = _points_bound_to(old_paths, root="C:/project/labeled-data/videoA")
+
+    manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
+    manager._image_meta = ImageMetadata(
+        paths=["other/videoC/img0.png", "other/videoC/img1.png"],
+        root="C:/project/labeled-data/videoC",
+    )
+
+    warned = []
+    monkeypatch.setattr(manager, "_warn_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
+
+    manager._remap_frame_indices(layer)
+
+    assert layer.metadata["paths"] == old_paths
+    assert layer.metadata["root"] == "C:/project/labeled-data/videoA"
+    assert warned == [layer]
+
+
+def test_remap_frame_indices_adopts_root_and_paths_together_when_frames_map():
+    new_paths = ["labeled-data/videoB/imgA000.png"]
+    layer = _points_bound_to(["labeled-data/videoA/imgA000.png"], root="C:/project/labeled-data/videoA")
+
+    manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
+    manager._image_meta = ImageMetadata(paths=new_paths, root="C:/project/labeled-data/videoB")
+
+    manager._remap_frame_indices(layer)
+
+    assert layer.metadata["paths"] == new_paths
+    assert layer.metadata["root"] == "C:/project/labeled-data/videoB"
+
+
+def test_dataset_mismatch_warning_is_not_repeated_for_the_same_folder(monkeypatch):
+    """The remap sweep revisits every layer per insert, so repeats must be suppressed."""
+    layer = _points_bound_to(["labeled-data/videoA/imgA000.png"], root="C:/project/labeled-data/videoA")
+
+    manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
+    manager._image_meta = ImageMetadata(
+        paths=["labeled-data/videoB/imgB000.png"],
+        root="C:/project/labeled-data/videoB",
+    )
+
+    shown = []
+    monkeypatch.setattr(manager_mod, "show_warning", lambda msg: shown.append(msg))
+
+    manager._remap_frame_indices(layer)
+    manager._remap_frame_indices(layer)
+
+    assert len(shown) == 1
+
+    # A different folder is a new fact, so it is reported again.
+    manager._image_meta = ImageMetadata(
+        paths=["labeled-data/videoC/imgC000.png"],
+        root="C:/project/labeled-data/videoC",
+    )
+    manager._remap_frame_indices(layer)
+
+    assert len(shown) == 2
