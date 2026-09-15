@@ -13,7 +13,6 @@ import numpy as np
 from napari.layers import Image, Layer, Points, Tracks
 from napari.utils.events import Event
 from napari.utils.history import update_save_history
-from napari.utils.notifications import show_warning
 from qtpy.QtCore import QObject, Signal
 
 from ...config.keybinds import install_points_layer_keybindings, install_viewer_keybindings
@@ -100,6 +99,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
     # Session management
     session_conflict_rejected = Signal(str)  # if a new DLC folder is loaded on top of the current one
+    layer_dataset_mismatch = Signal(str)  # if a layer could not follow the newly opened folder
 
     def __init__(self, viewer: napari.Viewer, *, parent: QObject | None = None) -> None:
         super().__init__(parent=parent)
@@ -361,8 +361,13 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             "please save and clear the current layers before loading the new labeled data folder.",
         )
 
-    def _warn_layer_left_on_previous_dataset(self, layer: Any) -> None:
-        """Tell the user a layer did not follow the newly opened folder."""
+    def _report_layer_left_on_previous_dataset(self, layer: Any) -> None:
+        """Report that a layer did not follow the newly opened folder.
+
+        The remap sweep visits every non-Image layer on every qualifying insert, so one
+        folder open reaches this more than once for the same layer. Report only the first
+        time a given layer fails to follow a given folder; the log records every pass.
+        """
         root = (layer.metadata or {}).get("root")
         dataset = Path(str(root)).name if root else "its original folder"
         new_root = str(self._image_meta.root or "")
@@ -376,11 +381,14 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             return
 
         self._dataset_mismatch_warned[layer] = new_root
-        show_warning(
+        reason = (
             f"'{getattr(layer, 'name', layer)}' does not contain any of the frames in the folder "
             f"you just opened, so it still belongs to '{dataset}'.\n"
             "Saving it will write back there. Clear it before labelling the new folder."
         )
+        self.viewer.status = reason
+
+        self._single_shot_owned(0, lambda: self.layer_dataset_mismatch.emit(reason))
 
     def _reject_conflicting_dlc_image_layer(self, layer: Image, reason: str) -> None:
         """Reject a conflicting DLC session image safely.
@@ -979,7 +987,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                     res.message,
                     md.get("root"),
                 )
-                self._warn_layer_left_on_previous_dataset(layer)
+                self._report_layer_left_on_previous_dataset(layer)
 
             if res.depth_used is None:
                 logger.debug("Remap skipped for %s: %s", getattr(layer, "name", str(layer)), res.message)

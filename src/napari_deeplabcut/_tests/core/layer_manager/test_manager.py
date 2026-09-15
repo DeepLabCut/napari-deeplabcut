@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 from napari.layers import Image, Points
 
-import napari_deeplabcut.core.layer_lifecycle.manager as manager_mod
 from napari_deeplabcut.config.models import AnnotationKind, ImageMetadata
 from napari_deeplabcut.core.layer_lifecycle import LayerLifecycleManager
 from napari_deeplabcut.core.layer_lifecycle.display_settings import (
@@ -105,6 +104,7 @@ def connect_signal_recorders(manager):
         inserted=SignalRecorder(),
         removed=SignalRecorder(),
         conflicts=SignalRecorder(),
+        dataset_mismatch=SignalRecorder(),
     )
 
     manager.refresh_video_panel_requested.connect(rec.refresh_video)
@@ -119,6 +119,7 @@ def connect_signal_recorders(manager):
     manager.layer_insert_processed.connect(rec.inserted)
     manager.layer_remove_processed.connect(rec.removed)
     manager.session_conflict_rejected.connect(rec.conflicts)
+    manager.layer_dataset_mismatch.connect(rec.dataset_mismatch)
     return rec
 
 
@@ -665,7 +666,7 @@ def test_remap_frame_indices_leaves_metadata_alone_when_nothing_maps(monkeypatch
     )
 
     warned = []
-    monkeypatch.setattr(manager, "_warn_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
+    monkeypatch.setattr(manager, "_report_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
 
     manager._remap_frame_indices(layer)
 
@@ -687,7 +688,7 @@ def test_remap_frame_indices_leaves_metadata_alone_when_match_is_ambiguous(monke
     )
 
     warned = []
-    monkeypatch.setattr(manager, "_warn_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
+    monkeypatch.setattr(manager, "_report_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
 
     manager._remap_frame_indices(layer)
 
@@ -709,23 +710,22 @@ def test_remap_frame_indices_adopts_root_and_paths_together_when_frames_map():
     assert layer.metadata["root"] == "C:/project/labeled-data/videoB"
 
 
-def test_dataset_mismatch_warning_is_not_repeated_for_the_same_folder(monkeypatch):
+def test_dataset_mismatch_is_reported_once_per_target_folder(qtbot):
     """The remap sweep revisits every layer per insert, so repeats must be suppressed."""
     layer = _points_bound_to(["labeled-data/videoA/imgA000.png"], root="C:/project/labeled-data/videoA")
 
     manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
+    rec = connect_signal_recorders(manager)
     manager._image_meta = ImageMetadata(
         paths=["labeled-data/videoB/imgB000.png"],
         root="C:/project/labeled-data/videoB",
     )
 
-    shown = []
-    monkeypatch.setattr(manager_mod, "show_warning", lambda msg: shown.append(msg))
-
     manager._remap_frame_indices(layer)
     manager._remap_frame_indices(layer)
 
-    assert len(shown) == 1
+    assert rec.dataset_mismatch.count == 1
+    assert "videoA" in rec.dataset_mismatch.calls[0][0]
 
     # A different folder is a new fact, so it is reported again.
     manager._image_meta = ImageMetadata(
@@ -734,4 +734,4 @@ def test_dataset_mismatch_warning_is_not_repeated_for_the_same_folder(monkeypatc
     )
     manager._remap_frame_indices(layer)
 
-    assert len(shown) == 2
+    assert rec.dataset_mismatch.count == 2
