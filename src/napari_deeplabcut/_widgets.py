@@ -129,6 +129,7 @@ class KeypointControls(ViewerSingletonWidget):
         self.layer_manager.set_placeholder_config_decision_provider(self)
         ## Hook up signals for layer lifecycle events as needed, e.g.:
         self.layer_manager.session_conflict_rejected.connect(self._on_session_conflict_detected)
+        self.layer_manager.layer_dataset_mismatch.connect(self._on_layer_dataset_mismatch)
         self.layer_manager.refresh_video_panel_requested.connect(self._refresh_video_panel_context)
         self.layer_manager.refresh_layer_status_requested.connect(self._refresh_layer_status_panel)
         self.layer_manager.video_widget_visibility_requested.connect(self._on_video_widget_visibility_requested)
@@ -418,6 +419,14 @@ class KeypointControls(ViewerSingletonWidget):
         QMessageBox.warning(
             self,
             "A labeled data folder is already loaded!",
+            f"{reason}\n\n",
+            QMessageBox.Ok,
+        )
+
+    def _on_layer_dataset_mismatch(self, reason: str) -> None:
+        QMessageBox.warning(
+            self,
+            "A layer does not match the folder you opened:",
             f"{reason}\n\n",
             QMessageBox.Ok,
         )
