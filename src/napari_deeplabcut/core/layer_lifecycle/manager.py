@@ -28,7 +28,7 @@ from ...core.metadata import (
 )
 from ...core.project_paths import PathMatchPolicy
 from ...core.remap import remap_layer_data_by_paths
-from ...napari_compat import install_add_wrapper, install_paste_patch
+from ...napari_compat import install_add_wrapper, install_paste_patch, unwrap
 from ...napari_compat.points_layer import make_paste_data
 from ...tracking.core.data import TRACKING_LAYER_METADATA_KEY, is_tracking_result_points_layer
 from ...ui.base_widget._qt_timers import OwnedTimersMixin
@@ -79,6 +79,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
     """
 
     # UI signals for widget hooks
+    label_mode_changed = Signal(object)  # keypoints.LabelMode
     refresh_video_panel_requested = Signal()
     refresh_layer_status_requested = Signal()
     video_widget_visibility_requested = Signal(bool)
@@ -106,6 +107,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         self._placeholder_config_decision_provider: PlaceholderConfigDecisionProvider | None = None
 
         # Lifecycle-owned viewer/image context
+        self._label_mode = keypoints.LabelMode.default()
         self._active_dlc_image_layer_id: int | None = None
         self._image_meta = ImageMetadata()
         self._project_path: str | None = None
@@ -188,6 +190,17 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
     @property
     def image_name(self) -> str | None:
         return self._image_meta.name
+
+    @property
+    def label_mode(self) -> keypoints.LabelMode:
+        return self._label_mode
+
+    @label_mode.setter
+    def label_mode(self, value: str | keypoints.LabelMode) -> None:
+        new = keypoints.LabelMode(value)
+        if new != self._label_mode:
+            self._label_mode = new
+            self.label_mode_changed.emit(new)
 
     # ------------------------------------------------------------------ #
     # Lifecycle wiring                                                   #
@@ -682,10 +695,8 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if not self.validate_header(layer):
             return None
 
-        existing = getattr(layer, "_dlc_store", None)
+        existing = self.get_store(layer)
         if existing is not None:
-            self.register_managed_points_layer(layer, existing)
-
             runtime = self.get_live_runtime(layer)
             existing_resources = None
             if runtime is not None:
@@ -715,8 +726,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         store = keypoints.KeypointStore(self.viewer, layer)
         self.register_managed_points_layer(layer, store)
 
-        layer._dlc_store = store
-
         proj = layer.metadata.get("project")
         if proj:
             self._project_path = proj
@@ -742,7 +751,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         logger.debug(
             "Wire points layer=%r existing_store=%s project=%s root=%s len_paths=%s",
             getattr(layer, "name", layer),
-            getattr(layer, "_dlc_store", None) is not None,
+            self.get_store(layer) is not None,
             md.get("project"),
             md.get("root"),
             len(md.get("paths", [])),
@@ -1139,7 +1148,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         store: keypoints.KeypointStore,
         controls: Any,
         resolve_layer_by_id: Callable[[int], Points | None],
-        get_label_mode: Callable[[], Any],
         schedule_recolor: Callable[[Points], None],
         existing_resources: PointsRuntimeResources | None = None,
     ) -> PointsRuntimeResources:
@@ -1163,7 +1171,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         # Narrow lifecycle dependencies injected explicitly.
         store.attach_layer_resolver(resolve_layer_by_id)
-        store.set_label_mode_getter(get_label_mode)
+        store.set_label_mode_getter(lambda: self.label_mode)
 
         # Copy/paste patch
         if not resources.paste_patch_installed:
@@ -1380,6 +1388,10 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
     def register_managed_points_layer(self, layer: Points, store: KeypointStore, **resources: Any) -> None:
         """Register a managed Points layer if not already registered."""
+        # The registry keys on the unwrapped layer, so build the runtime with the same
+        # identity or its layer_id consistency check rejects the registration
+        layer = unwrap(layer)
+
         if self.registry.is_managed(layer):
             return
 
