@@ -37,11 +37,9 @@ from ...utils.debug import log_timing
 from .display_settings import PointsDisplaySource, apply_points_display_role
 from .merge import PlaceholderConfigAction, PlaceholderConfigDecisionProvider
 from .registry import (
-    ClearedRegistryEntry,
     ManagedPointsRuntime,
     PointsLayerSetupRequest,
     PointsRuntimeResources,
-    RegistryAuditReport,
     RuntimeRegistry,
 )
 
@@ -150,12 +148,6 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
     def has_managed_points(self) -> bool:
         return any(True for _ in self.iter_managed_points())
-
-    def clear_dead_entries(self, *, log: bool = True) -> tuple[ClearedRegistryEntry[Any], ...]:
-        return self.registry.clear_dead_entries(log=log)
-
-    def audit_registry(self) -> RegistryAuditReport:
-        return self.registry.audit()
 
     def set_placeholder_config_decision_provider(
         self,
@@ -1174,28 +1166,19 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         store.set_label_mode_getter(lambda: self.label_mode)
 
         # Copy/paste patch
-        if not resources.paste_patch_installed:
-            paste_func = make_paste_data(controls, store=store)
-            install_paste_patch(layer, paste_func=paste_func)
-            resources.paste_patch_installed = True
+        paste_func = make_paste_data(controls, store=store)
+        install_paste_patch(layer, paste_func=paste_func)
 
         # Add layer to store
-        if not resources.add_wrapper_installed:
-            add_impl = MethodType(keypoints.KeypointStore.add, store)
-            install_add_wrapper(layer, add_impl=add_impl, schedule_recolor=schedule_recolor)
-            resources.add_wrapper_installed = True
+        add_impl = MethodType(keypoints.KeypointStore.add, store)
+        install_add_wrapper(layer, add_impl=add_impl, schedule_recolor=schedule_recolor)
 
         # layer-specific navigation event
         if not hasattr(layer.events, "query_next_frame"):
             layer.events.add(query_next_frame=Event)
-            resources.query_next_frame_event_added = True
 
-        if not resources.query_next_frame_connected:
-            try:
-                layer.events.query_next_frame.connect(store._advance_step)
-                resources.query_next_frame_connected = True
-            except Exception:
-                pass
+        layer.events.query_next_frame.disconnect()
+        layer.events.query_next_frame.connect(store._advance_step)
 
         if not resources.keybindings_installed:
             install_points_layer_keybindings(layer, controls, store, self.viewer)

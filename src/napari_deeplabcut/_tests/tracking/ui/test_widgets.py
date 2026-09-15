@@ -149,6 +149,20 @@ def test_tracking_controls_initial_state(empty_tracking_env):
     assert tc._model_info_button.toolTip() == info
 
 
+def test_tracking_controls_uses_unwrapped_viewer_for_layer_manager(make_napari_viewer_proxy, qtbot):
+    """Tracking controls may be opened before Keypoint controls.
+
+    It is then the widget that creates the viewer-scoped LayerLifecycleManager, and
+    the manager must not be built around the PublicOnlyProxy: the registry keys on
+    id(unwrap(layer)), so a proxied viewer yields proxied layers whose ids never match.
+    """
+    viewer = make_napari_viewer_proxy()
+    controls = TrackingControls(viewer)
+    qtbot.add_widget(controls)
+
+    assert controls.lifecycle_manager.viewer is controls._viewer
+
+
 def test_tracking_frame_controls_layer_selection_and_ranges(tracking_env):
     viewer, tc, _video_layer, _points_layer = tracking_env
 
