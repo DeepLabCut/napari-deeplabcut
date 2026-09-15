@@ -105,25 +105,39 @@ def test_unmappable_folder_switch_does_not_write_annotations_into_new_folder(
 
 
 @pytest.mark.usefixtures("qtbot")
-def test_mappable_folder_switch_rebinds_points_layer(
+def test_identical_frame_names_in_another_folder_do_not_migrate_the_layer(
     viewer,
     keypoint_controls,
     qtbot,
     tmp_path,
+    overwrite_confirm,
 ) -> None:
-    """Positive control: when the frames do map, root and paths move together."""
-    _project, _config_path, folder_a, folder_b, _gt_path = _make_project_with_two_labeled_folders(
+    """videoB reuses videoA's frame names, which is the DLC norm, not evidence of identity.
+
+    Matching on basenames alone would give a perfect 1:1 map here and silently carry the
+    annotation onto a different dataset's frames.
+    """
+    overwrite_confirm.capture()
+
+    _project, _config_path, folder_a, folder_b, gt_path = _make_project_with_two_labeled_folders(
         tmp_path,
         b_frames=("imgA000.png",),
     )
 
     _open_folder(viewer, qtbot, folder_a, expect_points=True)
     layer = _points_layers(viewer)[0]
+    paths_before = list(layer.metadata.get("paths") or [])
 
     _remove_image_layers(viewer, qtbot)
     _open_folder(viewer, qtbot, folder_b, expect_points=False)
 
-    assert Path(str(layer.metadata.get("root"))).name == "videoB"
-    assert all("videoB" in str(p) for p in layer.metadata.get("paths") or []), (
-        f"Expected frame paths to follow the layer's new root, got {layer.metadata.get('paths')}"
-    )
+    assert Path(str(layer.metadata.get("root"))).name == "videoA"
+    assert list(layer.metadata.get("paths") or []) == paths_before
+
+    viewer.layers.selection.select_only(layer)
+    keypoint_controls._save_layers_dialog(selected=True)
+    qtbot.wait(200)
+
+    stray = sorted(p.name for p in folder_b.glob("CollectedData*"))
+    assert not stray, f"Annotations migrated into {folder_b.name}: {stray}"
+    assert _dataset_names_in_index(_read_h5_keypoints(gt_path)) == {"videoA"}
