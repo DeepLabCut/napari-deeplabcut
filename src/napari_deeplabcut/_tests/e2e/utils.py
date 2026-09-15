@@ -5,6 +5,7 @@ import hashlib
 import math
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -237,6 +238,43 @@ def _make_project_with_two_labeled_folders(
     )
 
     return project, config_path, folder_a, folder_b, gt_path
+
+
+def _make_two_projects_sharing_a_video_name(tmp_path: Path):
+    """Two DLC projects whose dataset folders are named after the same video.
+
+      project-A/config.yaml, project-A/labeled-data/mouse1/{img000,img001}.png + GT
+      project-B/config.yaml, project-B/labeled-data/mouse1/{img000,img001}.png
+
+    DLC names dataset folders after the video stem and frames by fixed convention, so
+    this is what re-labelling the same footage in a fresh project looks like on disk:
+    every path component below the project root is identical between the two.
+    """
+    project_a = tmp_path / "project-A"
+    project_b = tmp_path / "project-B"
+    frames = ("img000.png", "img001.png")
+
+    folder_a = _write_frames(project_a / "labeled-data" / "mouse1", frames)
+    folder_b = _write_frames(project_b / "labeled-data" / "mouse1", frames)
+
+    config_a = _write_dlc_config(project_a, scorer="John")
+    config_b = _write_dlc_config(project_b, scorer="Jane")
+
+    gt_path = _write_keypoints_h5(
+        folder_a / "CollectedData_John.h5",
+        scorer="John",
+        img_rel=("labeled-data", "mouse1", "img000.png"),
+    )
+
+    return SimpleNamespace(
+        project_a=project_a,
+        project_b=project_b,
+        folder_a=folder_a,
+        folder_b=folder_b,
+        config_a=config_a,
+        config_b=config_b,
+        gt_path=gt_path,
+    )
 
 
 def _read_h5_keypoints(path: Path) -> pd.DataFrame:

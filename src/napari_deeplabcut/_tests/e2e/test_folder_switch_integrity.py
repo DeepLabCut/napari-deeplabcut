@@ -15,7 +15,11 @@ import pandas as pd
 import pytest
 from napari.layers import Image, Points
 
-from .utils import _make_project_with_two_labeled_folders, _read_h5_keypoints
+from .utils import (
+    _make_project_with_two_labeled_folders,
+    _make_two_projects_sharing_a_video_name,
+    _read_h5_keypoints,
+)
 
 
 def _points_layers(viewer):
@@ -141,3 +145,41 @@ def test_identical_frame_names_in_another_folder_do_not_migrate_the_layer(
     stray = sorted(p.name for p in folder_b.glob("CollectedData*"))
     assert not stray, f"Annotations migrated into {folder_b.name}: {stray}"
     assert _dataset_names_in_index(_read_h5_keypoints(gt_path)) == {"videoA"}
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_layer_does_not_follow_a_different_project_using_the_same_video_name(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    overwrite_confirm,
+) -> None:
+    """Re-labelling the same footage in a fresh project is an ordinary DLC workflow.
+
+    Both projects then hold `labeled-data/mouse1/img000.png`, which is identical at every
+    canonicalization depth: the project root is not part of the key. A layer from the
+    first project must not silently rebind to, or be saved into, the second.
+    """
+    overwrite_confirm.capture()
+
+    proj = _make_two_projects_sharing_a_video_name(tmp_path)
+
+    _open_folder(viewer, qtbot, proj.folder_a, expect_points=True)
+    layer = _points_layers(viewer)[0]
+    root_before = Path(str(layer.metadata.get("root")))
+    project_before = layer.metadata.get("project")
+
+    _remove_image_layers(viewer, qtbot)
+    _open_folder(viewer, qtbot, proj.folder_b, expect_points=False)
+
+    assert Path(str(layer.metadata.get("root"))) == root_before, (
+        f"Layer rebound from {project_before} to another project's dataset of the same name"
+    )
+
+    viewer.layers.selection.select_only(layer)
+    keypoint_controls._save_layers_dialog(selected=True)
+    qtbot.wait(200)
+
+    stray = sorted(p.name for p in proj.folder_b.glob("CollectedData*"))
+    assert not stray, f"Annotations from {project_before} were written into project-B: {stray}"
