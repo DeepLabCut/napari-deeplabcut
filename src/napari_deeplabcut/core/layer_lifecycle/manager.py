@@ -28,7 +28,7 @@ from ...core.metadata import (
     sync_points_from_image,
     write_points_meta,
 )
-from ...core.project_paths import PathMatchPolicy
+from ...core.project_paths import PathMatchPolicy, is_same_dataset
 from ...core.remap import remap_layer_data_by_paths
 from ...napari_compat import install_add_wrapper, install_paste_patch
 from ...napari_compat.points_layer import make_paste_data
@@ -371,7 +371,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if layer_dataset_key is None:
             return True
 
-        return layer_dataset_key == self._image_dataset_key
+        return is_same_dataset(layer_dataset_key, self._image_dataset_key)
 
     def _report_layer_left_on_previous_dataset(self, layer: Any) -> None:
         """Report that a layer did not follow the newly opened folder.
