@@ -1181,12 +1181,20 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         layer.events.query_next_frame.disconnect()
         layer.events.query_next_frame.connect(store._advance_step)
 
-        if not resources.keybindings_installed:
-            install_points_layer_keybindings(layer, controls, store, self.viewer)
-            if not self.viewer_keybinds_installed:
-                install_viewer_keybindings(self.viewer)
-                self.viewer_keybinds_installed = True
-            resources.keybindings_installed = True
+        # Rebound on every attach, like the paste/add/query_next_frame handlers above:
+        # the callbacks capture this store and these controls.
+        install_points_layer_keybindings(
+            layer,
+            controls,
+            store,
+            self.viewer,
+            replace=resources.keybindings_installed,
+        )
+        resources.keybindings_installed = True
+
+        if not self.viewer_keybinds_installed:
+            install_viewer_keybindings(self.viewer)
+            self.viewer_keybinds_installed = True
 
         return resources
 

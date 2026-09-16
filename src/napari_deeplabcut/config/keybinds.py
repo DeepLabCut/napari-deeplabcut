@@ -399,20 +399,16 @@ def _bind_each_key(layer: Points, keys: tuple[str, ...], callback, *, overwrite:
         layer.bind_key(key, callback, overwrite=overwrite)
 
 
-def install_points_layer_keybindings(layer: Points, controls, store, viewer=None) -> None:
+def install_points_layer_keybindings(layer: Points, controls, store, viewer=None, *, replace: bool = False) -> None:
     ctx = BindingContext(controls=controls, store=store, viewer=viewer)
 
     for spec in SHORTCUTS:
         if spec.get_callback is None:
             continue
 
-        if spec.scope == "points-layer":
+        if spec.scope == "points-layer" or (spec.scope == "viewer" and viewer is not None):
             callback = spec.get_callback(ctx)
-            _bind_each_key(layer, spec.keys, callback, overwrite=spec.overwrite)
-
-        elif spec.scope == "viewer" and viewer is not None:
-            callback = spec.get_callback(ctx)
-            _bind_each_key(layer, spec.keys, callback, overwrite=spec.overwrite)
+            _bind_each_key(layer, spec.keys, callback, overwrite=spec.overwrite or replace)
 
 
 def install_viewer_keybindings(viewer, controls=None, store=None) -> None:
