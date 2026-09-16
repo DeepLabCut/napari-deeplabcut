@@ -28,7 +28,7 @@ from ...core.metadata import (
 )
 from ...core.project_paths import PathMatchPolicy
 from ...core.remap import remap_layer_data_by_paths
-from ...napari_compat import install_add_wrapper, install_paste_patch, unwrap
+from ...napari_compat import install_add_wrapper, install_paste_patch, layer_key, unwrap
 from ...napari_compat.points_layer import make_paste_data
 from ...tracking.core.data import TRACKING_LAYER_METADATA_KEY, is_tracking_result_points_layer
 from ...ui.base_widget._qt_timers import OwnedTimersMixin
@@ -347,8 +347,8 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             return None
 
         for layer in self.viewer.layers:
-            if id(layer) == self._active_dlc_image_layer_id and isinstance(layer, Image):
-                return layer
+            if layer_key(layer) == self._active_dlc_image_layer_id and isinstance(layer, Image):
+                return unwrap(layer)
 
         return None
 
@@ -356,7 +356,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         active = self.active_dlc_image_layer()
         if active is None:
             return True, None
-        if active is layer:
+        if active is unwrap(layer):
             return True, None
         return (
             False,
@@ -653,7 +653,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             except Exception:
                 pass
 
-        self._active_dlc_image_layer_id = id(layer)
+        self._active_dlc_image_layer_id = layer_key(layer)
         context_changed = self._update_image_meta_from_layer(layer)
 
         if not self._project_path:
@@ -854,7 +854,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                         self.points_layer_removed_requested.emit(layer, n_points_layer)
 
             elif isinstance(layer, Image):
-                if self._active_dlc_image_layer_id == id(layer):
+                if self._active_dlc_image_layer_id == layer_key(layer):
                     self._active_dlc_image_layer_id = None
                     self._image_meta = ImageMetadata()
                     self._project_path = None
@@ -1022,7 +1022,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         action = self._resolve_placeholder_config_action(
             placeholder_layer=layer,
-            managed_layers=tuple(ly for ly, _ in managed if ly is not layer),
+            managed_layers=tuple(ly for ly, _ in managed if ly is not unwrap(layer)),
             added_keypoints=diff,
             headers_match=headers_equal,
             message=message,
@@ -1316,7 +1316,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if prefer_managed or managed_only:
             for layer, _store in self.iter_managed_points():
                 if self.is_mergeable_dlc_points_layer(layer, require_managed=True):
-                    layer_id = id(layer)
+                    layer_id = layer_key(layer)
                     if layer_id not in seen:
                         seen.add(layer_id)
                         yield layer
@@ -1324,13 +1324,15 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if managed_only:
             return
 
+        # The registry yields raw layers while the viewer may yield proxies, so both
+        # branches have to agree on identity or the same layer is yielded twice.
         for layer in self.viewer.layers:
             if not isinstance(layer, Points):
                 continue
-            if id(layer) in seen:
+            if layer_key(layer) in seen:
                 continue
             if self.is_mergeable_dlc_points_layer(layer, require_managed=False):
-                seen.add(id(layer))
+                seen.add(layer_key(layer))
                 yield layer
 
     def suggest_merge_target(self, source_layer: Points | None) -> Points | None:
@@ -1348,6 +1350,10 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if source_layer is None or not isinstance(source_layer, Points):
             return None
 
+        # Every candidate check below is an identity test, and callers may hand us a
+        # proxied layer.
+        source_layer = unwrap(source_layer)
+
         preferred_name = self.tracking_result_source_layer_name(source_layer)
 
         if preferred_name:
@@ -1359,7 +1365,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 if layer is not source_layer and getattr(layer, "name", None) == preferred_name:
                     return layer
 
-        active = getattr(self.viewer.layers.selection, "active", None)
+        active = unwrap(getattr(self.viewer.layers.selection, "active", None))
         if active is not source_layer and self.is_mergeable_dlc_points_layer(active, require_managed=False):
             return active
 

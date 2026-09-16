@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["unwrap"]
+__all__ = ["layer_key", "unwrap"]
 
 
 def unwrap(obj: Any) -> Any:
@@ -44,3 +44,8 @@ def unwrap(obj: Any) -> Any:
 
         seen.add(id(current))
         current = wrapped
+
+
+def layer_key(layer: Any) -> int:
+    """Stable identity for a layer, immune to the proxy it was reached through."""
+    return id(unwrap(layer))

@@ -10,11 +10,12 @@ from .points_layer import (
     install_add_wrapper,
     install_paste_patch,
 )
-from .proxy import unwrap
+from .proxy import layer_key, unwrap
 
 __all__ = [
     "apply_points_layer_ui_tweaks",
     "install_add_wrapper",
     "install_paste_patch",
+    "layer_key",
     "unwrap",
 ]
