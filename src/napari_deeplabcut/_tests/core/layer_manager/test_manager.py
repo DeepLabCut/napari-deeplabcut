@@ -639,7 +639,7 @@ def test_setup_points_layer_styles_machine_labels_using_config(
 
 
 def test_attach_points_layer_runtime_reattach_rebinds_to_current_store(qtbot, monkeypatch):
-    """Re-attaching rebinds the add wrapper to the store passed."""
+    """Re-attaching rebinds the add wrapper and the shortcuts to the store passed."""
     from napari_deeplabcut.core.layer_lifecycle import manager as manager_module
 
     class RecordingStore(FakeStore):
@@ -650,6 +650,22 @@ def test_attach_points_layer_runtime_reattach_rebinds_to_current_store(qtbot, mo
         def add(self, coord):
             self.added.append(coord)
 
+        def next_keypoint(self, *_args):
+            return None
+
+        def prev_keypoint(self, *_args):
+            return None
+
+        def _find_first_unlabeled_frame(self, *_args):
+            return None
+
+    class RecordingControls:
+        def cycle_through_label_modes(self, *_args):
+            return None
+
+        def cycle_through_color_modes(self, *_args):
+            return None
+
     monkeypatch.setattr(manager_module.keypoints, "KeypointStore", RecordingStore)
 
     viewer = DummyViewer()
@@ -659,21 +675,30 @@ def test_attach_points_layer_runtime_reattach_rebinds_to_current_store(qtbot, mo
     layer = make_points()
     first = RecordingStore(viewer, layer)
     second = RecordingStore(viewer, layer)
+    first_controls = RecordingControls()
+    second_controls = RecordingControls()
 
-    def attach(store, resources):
+    def attach(store, controls, resources):
         return manager.attach_points_layer_runtime(
             layer=layer,
             store=store,
-            controls=SimpleNamespace(),
+            controls=controls,
             resolve_layer_by_id=lambda _layer_id: layer,
             schedule_recolor=lambda _layer: None,
             existing_resources=resources,
         )
 
-    resources = attach(first, PointsRuntimeResources(keybindings_installed=True))
-    attach(second, resources)
+    resources = attach(first, first_controls, PointsRuntimeResources())
+    attach(second, second_controls, resources)
 
     layer.add(np.zeros((1, 3)))
 
     assert first.added == []
     assert len(second.added) == 1
+    keymap = {str(key): callback for key, callback in layer.keymap.items()}
+
+    for key in ("W", "Up", "S", "Down", "Shift+Left", "Shift+Right"):
+        assert keymap[key].__self__ is second, f"{key} still bound to the previous store"
+
+    for key in ("M", "F"):
+        assert keymap[key].__self__ is second_controls, f"{key} still bound to the previous controls"
