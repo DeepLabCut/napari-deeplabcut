@@ -102,7 +102,8 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
     def __init__(self, viewer: napari.Viewer, *, parent: QObject | None = None) -> None:
         super().__init__(parent=parent)
 
-        self.viewer = viewer
+        # Invariant: the manager owns the raw viewer, never napari's PublicOnlyProxy.
+        self.viewer = unwrap(viewer)
         self.registry: RuntimeRegistry[Any] = RuntimeRegistry()
         self._placeholder_config_decision_provider: PlaceholderConfigDecisionProvider | None = None
 
