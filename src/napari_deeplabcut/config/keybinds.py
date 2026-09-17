@@ -9,10 +9,6 @@ from enum import Enum, auto
 
 import numpy as np
 from napari import Viewer
-from napari.components._viewer_key_bindings import (
-    increment_dims_left,
-    increment_dims_right,
-)
 from napari.layers import Points
 from qtpy.QtCore import QElapsedTimer, QTimer
 
@@ -190,6 +186,24 @@ def _make_repeating_viewer_callback(
             )
 
     return callback
+
+
+def _increment_dims(viewer: Viewer, step: int) -> None:
+    """Step the last-used dimension slider by ``step`` positions.
+
+    Replaces ``napari.components._viewer_key_bindings.increment_dims_left/right``.
+    """
+    dims = viewer.dims
+    axis = dims.last_used
+    dims.set_current_step(axis, dims.current_step[axis] + step)
+
+
+def increment_dims_left(viewer: Viewer) -> None:
+    _increment_dims(viewer, -1)
+
+
+def increment_dims_right(viewer: Viewer) -> None:
+    _increment_dims(viewer, 1)
 
 
 def _prev_frame(ctx: BindingContext):

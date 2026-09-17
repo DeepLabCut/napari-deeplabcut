@@ -10,11 +10,12 @@ from napari_deeplabcut.napari_compat import (
     apply_points_layer_ui_tweaks,
     install_add_wrapper,
     install_paste_patch,
+    unwrap,
 )
 
 
 def _get_point_controls(viewer, layer):
-    return viewer.window._qt_viewer.dockLayerControls.widget().widgets[layer]
+    return unwrap(viewer).window._qt_viewer.dockLayerControls.widget().widgets[unwrap(layer)]
 
 
 def test_apply_points_layer_ui_tweaks_smoke_real_viewer(viewer, qtbot, dropdown_cls, plt_module):
@@ -33,7 +34,7 @@ def test_apply_points_layer_ui_tweaks_smoke_real_viewer(viewer, qtbot, dropdown_
     viewer.layers.selection.active = layer
 
     qtbot.waitUntil(
-        lambda: layer in viewer.window._qt_viewer.dockLayerControls.widget().widgets,
+        lambda: unwrap(layer) in unwrap(viewer).window._qt_viewer.dockLayerControls.widget().widgets,
         timeout=3000,
     )
 
@@ -84,11 +85,13 @@ def test_install_add_wrapper_smoke_real_points_layer(viewer):
 
     install_add_wrapper(layer, add_impl=add_impl, schedule_recolor=schedule_recolor)
 
-    # Bound method really installed on a real layer
-    assert layer.add.__self__ is layer
+    # Bound method really installed on a real layer. The wrapper binds the raw layer,
+    # not the PublicOnlyProxy the fixture hands out, so identity is asserted against it.
+    raw_layer = unwrap(layer)
+    assert raw_layer.add.__self__ is raw_layer
 
     payload = np.array([[1.0, 2.0]])
-    result = layer.add(payload, source="smoke-test")
+    result = raw_layer.add(payload, source="smoke-test")
 
     assert result == "added"
 
@@ -96,7 +99,7 @@ def test_install_add_wrapper_smoke_real_points_layer(viewer):
     np.testing.assert_array_equal(add_args[0], payload)
     assert add_kwargs == {"source": "smoke-test"}
 
-    assert calls[1] is layer
+    assert calls[1] is raw_layer
 
 
 def test_install_paste_patch_smoke_real_points_layer(viewer):
@@ -110,11 +113,13 @@ def test_install_paste_patch_smoke_real_points_layer(viewer):
 
     install_paste_patch(layer, paste_func=paste_func)
 
-    assert layer._paste_data.__self__ is layer
+    # The patch is installed on the raw layer, so assert against that identity.
+    raw_layer = unwrap(layer)
+    assert raw_layer._paste_data.__self__ is raw_layer
 
-    layer._paste_data()
+    raw_layer._paste_data()
 
-    assert seen == [layer]
+    assert seen == [raw_layer]
 
 
 def test_apply_points_layer_ui_tweaks_real_dropdown(qtbot):

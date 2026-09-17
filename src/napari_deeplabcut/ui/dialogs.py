@@ -239,32 +239,14 @@ class Shortcuts(QDialog):
 
         super().closeEvent(event)
 
-    def _find_tracking_dock(self):
-        if self.viewer is None:
-            return None
-
-        window = getattr(self.viewer, "window", None)
-        if window is None:
-            return None
-
-        try:
-            for dock in window._dock_widgets.values():
-                widget = dock.widget()
-                if widget is None:
-                    continue
-
-                if widget.objectName() == "napari-deeplabcut-tracking-controls" or bool(
-                    widget.property("ndlc_tracking_controls")
-                ):
-                    return dock
-        except Exception:
-            return None
-
-        return None
-
     def _tracking_widget_is_open(self) -> bool:
-        dock = self._find_tracking_dock()
-        return dock is not None and dock.isVisible()
+        if self.viewer is None:
+            return False
+
+        from napari_deeplabcut.tracking._widgets import TrackingControls
+
+        controls = TrackingControls.get_existing(self.viewer)
+        return controls is not None and controls.isVisible()
 
     def _build_rows(self) -> None:
         grouped = defaultdict(list)

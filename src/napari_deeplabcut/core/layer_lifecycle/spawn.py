@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from qtpy.QtCore import QObject
 
+from ...napari_compat.proxy import unwrap
 from .manager import LayerLifecycleManager
 
 if TYPE_CHECKING:
@@ -14,10 +15,15 @@ if TYPE_CHECKING:
 
 _MANAGER_REGISTRY: weakref.WeakKeyDictionary[object, LayerLifecycleManager] = weakref.WeakKeyDictionary()
 _MANAGER_LOCK = threading.RLock()
-_VIEWER_ATTR = "_ndlc_layer_manager"
 
 
 def _viewer_qparent(viewer: napari.Viewer) -> QObject | None:
+    """Qt parent for the manager. Expects an already-unwrapped viewer.
+
+    Reached through a PublicOnlyProxy, ``_qt_window`` comes back wrapped, and wrapt
+    spoofs ``__class__`` so the isinstance check below still passes -- but
+    ``QObject(parent=<proxy>)`` then raises on PySide6.
+    """
     try:
         window = getattr(viewer, "window", None)
         qt_window = getattr(window, "_qt_window", None)
@@ -27,24 +33,13 @@ def _viewer_qparent(viewer: napari.Viewer) -> QObject | None:
 
 
 def get_layer_manager(viewer: napari.Viewer) -> LayerLifecycleManager | None:
+    viewer = unwrap(viewer)
     with _MANAGER_LOCK:
-        mgr = _MANAGER_REGISTRY.get(viewer)
-        if mgr is not None:
-            return mgr
-
-        try:
-            mgr = getattr(viewer, _VIEWER_ATTR, None)
-        except Exception:
-            mgr = None
-
-        if mgr is not None and getattr(mgr, "viewer", None) is viewer:
-            _MANAGER_REGISTRY[viewer] = mgr
-            return mgr
-
-        return None
+        return _MANAGER_REGISTRY.get(viewer)
 
 
 def get_or_create_layer_manager(viewer: napari.Viewer) -> LayerLifecycleManager:
+    viewer = unwrap(viewer)
     with _MANAGER_LOCK:
         mgr = get_layer_manager(viewer)
         if mgr is not None:
@@ -57,9 +52,4 @@ def get_or_create_layer_manager(viewer: napari.Viewer) -> LayerLifecycleManager:
         mgr.attach()
 
         _MANAGER_REGISTRY[viewer] = mgr
-        try:
-            setattr(viewer, _VIEWER_ATTR, mgr)
-        except Exception:
-            pass
-
         return mgr
