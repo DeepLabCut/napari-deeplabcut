@@ -68,7 +68,7 @@ class TrackingControls(ViewerSingletonWidget):
         super().__init__()
         self._singleton_finalize_init()
         self._viewer = self.canonical_viewer(viewer)
-        self.lifecycle_manager = get_or_create_layer_manager(viewer)
+        self.lifecycle_manager = get_or_create_layer_manager(self._viewer)
         # self.setObjectName("napari-deeplabcut-tracking-controls")
         self.setProperty("ndlc_tracking_controls", True)
 

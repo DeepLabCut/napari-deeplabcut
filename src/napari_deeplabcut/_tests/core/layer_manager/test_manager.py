@@ -14,6 +14,7 @@ from napari_deeplabcut.core.layer_lifecycle.display_settings import (
     MACHINE_LABELS_POINTS_DISPLAY,
     PointsDisplaySource,
 )
+from napari_deeplabcut.core.layer_lifecycle.manager import PointsRuntimeResources
 from napari_deeplabcut.tracking.core.data import build_tracking_result_metadata
 
 
@@ -400,32 +401,25 @@ def test_manager_on_remove_triggers_ui_cleanup_and_refresh(qtbot):
     assert rec.removed.calls[0][0] is pts
 
 
-def test_manager_reap_dead_entries_removes_stale_entry(qtbot):
+def test_manager_register_points_layer_survives_reused_layer_id(qtbot):
     viewer = DummyViewer()
     manager = LayerLifecycleManager(viewer=viewer)
 
-    pts = make_points()
-    store = object()
+    stale = make_points("stale")
+    manager.register_managed_points_layer(stale, object())
 
-    manager.register_managed_points_layer(pts, store)
+    entry = manager.registry._entries_by_id.pop(id(stale))
+    pts_b = make_points("pts-b")
+    entry.layer_id = id(pts_b)
+    manager.registry._entries_by_id[id(pts_b)] = entry
 
-    layer_id = id(pts)
-    del pts
+    del stale
     gc.collect()
 
-    report_before = manager.audit_registry()
-    assert report_before.dead_count == 1
-    assert any(issue.code == "dead-entry" and issue.layer_id == layer_id for issue in report_before.issues)
+    store_b = object()
+    manager.register_managed_points_layer(pts_b, store_b)
 
-    reaped = manager.clear_dead_entries(log=False)
-
-    assert len(reaped) == 1
-    assert reaped[0].layer_id == layer_id
-    assert reaped[0].runtime.store is store
-
-    report_after = manager.audit_registry()
-    assert report_after.dead_count == 0
-    assert report_after.issues == ()
+    assert manager.get_store(pts_b) is store_b
 
 
 @pytest.mark.parametrize(
@@ -642,3 +636,69 @@ def test_setup_points_layer_styles_machine_labels_using_config(
 
     if MACHINE_LABELS_POINTS_DISPLAY.border_color is not None:
         assert getattr(pts, "border_color", None) is not None
+
+
+def test_attach_points_layer_runtime_reattach_rebinds_to_current_store(qtbot, monkeypatch):
+    """Re-attaching rebinds the add wrapper and the shortcuts to the store passed."""
+    from napari_deeplabcut.core.layer_lifecycle import manager as manager_module
+
+    class RecordingStore(FakeStore):
+        def __init__(self, viewer, layer):
+            super().__init__(viewer, layer)
+            self.added = []
+
+        def add(self, coord):
+            self.added.append(coord)
+
+        def next_keypoint(self, *_args):
+            return None
+
+        def prev_keypoint(self, *_args):
+            return None
+
+        def _find_first_unlabeled_frame(self, *_args):
+            return None
+
+    class RecordingControls:
+        def cycle_through_label_modes(self, *_args):
+            return None
+
+        def cycle_through_color_modes(self, *_args):
+            return None
+
+    monkeypatch.setattr(manager_module.keypoints, "KeypointStore", RecordingStore)
+
+    viewer = DummyViewer()
+    manager = LayerLifecycleManager(viewer=viewer)
+    manager.viewer_keybinds_installed = True
+
+    layer = make_points()
+    first = RecordingStore(viewer, layer)
+    second = RecordingStore(viewer, layer)
+    first_controls = RecordingControls()
+    second_controls = RecordingControls()
+
+    def attach(store, controls, resources):
+        return manager.attach_points_layer_runtime(
+            layer=layer,
+            store=store,
+            controls=controls,
+            resolve_layer_by_id=lambda _layer_id: layer,
+            schedule_recolor=lambda _layer: None,
+            existing_resources=resources,
+        )
+
+    resources = attach(first, first_controls, PointsRuntimeResources())
+    attach(second, second_controls, resources)
+
+    layer.add(np.zeros((1, 3)))
+
+    assert first.added == []
+    assert len(second.added) == 1
+    keymap = {str(key): callback for key, callback in layer.keymap.items()}
+
+    for key in ("W", "Up", "S", "Down", "Shift+Left", "Shift+Right"):
+        assert keymap[key].__self__ is second, f"{key} still bound to the previous store"
+
+    for key in ("M", "F"):
+        assert keymap[key].__self__ is second_controls, f"{key} still bound to the previous controls"
