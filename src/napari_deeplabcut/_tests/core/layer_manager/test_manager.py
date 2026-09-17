@@ -15,6 +15,7 @@ from napari_deeplabcut.core.layer_lifecycle.display_settings import (
     PointsDisplaySource,
 )
 from napari_deeplabcut.core.layer_lifecycle.manager import PointsRuntimeResources
+from napari_deeplabcut.core.project_paths import is_same_dataset
 from napari_deeplabcut.tracking.core.data import build_tracking_result_metadata
 
 
@@ -850,6 +851,37 @@ def test_dataset_mismatch_is_reported_once_per_target_folder(qtbot):
 
     assert rec.dataset_mismatch.count == 2
 
+    # Going back to a folder already reported is not a new fact.
+    manager._image_meta = ImageMetadata(
+        paths=["labeled-data/videoB/imgB000.png"],
+        root="C:/project/labeled-data/videoB",
+    )
+    manager._remap_frame_indices(layer)
+
+    assert rec.dataset_mismatch.count == 2
+
+
+def test_dataset_mismatch_names_both_folders_in_full(qtbot):
+    """Two projects can hold a dataset of the same name, so bare names do not identify it."""
+    layer = _points_bound_to(
+        ["labeled-data/mouse1/img000.png"],
+        root="C:/project-A/labeled-data/mouse1",
+    )
+
+    manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
+    rec = connect_signal_recorders(manager)
+    manager._image_meta = ImageMetadata(
+        paths=["labeled-data/mouse1/img000.png"],
+        root="C:/project-B/labeled-data/mouse1",
+    )
+    manager._image_dataset_key = "C:/project-B/labeled-data/mouse1"
+
+    manager._remap_frame_indices(layer)
+
+    reason = rec.dataset_mismatch.calls[0][0]
+    assert "C:/project-A/labeled-data/mouse1" in reason
+    assert "C:/project-B/labeled-data/mouse1" in reason
+
 
 # ---------------------------------------------------------------------------
 # Inheriting root and paths from the open folder
@@ -863,6 +895,36 @@ def _points_keyed_without_paths(*, root):
     layer = make_nonempty_points("keyed")
     layer.metadata = {"paths": [], "root": root, "dataset_key": root}
     return layer
+
+
+def test_a_keyless_image_context_is_identified_by_its_own_folder(monkeypatch, fake_store):
+    """Opening a video must not read as a different dataset than the h5 beside it.
+
+    `read_video` rewrites videos/<name>.mp4 into labeled-data/<name>, so its root is the
+    annotations' own folder. Before the key was derived from that root, a context without
+    one compared unequal to every keyed layer and raised a mismatch over nothing.
+    """
+    root = "C:/project/labeled-data/videoA"
+    new_paths = ["labeled-data/videoA/img000.png"]
+    layer = _points_keyed_without_paths(root=root)
+
+    image = make_image("videoA.mp4")
+    image.metadata = {"root": root}  # as read_video builds one: root, no dataset_key
+
+    manager = LayerLifecycleManager(viewer=DummyViewer([image, layer]))
+    monkeypatch.setattr(manager, "validate_header", lambda _layer: True)
+    manager._setup_image_layer(image, reorder=False)
+    manager._image_meta = ImageMetadata(paths=list(new_paths), root=root)
+
+    warned = []
+    monkeypatch.setattr(manager, "_report_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
+
+    manager._sync_points_layers_from_image_meta()
+
+    # The key is the resolved folder, so it need not match `root` character for character.
+    assert is_same_dataset(manager._image_dataset_key, root)
+    assert warned == []
+    assert layer.metadata["paths"] == new_paths
 
 
 def test_sync_from_image_meta_refuses_paths_for_a_layer_from_another_dataset(monkeypatch):

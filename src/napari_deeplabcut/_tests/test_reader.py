@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import cv2
 import dask.array as da
 import numpy as np
@@ -377,6 +379,21 @@ def test_read_video_output(video_path):
     frame = data[0].compute()
     assert frame.shape == (50, 50, 3)
     assert frame.dtype == np.uint8
+
+
+def test_read_video_keys_the_dataset_it_belongs_to(video_path):
+    """A video names the labeled-data folder beside it, so it must carry that folder's key.
+
+    Without it the lifecycle manager reads the video as a dataset of its own and warns that
+    the annotations already open do not match it.
+    """
+    from napari_deeplabcut.core.project_paths import dataset_key_for_folder
+
+    _data, params, _kind = read_video(video_path)[0]
+    md = params["metadata"]
+
+    assert md["dataset_key"] == dataset_key_for_folder(md["root"])
+    assert Path(md["root"]).parent.name == "labeled-data"
 
 
 def test_get_video_reader_dispatch(video_path):
