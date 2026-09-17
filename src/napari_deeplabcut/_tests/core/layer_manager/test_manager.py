@@ -851,6 +851,119 @@ def test_dataset_mismatch_is_reported_once_per_target_folder(qtbot):
     assert rec.dataset_mismatch.count == 2
 
 
+# ---------------------------------------------------------------------------
+# Inheriting root and paths from the open folder
+# ---------------------------------------------------------------------------
+def _points_keyed_without_paths(*, root):
+    """A keyed layer with no paths, as a numeric-index h5 produces.
+
+    `read_hdf` leaves `paths` empty when the frame index is numeric, but still records
+    `root` and `dataset_key`, so a layer can name its dataset while listing no frames.
+    """
+    layer = make_nonempty_points("keyed")
+    layer.metadata = {"paths": [], "root": root, "dataset_key": root}
+    return layer
+
+
+def test_sync_from_image_meta_refuses_paths_for_a_layer_from_another_dataset(monkeypatch):
+    layer = _points_keyed_without_paths(root="C:/project/labeled-data/videoA")
+
+    manager = _manager_showing(
+        layer,
+        paths=["labeled-data/videoB/img000.png"],
+        root="C:/project/labeled-data/videoB",
+    )
+
+    warned = []
+    monkeypatch.setattr(manager, "_report_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
+
+    manager._sync_points_layers_from_image_meta()
+
+    assert layer.metadata["paths"] == []
+    assert layer.metadata["root"] == "C:/project/labeled-data/videoA"
+    assert warned == [layer]
+
+
+def test_sync_from_image_meta_still_inherits_paths_for_its_own_dataset():
+    new_paths = ["labeled-data/videoA/img000.png"]
+    layer = _points_keyed_without_paths(root="C:/project/labeled-data/videoA")
+
+    manager = _manager_showing(layer, paths=new_paths, root="C:/project/labeled-data/videoA")
+
+    manager._sync_points_layers_from_image_meta()
+
+    assert layer.metadata["paths"] == new_paths
+
+
+def test_sync_from_image_meta_records_the_dataset_key_it_inherits_from():
+    layer = make_points("placeholder")
+    layer.metadata = {"project": "C:/project"}
+
+    manager = _manager_showing(
+        layer,
+        paths=["labeled-data/videoA/img000.png"],
+        root="C:/project/labeled-data/videoA",
+    )
+
+    manager._sync_points_layers_from_image_meta()
+
+    assert layer.metadata["dataset_key"] == "C:/project/labeled-data/videoA"
+
+
+def test_wire_points_layer_refuses_paths_from_another_dataset(monkeypatch, fake_store):
+    """Wiring inherits missing paths too, so it asks the same question."""
+    layer = _points_keyed_without_paths(root="C:/project/labeled-data/videoA")
+
+    manager = _manager_showing(
+        layer,
+        paths=["labeled-data/videoB/img000.png"],
+        root="C:/project/labeled-data/videoB",
+    )
+    monkeypatch.setattr(manager, "validate_header", lambda _layer: True)
+
+    warned = []
+    monkeypatch.setattr(manager, "_report_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
+
+    manager._wire_points_layer(layer)
+
+    assert layer.metadata["paths"] == []
+    assert layer.metadata["root"] == "C:/project/labeled-data/videoA"
+    assert warned == [layer]
+
+
+def test_wire_points_layer_records_the_dataset_key_it_inherits_from(monkeypatch, fake_store):
+    """A layer with no dataset of its own keeps the folder it took its paths from."""
+    new_paths = ["labeled-data/videoA/img000.png"]
+    layer = make_nonempty_points("placeholder")
+    layer.metadata = {"project": "C:/project"}
+
+    manager = _manager_showing(layer, paths=new_paths, root="C:/project/labeled-data/videoA")
+    monkeypatch.setattr(manager, "validate_header", lambda _layer: True)
+
+    manager._wire_points_layer(layer)
+
+    assert layer.metadata["paths"] == new_paths
+    assert layer.metadata["dataset_key"] == "C:/project/labeled-data/videoA"
+
+
+def test_wire_points_layer_says_nothing_when_no_image_is_open(monkeypatch, fake_store):
+    """Loading annotations first is the normal way in, not a mismatch."""
+    layer = _points_bound_to(
+        ["labeled-data/videoA/img000.png"],
+        root="C:/project/labeled-data/videoA",
+    )
+
+    manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
+    monkeypatch.setattr(manager, "validate_header", lambda _layer: True)
+
+    warned = []
+    monkeypatch.setattr(manager, "_report_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
+
+    manager._wire_points_layer(layer)
+
+    assert warned == []
+
+
 def test_an_unbound_layer_binds_to_the_dataset_it_adopts(monkeypatch):
     """A config placeholder must stop being unbound once it takes a folder."""
     layer = make_points("placeholder")
