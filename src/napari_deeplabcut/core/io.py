@@ -1069,6 +1069,7 @@ def read_video(filename: str, *, dlc_meta: dict | None = None, chunk_size: int |
         "name": filename,
         "metadata": {
             "root": root,
+            "dataset_key": dataset_key_for_folder(root),
         },
     }
     if dlc_meta is not None:

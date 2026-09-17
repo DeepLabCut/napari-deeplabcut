@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterator
 from enum import Enum
-from pathlib import Path
 from types import MethodType
 from typing import TYPE_CHECKING, Any
 from weakref import WeakKeyDictionary
@@ -28,7 +27,7 @@ from ...core.metadata import (
     sync_points_from_image,
     write_points_meta,
 )
-from ...core.project_paths import PathMatchPolicy, is_same_dataset
+from ...core.project_paths import PathMatchPolicy, dataset_key_for_folder, is_same_dataset
 from ...core.remap import remap_layer_data_by_paths
 from ...napari_compat import install_add_wrapper, install_paste_patch, layer_key, unwrap
 from ...napari_compat.points_layer import make_paste_data
@@ -115,8 +114,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         self._image_dataset_key: str | None = None
         self._project_path: str | None = None
 
-        # Last folder each layer was warned about failing to follow
-        self._dataset_mismatch_warned: WeakKeyDictionary[Layer, str] = WeakKeyDictionary()
+        self._dataset_mismatch_warned: WeakKeyDictionary[Layer, set[str]] = WeakKeyDictionary()
 
         self._attached = False
         self.viewer_keybinds_installed = False
@@ -387,10 +385,11 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         time a given layer fails to follow a given folder; the log records every pass.
         """
         root = (layer.metadata or {}).get("root")
-        dataset = Path(str(root)).name if root else "its original folder"
+        dataset = str(root) if root else "its original folder"
         target = self._image_dataset_key or str(self._image_meta.root or "")
 
-        if self._dataset_mismatch_warned.get(layer) == target:
+        warned = self._dataset_mismatch_warned.setdefault(layer, set())
+        if target in warned:
             logger.debug(
                 "Extra dataset-mismatch notification for layer=%r folder=%r",
                 getattr(layer, "name", layer),
@@ -398,10 +397,12 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             )
             return
 
-        self._dataset_mismatch_warned[layer] = target
+        warned.add(target)
         reason = (
             f"'{getattr(layer, 'name', layer)}' could not be matched to the frames in the folder "
-            f"that was opened; it will still save as '{dataset}'.\n"
+            f"that was opened.\n\n"
+            f"It will still save to:\n  {dataset}\n"
+            f"not:\n  {target}\n\n"
             "Please clear it before labelling the new folder."
         )
         self.viewer.status = reason
@@ -745,7 +746,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 pass
 
         self._active_dlc_image_layer_id = layer_key(layer)
-        self._image_dataset_key = (layer.metadata or {}).get("dataset_key")
+        self._image_dataset_key = md.get("dataset_key") or dataset_key_for_folder(md.get("root"))
         context_changed = self._update_image_meta_from_layer(layer)
 
         if not self._project_path:
