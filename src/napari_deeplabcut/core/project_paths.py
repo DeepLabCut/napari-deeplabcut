@@ -763,6 +763,11 @@ def is_same_dataset(a: str | None, b: str | None) -> bool:
 
     The same folder reaches us under more than one spelling: differing case or separators
     on Windows, and a mapped drive against the UNC path behind it.
+
+    The `samefile` fallback is a fix for a reported failure: DeepLabCut/DeepLabCut#3348
+    had one project folder appear as `Z:/...`, as
+    `\\\\storage.domain/...` and as `\\\\?\\Volume{GUID}/...`, and string comparison alone
+    left DLC unable to find its own models. Do not simplify this to equality.
     """
     if a is None or b is None:
         return False
