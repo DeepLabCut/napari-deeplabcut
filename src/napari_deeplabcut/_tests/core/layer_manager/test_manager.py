@@ -897,22 +897,22 @@ def _points_keyed_without_paths(*, root):
     return layer
 
 
-def test_a_keyless_image_context_is_identified_by_its_own_folder(monkeypatch, fake_store):
+def test_no_dataset_key_image_context_is_identified_by_folder(tmp_path, monkeypatch):
     """Opening a video must not read as a different dataset than the h5 beside it.
 
     `read_video` rewrites videos/<name>.mp4 into labeled-data/<name>, so its root is the
-    annotations' own folder. Before the key was derived from that root, a context without
-    one compared unequal to every keyed layer and raised a mismatch over nothing.
+    annotations' own folder.
     """
-    root = "C:/project/labeled-data/videoA"
+    folder = tmp_path / "project" / "labeled-data" / "videoA"
+    folder.mkdir(parents=True)
+    root = str(folder)
     new_paths = ["labeled-data/videoA/img000.png"]
-    layer = _points_keyed_without_paths(root=root)
 
+    layer = _points_keyed_without_paths(root=root)
     image = make_image("videoA.mp4")
     image.metadata = {"root": root}  # as read_video builds one: root, no dataset_key
 
     manager = LayerLifecycleManager(viewer=DummyViewer([image, layer]))
-    monkeypatch.setattr(manager, "validate_header", lambda _layer: True)
     manager._setup_image_layer(image, reorder=False)
     manager._image_meta = ImageMetadata(paths=list(new_paths), root=root)
 
@@ -921,7 +921,6 @@ def test_a_keyless_image_context_is_identified_by_its_own_folder(monkeypatch, fa
 
     manager._sync_points_layers_from_image_meta()
 
-    # The key is the resolved folder, so it need not match `root` character for character.
     assert is_same_dataset(manager._image_dataset_key, root)
     assert warned == []
     assert layer.metadata["paths"] == new_paths
