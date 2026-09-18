@@ -883,6 +883,27 @@ def test_dataset_mismatch_names_both_folders_in_full(qtbot):
     assert "C:/project-B/labeled-data/mouse1" in reason
 
 
+def test_frames_replaced_in_the_same_folder_does_not_tell_the_user_to_clear(qtbot):
+    """Re-extracting frames leaves the layer where it is, so clearing it would lose labels.
+
+    The layer belongs to the folder that was opened, so naming two folders and telling the
+    user to clear it would name the same folder twice and provide incorrect guidance.
+    """
+    root = "C:/project/labeled-data/videoA"
+    layer = _points_bound_to(["labeled-data/videoA/imgA000.png"], root=root)
+
+    manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
+    rec = connect_signal_recorders(manager)
+    manager._image_meta = ImageMetadata(paths=["labeled-data/videoA/renamed000.png"], root=root)
+    manager._image_dataset_key = root
+
+    manager._remap_frame_indices(layer)
+
+    reason = rec.dataset_mismatch.calls[0][0]
+    assert "clear" not in reason.lower()
+    assert "still save there" in reason
+
+
 # ---------------------------------------------------------------------------
 # Inheriting root and paths from the open folder
 # ---------------------------------------------------------------------------

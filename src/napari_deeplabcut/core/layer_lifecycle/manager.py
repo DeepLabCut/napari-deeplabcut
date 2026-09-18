@@ -398,13 +398,20 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             return
 
         warned.add(target)
-        reason = (
-            f"'{getattr(layer, 'name', layer)}' could not be matched to the frames in the folder "
-            f"that was opened.\n\n"
-            f"It will still save to:\n  {dataset}\n"
-            f"not:\n  {target}\n\n"
-            "Please clear it before labelling the new folder."
-        )
+        name = getattr(layer, "name", layer)
+
+        if is_same_dataset(str(root) if root else None, target):
+            reason = (
+                f"'{name}' does not match the frames now in {dataset}.\n\n"
+                "Its annotations are unchanged and still save there."
+            )
+        else:
+            reason = (
+                f"'{name}' could not be matched to the frames in the folder that was opened.\n\n"
+                f"It will still save to:\n  {dataset}\n"
+                f"not:\n  {target}\n\n"
+                "Please clear it before labelling the new folder."
+            )
         self.viewer.status = reason
 
         self._single_shot_owned(0, lambda: self.layer_dataset_mismatch.emit(reason))
