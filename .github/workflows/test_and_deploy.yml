@@ -106,7 +106,7 @@ jobs:
   build:
     # Shared with the weekly checks, so the release build is continuously exercised
     # rather than only at tag time. It also builds, checks metadata, installs the
-    # wheel and runs the suite against it - a release is blocked if any of that fails.
+    # wheel and runs the suite against it
     #
     # this will run when you have tagged a commit, starting with "v*"
     needs: [test, test-napari-floor]
