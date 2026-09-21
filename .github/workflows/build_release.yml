@@ -47,24 +47,21 @@ jobs:
           python -m build
           twine check --strict dist/*
 
-      - name: Install the wheel and run its tests
+      - name: Install the wheel
+        run: |
+          python -m pip install "$(ls dist/*.whl)[dev,tracking]"
+          mkdir -p /tmp/wheeltest
+
+      - name: Run the wheel's tests
         uses: aganders3/headless-gui@v2
         with:
-          # --pyargs runs the tests that shipped inside the wheel, and the cd out of
-          # the repo stops src/ shadowing the installed package - without it this
-          # would silently retest the source tree and prove nothing.
-          run: |
-            python -m pip install "$(ls dist/*.whl)[dev,tracking]"
-            mkdir -p /tmp/wheeltest && cd /tmp/wheeltest
-            # pyproject.toml is not in tmp, so pytest has no config
-            # Keep -o args in sync with [tool.pytest.ini_options].
-            python -m pytest --pyargs napari_deeplabcut._tests -q -n auto --dist loadfile \
-              -o qt_api=pyside6 \
-              -o "markers=e2e: end-to-end tests. Invoke napari viewer fixtures, slow."
+          working-directory: /tmp/wheeltest
+          shell: bash
+          run: >-
+            python -m pytest --pyargs napari_deeplabcut._tests -q -n auto --dist loadfile
+            -o qt_api=pyside6
+            -o "markers=e2e: end-to-end tests. Invoke napari viewer fixtures, slow."
 
-      # Published by test_and_deploy.yml, so the bytes that were tested above are the
-      # bytes that reach PyPI. Artifacts are scoped to the run, so a caller's other
-      # jobs can download this.
       - name: Upload the distribution
         uses: actions/upload-artifact@v4
         with:
