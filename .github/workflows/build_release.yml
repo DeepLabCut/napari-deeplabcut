@@ -60,7 +60,7 @@ jobs:
           run: >-
             python -m pytest --pyargs napari_deeplabcut._tests -q -n auto --dist loadfile
             -o qt_api=pyside6
-            -o "markers=e2e: end-to-end tests. Invoke napari viewer fixtures, slow."
+            -o markers=e2e
 
       - name: Upload the distribution
         uses: actions/upload-artifact@v4
