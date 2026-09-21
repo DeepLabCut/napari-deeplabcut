@@ -19,14 +19,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      force_deploy:
-        # Validates the build and the installed-wheel tests, but does not publish from an
-        # untagged commit: setuptools_scm derives a local version there (0.x.devN+g<sha>)
-        # and PyPI rejects local version identifiers, so the upload step fails.
-        description: 'Force deployment even if tests fail'
-        required: true
-        type: boolean
 
 jobs:
   test:
@@ -114,24 +106,18 @@ jobs:
   build:
     # Shared with the weekly checks, so the release build is continuously exercised
     # rather than only at tag time. It also builds, checks metadata, installs the
-    # wheel and runs the suite against it - a release is blocked if any of that fails.
+    # wheel and runs the suite against it
     #
     # this will run when you have tagged a commit, starting with "v*"
     needs: [test, test-napari-floor]
-    if: |
-      always() && (
-        (github.event_name == 'workflow_dispatch' && inputs.force_deploy && github.ref == 'refs/heads/main'
-        ) ||
-        (startsWith(github.ref, 'refs/tags/v')
-          && needs.test.result == 'success'
-          && needs['test-napari-floor'].result == 'success')
-      )
+    if: startsWith(github.ref, 'refs/tags/v')
     uses: ./.github/workflows/build_release.yml
 
   deploy:
     # requires that you have put your twine API key in your
     # github secrets (see readme for details)
     needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
     concurrency:

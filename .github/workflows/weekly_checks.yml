@@ -10,22 +10,37 @@ on:
     # Note: Scheduled workflows only ever run on the default branch
     - cron: "0 6 * * 1" # Mondays, 06:00 UTC
   workflow_dispatch:
+    inputs:
+      simulate_failure:
+        description: "Skip the checks, fail on purpose, and open a test tracking issue"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   napari-breakage:
+    if: ${{ !inputs.simulate_failure }}
     uses: ./.github/workflows/napari_breakage.yml
 
   build-release:
+    if: ${{ !inputs.simulate_failure }}
     uses: ./.github/workflows/build_release.yml
+
+  simulate-failure:
+    # Exercises the notify job without waiting for a real failure.
+    if: ${{ inputs.simulate_failure }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 1
 
   notify:
     # A separate job so the notification cannot be lost to the failure it reports: a
     # step-level `if: failure()` only runs if its job reaches that step, so a dead
     # runner, a crashed step or a timeout would silently produce nothing.
     #
-    # Scheduled runs only, no issue on manual dispatch.
-    needs: [napari-breakage, build-release]
-    if: failure() && github.event_name == 'schedule'
+    # Scheduled runs only, no issue on manual dispatch unless simulating.
+    needs: [napari-breakage, build-release, simulate-failure]
+    if: failure() && (github.event_name == 'schedule' || inputs.simulate_failure)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -38,21 +53,57 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          NAPARI_RESULT: ${{ needs['napari-breakage'].result }}
+          BUILD_RESULT: ${{ needs['build-release'].result }}
+          SIMULATED: ${{ inputs.simulate_failure }}
         run: |
           set -euo pipefail
-          title="Weekly checks failing"
-          label="weekly checks"
+          if [ "$SIMULATED" = "true" ]; then
+            title="Weekly checks failing (notification test)"
+            label="weekly checks test"
+            banner="> **This is a test.** Opened by a manual dispatch with *simulate_failure* enabled, to exercise this notification. Nothing is broken - close it."
+          else
+            title="Weekly checks failing"
+            label="weekly checks"
+            banner=""
+          fi
           gh label create "$label" --repo "$REPO" --color B60205 \
             --description "Tracking issue for the weekly CI checks" --force
+
+          summary=$(printf '%s\n' \
+            "| Check | Result |" \
+            "| --- | --- |" \
+            "| napari breakage | $NAPARI_RESULT |" \
+            "| build and test release | $BUILD_RESULT |")
+
           existing=$(gh issue list --repo "$REPO" --state open --label "$label" --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --repo "$REPO" --body "Still failing: $RUN_URL"
+            comment=$(printf '%s\n' \
+              "Still failing: [run $GITHUB_RUN_ID]($RUN_URL)" \
+              "" \
+              "$summary")
+            gh issue comment "$existing" --repo "$REPO" --body "$comment"
           else
             body=$(printf '%s\n' \
-              "Weekly checks failed: $RUN_URL" \
+              "Weekly checks failed: [run $GITHUB_RUN_ID]($RUN_URL)" \
               "" \
-              "(Run against napari pre-releases and the built wheel.)" \
+              "$summary" \
               "" \
-              "Close this issue once the run is fixed.")
-            gh issue create --repo "$REPO" --title "$title" --body "$body" --label "$label"
+              "These run against napari pre-releases and the built wheel, so a failure is usually napari breaking us upstream, or a packaging problem - not a regression from a PR." \
+              "" \
+              "## Resolving" \
+              "" \
+              "1. Open the failing job from the run above and fix it on a branch." \
+              "2. Re-run that check against your branch:" \
+              "   - Actions -> napari breakage -> Run workflow -> *Plugin commit, tag or branch to test*" \
+              "   - Actions -> build and test release -> Run workflow -> *Plugin commit, tag or branch to build*" \
+              "3. Merge the fix, then dispatch Actions -> weekly checks on main" \
+              "4. Close this issue. While it stays open, later failures are added here as comments; once closed, the next failure opens a fresh one.")
+            if [ -n "$banner" ]; then
+              body=$(printf '%s\n' "$banner" "" "$body")
+            fi
+            url=$(gh issue create --repo "$REPO" --title "$title" --body "$body" --label "$label")
+            gh issue edit "$url" --repo "$REPO" \
+              --add-assignee C-Achard --add-assignee deruyter92 \
+              || echo "::warning::could not assign $url"
           fi

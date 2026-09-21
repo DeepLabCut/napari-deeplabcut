@@ -18,20 +18,25 @@ jobs:
 
       - name: Detect changed files
         id: changed_files
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          git fetch origin ${{ github.base_ref }}
-          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          git fetch origin "$BASE_REF"
+          CHANGED_FILES=$(git diff --name-only "origin/$BASE_REF...HEAD")
 
+          delimiter="changed_$(openssl rand -hex 16)"
           {
-            echo "changed<<EOF"
+            echo "changed<<$delimiter"
             echo "$CHANGED_FILES"
-            echo "EOF"
+            echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
       - name: Show changed files
+        env:
+          CHANGED_FILES: ${{ steps.changed_files.outputs.changed }}
         run: |
           echo "Changed files:"
-          echo "${{ steps.changed_files.outputs.changed }}"
+          echo "$CHANGED_FILES"
 
   precommit:
     needs: detect_changes
@@ -43,7 +48,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.head_ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
