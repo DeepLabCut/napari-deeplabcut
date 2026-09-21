@@ -384,7 +384,8 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         folder open reaches this more than once for the same layer. Report only the first
         time a given layer fails to follow a given folder; the log records every pass.
         """
-        root = (layer.metadata or {}).get("root")
+        metadata = layer.metadata or {}
+        root = metadata.get("root")
         dataset = str(root) if root else "its original folder"
         target = self._image_dataset_key or str(self._image_meta.root or "")
 
@@ -400,9 +401,9 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         warned.add(target)
         name = getattr(layer, "name", layer)
 
-        if is_same_dataset(str(root) if root else None, target):
+        if self._belongs_to_current_dataset(metadata.get("dataset_key")):
             reason = (
-                f"'{name}' does not match the frames now in {dataset}.\n\n"
+                f"'{name}' does not match the frames now in {target}.\n\n"
                 "Its annotations are unchanged and still save there."
             )
         else:

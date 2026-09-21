@@ -710,13 +710,22 @@ def test_attach_points_layer_runtime_reattach_rebinds_to_current_store(qtbot, mo
 # ---------------------------------------------------------------------------
 # _remap_frame_indices
 # ---------------------------------------------------------------------------
+NO_DATASET_KEY = object()
+
+
 def _points_bound_to(paths, *, root, dataset_key=None):
     """A Points layer as the readers build one: paths, root, and an immutable identity."""
     layer = make_nonempty_points("bound")
+    if dataset_key is None:
+        key = root
+    elif dataset_key is NO_DATASET_KEY:
+        key = None
+    else:
+        key = dataset_key
     layer.metadata = {
         "paths": list(paths),
         "root": root,
-        "dataset_key": root if dataset_key is None else dataset_key,
+        "dataset_key": key,
     }
     return layer
 
@@ -902,6 +911,52 @@ def test_frames_replaced_in_the_same_folder_does_not_tell_the_user_to_clear(qtbo
     reason = rec.dataset_mismatch.calls[0][0]
     assert "clear" not in reason.lower()
     assert "still save there" in reason
+
+
+def test_unbound_layer_is_not_told_to_clear_when_its_root_is_stale(qtbot):
+    """A layer with no `dataset_key` adopts whatever is open, so it is never on another folder."""
+    layer = _points_bound_to(
+        ["labeled-data/videoA/img000.png"],
+        root="C:/elsewhere/labeled-data/videoA",
+        dataset_key=NO_DATASET_KEY,
+    )
+
+    manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
+    rec = connect_signal_recorders(manager)
+    manager._image_meta = ImageMetadata(
+        paths=["labeled-data/videoA/renamed000.png"],
+        root="C:/project/labeled-data/videoA",
+    )
+    manager._image_dataset_key = "C:/project/labeled-data/videoA"
+
+    manager._remap_frame_indices(layer)
+
+    reason = rec.dataset_mismatch.calls[0][0]
+    assert "clear" not in reason.lower()
+    assert "still save there" in reason
+
+
+def test_dataset_mismatch_message_names_the_open_folder_not_a_stale_root(qtbot):
+    """The same-folder message points at the folder that was opened."""
+    layer = _points_bound_to(
+        ["labeled-data/videoA/img000.png"],
+        root=None,
+        dataset_key=NO_DATASET_KEY,
+    )
+
+    manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
+    rec = connect_signal_recorders(manager)
+    manager._image_meta = ImageMetadata(
+        paths=["labeled-data/videoA/renamed000.png"],
+        root="C:/project/labeled-data/videoA",
+    )
+    manager._image_dataset_key = "C:/project/labeled-data/videoA"
+
+    manager._remap_frame_indices(layer)
+
+    reason = rec.dataset_mismatch.calls[0][0]
+    assert "C:/project/labeled-data/videoA" in reason
+    assert "its original folder" not in reason
 
 
 # ---------------------------------------------------------------------------
