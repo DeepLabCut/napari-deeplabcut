@@ -1129,3 +1129,43 @@ def test_an_unbound_layer_binds_to_the_dataset_it_adopts(monkeypatch):
 
     assert layer.metadata["root"] == "C:/project/labeled-data/videoA"
     assert warned == [layer]
+
+
+def _adopt_via_setup_points_layer(manager, layer, monkeypatch):
+    monkeypatch.setattr(manager, "validate_header", lambda ly: True)
+    manager._setup_points_layer(layer, allow_merge=False)
+
+
+def _adopt_via_sync_from_image_meta(manager, layer, monkeypatch):
+    manager._sync_points_layers_from_image_meta()
+
+
+ADOPTION_ENTRY_POINTS = {
+    "setup_points_layer": _adopt_via_setup_points_layer,
+    "sync_from_image_meta": _adopt_via_sync_from_image_meta,
+}
+
+
+@pytest.mark.parametrize("entry_point", sorted(ADOPTION_ENTRY_POINTS))
+@pytest.mark.parametrize("already_has_paths", [False, True], ids=["nothing", "paths_only"])
+def test_taking_context_from_the_open_folder_always_binds_the_layer(
+    qtbot,
+    fake_store,
+    monkeypatch,
+    entry_point,
+    already_has_paths,
+):
+    """Whichever entry point hands a layer image context must also record dataset_key."""
+    open_root = "C:/project/labeled-data/videoB"
+    open_paths = ["labeled-data/videoB/img000.png"]
+
+    layer = make_points("unbound")
+    layer.metadata = {"paths": ["labeled-data/videoA/img000.png"]} if already_has_paths else {}
+
+    manager = _manager_showing(layer, paths=open_paths, root=open_root)
+
+    ADOPTION_ENTRY_POINTS[entry_point](manager, layer, monkeypatch)
+
+    # Guards the assertion below against passing vacuously if adoption stops happening.
+    assert layer.metadata.get("root") == open_root
+    assert layer.metadata.get("dataset_key") == open_root

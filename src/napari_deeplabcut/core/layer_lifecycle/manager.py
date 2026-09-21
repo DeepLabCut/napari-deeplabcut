@@ -691,7 +691,9 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             if not self._may_follow_current_dataset(ly):
                 continue
 
-            inherits_paths = not ly.metadata.get("paths") and bool(self._image_meta.paths)
+            inherits_context = (not ly.metadata.get("paths") and bool(self._image_meta.paths)) or (
+                not ly.metadata.get("root") and bool(self._image_meta.root)
+            )
 
             res = read_points_meta(ly, migrate_legacy=True, drop_controls=False, drop_header=False)
             if hasattr(res, "errors"):
@@ -720,7 +722,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 )
                 continue
 
-            if inherits_paths:
+            if inherits_context:
                 self._record_dataset_key(ly)
 
     def _cache_project_path_from_image_layer(self, layer: Image) -> None:
@@ -834,10 +836,14 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         # Inherit only what the layer never had, and only from a folder it may follow.
         if self._may_follow_current_dataset(layer):
+            inherited = False
             if not layer.metadata.get("root") and self._image_meta.root:
                 layer.metadata["root"] = self._image_meta.root
+                inherited = True
             if not layer.metadata.get("paths") and self._image_meta.paths:
                 layer.metadata["paths"] = self._image_meta.paths
+                inherited = True
+            if inherited:
                 self._record_dataset_key(layer)
 
         if root := layer.metadata.get("root"):
