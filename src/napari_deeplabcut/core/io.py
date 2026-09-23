@@ -81,6 +81,13 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 _SUPPORTED_SUFFIXES = {ext.lower() for ext in SUPPORTED_IMAGES}
 DLC_CANONICAL_H5_KEY = "df_with_missing"  # TODO use this key instead of str literal in all places
+
+# "keypoints" is a legacy key written by this package, not an arbitrary fallback.
+# `_writer.py` used `key="keypoints"` from 30f37ca (2022-05-12) through a686875
+# (2026-04-27), when the canonical key was adopted. DeepLabCut uses "df_with_missing".
+#
+# Projects labelled during that period may legitimately hold either key.
+# Keep this to preserve compatibility with labelling data produced by earlier versions.
 FALLBACK_H5_KEYS = ["keypoints"]
 
 # -----------------------------------------------------------------------------
