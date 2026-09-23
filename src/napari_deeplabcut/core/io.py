@@ -69,6 +69,7 @@ from napari_deeplabcut.core.project_paths import (
     canonicalize_path,
     find_nearest_config,
     infer_dlc_project_from_points_meta,
+    resolve_dataset_folder,
 )
 from napari_deeplabcut.core.provenance import resolve_output_path_from_metadata, should_nan_clear_existing_for_save
 from napari_deeplabcut.utils.debug import log_timing
@@ -80,6 +81,13 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 _SUPPORTED_SUFFIXES = {ext.lower() for ext in SUPPORTED_IMAGES}
 DLC_CANONICAL_H5_KEY = "df_with_missing"  # TODO use this key instead of str literal in all places
+
+# "keypoints" is a legacy key written by this package, not an arbitrary fallback.
+# `_writer.py` used `key="keypoints"` from 30f37ca (2022-05-12) through a686875
+# (2026-04-27), when the canonical key was adopted. DeepLabCut uses "df_with_missing".
+#
+# Projects labelled during that period may legitimately hold either key.
+# Keep this to preserve compatibility with labelling data produced by earlier versions.
 FALLBACK_H5_KEYS = ["keypoints"]
 
 # -----------------------------------------------------------------------------
@@ -247,6 +255,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     )
     layer_props["name"] = file.stem
     layer_props["metadata"]["root"] = str(file.parent)
+    layer_props["metadata"]["dataset_folder"] = resolve_dataset_folder(file.parent)
     layer_props["metadata"]["name"] = layer_props["name"]
     layer_props["metadata"]["config_colormap"] = config_colormap
 
@@ -852,6 +861,7 @@ def _build_image_layer_kwargs(
     metadata = {
         "paths": [canonicalize_path(fp, 3) for fp in filepaths],
         "root": str(filepaths[0].parent),
+        "dataset_folder": resolve_dataset_folder(filepaths[0].parent),
     }
     if dlc_meta is not None:
         metadata["dlc"] = dlc_meta
@@ -1066,6 +1076,7 @@ def read_video(filename: str, *, dlc_meta: dict | None = None, chunk_size: int |
         "name": filename,
         "metadata": {
             "root": root,
+            "dataset_folder": resolve_dataset_folder(root),
         },
     }
     if dlc_meta is not None:

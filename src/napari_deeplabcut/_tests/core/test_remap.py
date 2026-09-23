@@ -281,6 +281,62 @@ def test_remap_warns_on_duplicate_canonical_keys(caplog):
     assert any("Duplicate canonical keys" in w for w in res.warnings)
 
 
+def test_ambiguous_depth1_remap_is_rejected_and_refuses_paths_update():
+    """A basename-only match that is not bijective must not be trusted.
+
+    Callers key further metadata updates off ``accept_paths_update``, so it has to stay
+    False here even though a depth was found.
+    """
+    # No shared 3- or 2-level suffix, so matching falls back to bare basenames, where
+    # both old paths collapse onto the same key.
+    old_paths = ["A/a/img0.png", "B/b/img0.png"]
+    new_paths = ["X/x/img0.png", "Y/y/img1.png"]
+
+    data = np.array([[0.0, 1.0, 2.0], [1.0, 3.0, 4.0]], dtype=float)
+
+    res = remap_layer_data_by_paths(
+        data=data,
+        old_paths=old_paths,
+        new_paths=new_paths,
+        time_col=0,
+        policy=PathMatchPolicy.ORDERED_DEPTHS,
+    )
+
+    assert res.depth_used == 1
+    assert res.is_ambiguous is True
+    assert res.accept_paths_update is False
+    assert res.applied is False
+    assert res.changed is False
+
+
+def test_basename_only_match_is_accepted_and_cannot_prove_identity():
+    """`LayerLifecycleManager` gates on `dataset_folder` for that reason."""
+    res = remap_layer_data_by_paths(
+        data=np.array([[0.0, 1.0, 2.0], [1.0, 3.0, 4.0]], dtype=float),
+        old_paths=["p/labeled-data/videoA/img000.png", "p/labeled-data/videoA/img001.png"],
+        new_paths=["p/labeled-data/videoB/img000.png", "p/labeled-data/videoB/img001.png"],
+        time_col=0,
+        policy=PathMatchPolicy.ORDERED_DEPTHS,
+    )
+
+    assert res.depth_used == 1
+    assert res.accept_paths_update is True
+
+
+def test_no_overlap_remap_refuses_paths_update():
+    """The other rejection path callers depend on: nothing matched at any depth."""
+    res = remap_layer_data_by_paths(
+        data=np.array([[0.0, 1.0, 2.0]], dtype=float),
+        old_paths=["A/a/img0.png"],
+        new_paths=["B/b/other.png"],
+        time_col=0,
+        policy=PathMatchPolicy.ORDERED_DEPTHS,
+    )
+
+    assert res.depth_used is None
+    assert res.accept_paths_update is False
+
+
 def test_remap_warns_on_low_overlap_ratio(caplog):
     caplog.set_level(logging.WARNING)
 

@@ -454,7 +454,7 @@ class IOProvenance(BaseModel):
     kind:
         Whether this layer is ground-truth or machine output.
     dataset_key:
-        HDF5 key used for the keypoints table (default: ``keypoints``).
+        HDF5 key used for the keypoints table (default: ``df_with_missing``).
     """
 
     # Keep minimal but resilient to future additions
@@ -558,6 +558,15 @@ class PointsMetadata(BaseModel):
     paths: list[str] | None = None
     shape: tuple[int, ...] | None = None
     name: str | None = None
+
+    dataset_folder: str | None = Field(
+        default=None,
+        description=(
+            "Absolute folder this layer was read from, assigned once at read time and never "
+            "rewritten. Unlike root and paths, which are overwritten when a layer adopts a new "
+            "image context, this can be used to decide whether that adoption should happen. "
+        ),
+    )
 
     project: str | None = None
     header: DLCHeaderModel | None = None
