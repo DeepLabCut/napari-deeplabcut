@@ -387,12 +387,12 @@ def test_read_video_keys_the_dataset_it_belongs_to(video_path):
     Without it the lifecycle manager reads the video as a dataset of its own and warns that
     the annotations already open do not match it.
     """
-    from napari_deeplabcut.core.project_paths import dataset_key_for_folder
+    from napari_deeplabcut.core.project_paths import resolve_dataset_folder
 
     _data, params, _kind = read_video(video_path)[0]
     md = params["metadata"]
 
-    assert md["dataset_key"] == dataset_key_for_folder(md["root"])
+    assert md["dataset_folder"] == resolve_dataset_folder(md["root"])
     assert Path(md["root"]).parent.name == "labeled-data"
 
 

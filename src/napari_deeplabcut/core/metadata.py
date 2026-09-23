@@ -108,7 +108,7 @@ def sync_points_from_image(image_meta: ImageMetadata, points_meta: PointsMetadat
     Fill image-derived fields that the Points layer does not have yet.
 
     Only seeds what is missing. A field already set on the layer is never rewritten here:
-    which dataset a layer belongs to is decided by its `dataset_key`, and rewriting `root`
+    which dataset a layer belongs to is decided by its `dataset_folder`, and rewriting `root`
     behind that decision is what let annotations follow the wrong folder.
     """
     updated = points_meta.model_dump(mode="python")

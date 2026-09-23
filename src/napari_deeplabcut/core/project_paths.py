@@ -738,9 +738,9 @@ def infer_dlc_project_from_video_path(
 # -----------------------------------------------------------------------------
 # Lifecycle/session helpers
 # -----------------------------------------------------------------------------
-# TODO @C-Achard 2026-09-21: centralize dataset_key/root/paths into one frozen DatasetBinding with a single accessor,
+# TODO @C-Achard 2026-09-21: centralize dataset_folder/root/paths into one frozen DatasetBinding with a single accessor,
 # so a partially-set layer reads as unbound
-def dataset_key_for_folder(folder: str | Path | None) -> str | None:
+def resolve_dataset_folder(folder: str | Path | None) -> str | None:
     """Stable identity of the dataset folder a layer was read from.
 
     Assigned once at read time and never rewritten. ``root`` and ``paths`` cannot serve

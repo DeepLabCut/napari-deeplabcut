@@ -710,36 +710,36 @@ def test_attach_points_layer_runtime_reattach_rebinds_to_current_store(qtbot, mo
 # ---------------------------------------------------------------------------
 # _remap_frame_indices
 # ---------------------------------------------------------------------------
-NO_DATASET_KEY = object()
+NO_DATASET_FOLDER = object()
 
 
-def _points_bound_to(paths, *, root, dataset_key=None):
+def _points_bound_to(paths, *, root, dataset_folder=None):
     """A Points layer as the readers build one: paths, root, and an immutable identity."""
     layer = make_nonempty_points("bound")
-    if dataset_key is None:
+    if dataset_folder is None:
         key = root
-    elif dataset_key is NO_DATASET_KEY:
+    elif dataset_folder is NO_DATASET_FOLDER:
         key = None
     else:
-        key = dataset_key
+        key = dataset_folder
     layer.metadata = {
         "paths": list(paths),
         "root": root,
-        "dataset_key": key,
+        "dataset_folder": key,
     }
     return layer
 
 
-def _manager_showing(layer, *, paths, root, dataset_key=None):
+def _manager_showing(layer, *, paths, root, dataset_folder=None):
     """A manager whose image context is the given folder."""
     manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
     manager._image_meta = ImageMetadata(paths=list(paths), root=root)
-    manager._image_dataset_key = root if dataset_key is None else dataset_key
+    manager._image_dataset_folder = root if dataset_folder is None else dataset_folder
     return manager
 
 
 def test_remap_frame_indices_refuses_a_layer_from_another_dataset(monkeypatch):
-    """Identity is decided by dataset_key, whatever the frame names happen to be.
+    """Identity is decided by dataset_folder, whatever the frame names happen to be.
 
     These two folders share every frame name, which is the DLC norm rather than evidence
     that they hold the same footage.
@@ -810,7 +810,7 @@ def test_remap_frame_indices_adopts_root_and_paths_together_when_frames_map():
     layer = _points_bound_to(
         ["old/labeled-data/videoA/imgA000.png"],
         root="D:/moved/labeled-data/videoA",
-        dataset_key="C:/project/labeled-data/videoA",
+        dataset_folder="C:/project/labeled-data/videoA",
     )
 
     manager = _manager_showing(layer, paths=new_paths, root="C:/project/labeled-data/videoA")
@@ -883,7 +883,7 @@ def test_dataset_mismatch_names_both_folders_in_full(qtbot):
         paths=["labeled-data/mouse1/img000.png"],
         root="C:/project-B/labeled-data/mouse1",
     )
-    manager._image_dataset_key = "C:/project-B/labeled-data/mouse1"
+    manager._image_dataset_folder = "C:/project-B/labeled-data/mouse1"
 
     manager._remap_frame_indices(layer)
 
@@ -904,7 +904,7 @@ def test_frames_replaced_in_the_same_folder_does_not_tell_the_user_to_clear(qtbo
     manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
     rec = connect_signal_recorders(manager)
     manager._image_meta = ImageMetadata(paths=["labeled-data/videoA/renamed000.png"], root=root)
-    manager._image_dataset_key = root
+    manager._image_dataset_folder = root
 
     manager._remap_frame_indices(layer)
 
@@ -914,11 +914,11 @@ def test_frames_replaced_in_the_same_folder_does_not_tell_the_user_to_clear(qtbo
 
 
 def test_unbound_layer_is_not_told_to_clear_when_its_root_is_stale(qtbot):
-    """A layer with no `dataset_key` adopts whatever is open, so it is never on another folder."""
+    """A layer with no `dataset_folder` adopts whatever is open, so it is never on another folder."""
     layer = _points_bound_to(
         ["labeled-data/videoA/img000.png"],
         root="C:/elsewhere/labeled-data/videoA",
-        dataset_key=NO_DATASET_KEY,
+        dataset_folder=NO_DATASET_FOLDER,
     )
 
     manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
@@ -927,7 +927,7 @@ def test_unbound_layer_is_not_told_to_clear_when_its_root_is_stale(qtbot):
         paths=["labeled-data/videoA/renamed000.png"],
         root="C:/project/labeled-data/videoA",
     )
-    manager._image_dataset_key = "C:/project/labeled-data/videoA"
+    manager._image_dataset_folder = "C:/project/labeled-data/videoA"
 
     manager._remap_frame_indices(layer)
 
@@ -941,7 +941,7 @@ def test_dataset_mismatch_message_names_the_open_folder_not_a_stale_root(qtbot):
     layer = _points_bound_to(
         ["labeled-data/videoA/img000.png"],
         root=None,
-        dataset_key=NO_DATASET_KEY,
+        dataset_folder=NO_DATASET_FOLDER,
     )
 
     manager = LayerLifecycleManager(viewer=DummyViewer([layer]))
@@ -950,7 +950,7 @@ def test_dataset_mismatch_message_names_the_open_folder_not_a_stale_root(qtbot):
         paths=["labeled-data/videoA/renamed000.png"],
         root="C:/project/labeled-data/videoA",
     )
-    manager._image_dataset_key = "C:/project/labeled-data/videoA"
+    manager._image_dataset_folder = "C:/project/labeled-data/videoA"
 
     manager._remap_frame_indices(layer)
 
@@ -966,14 +966,14 @@ def _points_keyed_without_paths(*, root):
     """A keyed layer with no paths, as a numeric-index h5 produces.
 
     `read_hdf` leaves `paths` empty when the frame index is numeric, but still records
-    `root` and `dataset_key`, so a layer can name its dataset while listing no frames.
+    `root` and `dataset_folder`, so a layer can name its dataset while listing no frames.
     """
     layer = make_nonempty_points("keyed")
-    layer.metadata = {"paths": [], "root": root, "dataset_key": root}
+    layer.metadata = {"paths": [], "root": root, "dataset_folder": root}
     return layer
 
 
-def test_no_dataset_key_image_context_is_identified_by_folder(tmp_path, monkeypatch):
+def test_image_context_without_a_dataset_folder_is_identified_by_its_root(tmp_path, monkeypatch):
     """Opening a video must not read as a different dataset than the h5 beside it.
 
     `read_video` rewrites videos/<name>.mp4 into labeled-data/<name>, so its root is the
@@ -986,7 +986,7 @@ def test_no_dataset_key_image_context_is_identified_by_folder(tmp_path, monkeypa
 
     layer = _points_keyed_without_paths(root=root)
     image = make_image("videoA.mp4")
-    image.metadata = {"root": root}  # as read_video builds one: root, no dataset_key
+    image.metadata = {"root": root}  # as read_video builds one: root, no dataset_folder
 
     manager = LayerLifecycleManager(viewer=DummyViewer([image, layer]))
     manager._setup_image_layer(image, reorder=False)
@@ -997,7 +997,7 @@ def test_no_dataset_key_image_context_is_identified_by_folder(tmp_path, monkeypa
 
     manager._sync_points_layers_from_image_meta()
 
-    assert is_same_dataset(manager._image_dataset_key, root)
+    assert is_same_dataset(manager._image_dataset_folder, root)
     assert warned == []
     assert layer.metadata["paths"] == new_paths
 
@@ -1032,7 +1032,7 @@ def test_sync_from_image_meta_still_inherits_paths_for_its_own_dataset():
     assert layer.metadata["paths"] == new_paths
 
 
-def test_sync_from_image_meta_records_the_dataset_key_it_inherits_from():
+def test_sync_from_image_meta_records_the_dataset_folder_it_inherits_from():
     layer = make_points("placeholder")
     layer.metadata = {"project": "C:/project"}
 
@@ -1044,7 +1044,7 @@ def test_sync_from_image_meta_records_the_dataset_key_it_inherits_from():
 
     manager._sync_points_layers_from_image_meta()
 
-    assert layer.metadata["dataset_key"] == "C:/project/labeled-data/videoA"
+    assert layer.metadata["dataset_folder"] == "C:/project/labeled-data/videoA"
 
 
 def test_wire_points_layer_refuses_paths_from_another_dataset(monkeypatch, fake_store):
@@ -1068,7 +1068,7 @@ def test_wire_points_layer_refuses_paths_from_another_dataset(monkeypatch, fake_
     assert warned == [layer]
 
 
-def test_wire_points_layer_records_the_dataset_key_it_inherits_from(monkeypatch, fake_store):
+def test_wire_points_layer_records_the_dataset_folder_it_inherits_from(monkeypatch, fake_store):
     """A layer with no dataset of its own keeps the folder it took its paths from."""
     new_paths = ["labeled-data/videoA/img000.png"]
     layer = make_nonempty_points("placeholder")
@@ -1080,7 +1080,7 @@ def test_wire_points_layer_records_the_dataset_key_it_inherits_from(monkeypatch,
     manager._wire_points_layer(layer)
 
     assert layer.metadata["paths"] == new_paths
-    assert layer.metadata["dataset_key"] == "C:/project/labeled-data/videoA"
+    assert layer.metadata["dataset_folder"] == "C:/project/labeled-data/videoA"
 
 
 def test_wire_points_layer_says_nothing_when_no_image_is_open(monkeypatch, fake_store):
@@ -1113,14 +1113,14 @@ def test_an_unbound_layer_binds_to_the_dataset_it_adopts(monkeypatch):
     )
     manager._remap_frame_indices(layer)
 
-    assert layer.metadata["dataset_key"] == "C:/project/labeled-data/videoA"
+    assert layer.metadata["dataset_folder"] == "C:/project/labeled-data/videoA"
 
     # Now a different folder reusing the same frame names must be refused.
     manager._image_meta = ImageMetadata(
         paths=["labeled-data/videoB/img000.png"],
         root="C:/project/labeled-data/videoB",
     )
-    manager._image_dataset_key = "C:/project/labeled-data/videoB"
+    manager._image_dataset_folder = "C:/project/labeled-data/videoB"
 
     warned = []
     monkeypatch.setattr(manager, "_report_layer_left_on_previous_dataset", lambda ly: warned.append(ly))
@@ -1155,7 +1155,7 @@ def test_taking_context_from_the_open_folder_always_binds_the_layer(
     entry_point,
     already_has_paths,
 ):
-    """Whichever entry point hands a layer image context must also record dataset_key."""
+    """Whichever entry point hands a layer image context must also record dataset_folder."""
     open_root = "C:/project/labeled-data/videoB"
     open_paths = ["labeled-data/videoB/img000.png"]
 
@@ -1168,4 +1168,4 @@ def test_taking_context_from_the_open_folder_always_binds_the_layer(
 
     # Guards the assertion below against passing vacuously if adoption stops happening.
     assert layer.metadata.get("root") == open_root
-    assert layer.metadata.get("dataset_key") == open_root
+    assert layer.metadata.get("dataset_folder") == open_root

@@ -167,7 +167,7 @@ def test_sync_points_from_image_never_rewrites_a_root_that_is_already_set(tmp_pa
 
     synced = metadata_mod.sync_points_from_image(image_meta, points_meta)
 
-    # Which dataset a layer belongs to is settled by dataset_key, not re-derived here.
+    # Which dataset a layer belongs to is settled by dataset_folder, not re-derived here.
     assert synced.root == str(good_points_root)
 
 

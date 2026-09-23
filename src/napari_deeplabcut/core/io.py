@@ -67,9 +67,9 @@ from napari_deeplabcut.core.layers import populate_keypoint_layer_properties
 from napari_deeplabcut.core.metadata import attach_source_and_io_to_layer_kwargs, parse_points_metadata
 from napari_deeplabcut.core.project_paths import (
     canonicalize_path,
-    dataset_key_for_folder,
     find_nearest_config,
     infer_dlc_project_from_points_meta,
+    resolve_dataset_folder,
 )
 from napari_deeplabcut.core.provenance import resolve_output_path_from_metadata, should_nan_clear_existing_for_save
 from napari_deeplabcut.utils.debug import log_timing
@@ -255,7 +255,7 @@ def read_hdf_single(file: Path, *, kind: AnnotationKind | None = None) -> list[L
     )
     layer_props["name"] = file.stem
     layer_props["metadata"]["root"] = str(file.parent)
-    layer_props["metadata"]["dataset_key"] = dataset_key_for_folder(file.parent)
+    layer_props["metadata"]["dataset_folder"] = resolve_dataset_folder(file.parent)
     layer_props["metadata"]["name"] = layer_props["name"]
     layer_props["metadata"]["config_colormap"] = config_colormap
 
@@ -861,7 +861,7 @@ def _build_image_layer_kwargs(
     metadata = {
         "paths": [canonicalize_path(fp, 3) for fp in filepaths],
         "root": str(filepaths[0].parent),
-        "dataset_key": dataset_key_for_folder(filepaths[0].parent),
+        "dataset_folder": resolve_dataset_folder(filepaths[0].parent),
     }
     if dlc_meta is not None:
         metadata["dlc"] = dlc_meta
@@ -1076,7 +1076,7 @@ def read_video(filename: str, *, dlc_meta: dict | None = None, chunk_size: int |
         "name": filename,
         "metadata": {
             "root": root,
-            "dataset_key": dataset_key_for_folder(root),
+            "dataset_folder": resolve_dataset_folder(root),
         },
     }
     if dlc_meta is not None:

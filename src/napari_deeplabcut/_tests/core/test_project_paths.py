@@ -88,28 +88,28 @@ def test_path_match_policy_ordered_depths():
     assert paths_mod.PathMatchPolicy.ORDERED_DEPTHS.depths == (3, 2, 1)
 
 
-def test_dataset_key_is_absolute_two_projects_stay_distinct(tmp_path: Path):
+def test_dataset_folder_is_absolute_two_projects_stay_distinct(tmp_path: Path):
     """The dataset folder name alone repeats across projects; the resolved path does not."""
     a = tmp_path / "project-A" / "labeled-data" / "mouse1"
     b = tmp_path / "project-B" / "labeled-data" / "mouse1"
     a.mkdir(parents=True)
     b.mkdir(parents=True)
 
-    key_a = paths_mod.dataset_key_for_folder(a)
-    key_b = paths_mod.dataset_key_for_folder(b)
+    key_a = paths_mod.resolve_dataset_folder(a)
+    key_b = paths_mod.resolve_dataset_folder(b)
 
     assert key_a != key_b
-    assert key_a == paths_mod.dataset_key_for_folder(str(a))
-    assert paths_mod.dataset_key_for_folder(None) is None
+    assert key_a == paths_mod.resolve_dataset_folder(str(a))
+    assert paths_mod.resolve_dataset_folder(None) is None
 
 
-def test_points_metadata_round_trip_preserves_dataset_key():
+def test_points_metadata_round_trip_preserves_dataset_folder():
     """Identity must survive the metadata sync that runs on every image insert."""
     from napari_deeplabcut.config.models import PointsMetadata
 
-    meta = PointsMetadata(root="C:/p/labeled-data/videoA", dataset_key="C:/p/labeled-data/videoA")
+    meta = PointsMetadata(root="C:/p/labeled-data/videoA", dataset_folder="C:/p/labeled-data/videoA")
 
-    assert PointsMetadata(**meta.model_dump()).dataset_key == "C:/p/labeled-data/videoA"
+    assert PointsMetadata(**meta.model_dump()).dataset_folder == "C:/p/labeled-data/videoA"
 
 
 def test_is_same_dataset_matches_identical_and_rejects_distinct(tmp_path: Path):

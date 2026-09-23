@@ -310,7 +310,7 @@ def test_ambiguous_depth1_remap_is_rejected_and_refuses_paths_update():
 
 
 def test_basename_only_match_is_accepted_and_cannot_prove_identity():
-    """`LayerLifecycleManager` gates on `dataset_key` for that reason."""
+    """`LayerLifecycleManager` gates on `dataset_folder` for that reason."""
     res = remap_layer_data_by_paths(
         data=np.array([[0.0, 1.0, 2.0], [1.0, 3.0, 4.0]], dtype=float),
         old_paths=["p/labeled-data/videoA/img000.png", "p/labeled-data/videoA/img001.png"],

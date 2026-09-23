@@ -454,7 +454,7 @@ class IOProvenance(BaseModel):
     kind:
         Whether this layer is ground-truth or machine output.
     dataset_key:
-        HDF5 key used for the keypoints table (default: ``keypoints``).
+        HDF5 key used for the keypoints table (default: ``df_with_missing``).
     """
 
     # Keep minimal but resilient to future additions
@@ -559,7 +559,7 @@ class PointsMetadata(BaseModel):
     shape: tuple[int, ...] | None = None
     name: str | None = None
 
-    dataset_key: str | None = Field(
+    dataset_folder: str | None = Field(
         default=None,
         description=(
             "Absolute folder this layer was read from, assigned once at read time and never "
