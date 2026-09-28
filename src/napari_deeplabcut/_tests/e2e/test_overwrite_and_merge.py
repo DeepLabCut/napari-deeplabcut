@@ -655,3 +655,34 @@ def test_machine_label_promotion_preserves_existing_gt_after_frame_remap(
         machine_before,
         check_dtype=False,
     )
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_opening_the_same_folder_twice_keeps_one_annotation_layer(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+) -> None:
+    """A folder open re-reads its h5, so opening one twice would load it twice.
+
+    Two layers on one file both save to it, and whichever is saved last wins. Save
+    routing branches on the selection, so the duplicate does not block a save; it makes
+    the stale copy selectable and indistinguishable from the live one.
+    """
+    _project, _config_path, labeled, _h5_path = _make_minimal_dlc_project(tmp_path)
+
+    viewer.open(str(labeled), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len([ly for ly in viewer.layers if isinstance(ly, Points)]) == 1, timeout=10_000)
+    original = next(ly for ly in viewer.layers if isinstance(ly, Points))
+
+    for image_layer in [ly for ly in viewer.layers if not isinstance(ly, Points)]:
+        viewer.layers.remove(image_layer)
+    qtbot.wait(100)
+
+    viewer.open(str(labeled), plugin="napari-deeplabcut")
+    qtbot.wait(600)  # the reloaded copy is removed on a deferred timer
+
+    points_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
+    assert len(points_layers) == 1, f"Expected the reloaded copy to be dropped, got {[ly.name for ly in points_layers]}"
+    assert points_layers[0] is original, "The surviving layer must be the one already loaded, not the reloaded copy"

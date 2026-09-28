@@ -465,6 +465,40 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         if metadata.get("dataset_folder") is None and self._image_dataset_folder is not None:
             metadata["dataset_folder"] = self._image_dataset_folder
 
+    def _reject_reloaded_annotations(self, layer: Points) -> bool:
+        """Drop a second copy of an annotation file that is already loaded.
+
+        Opening a folder re-reads its h5, so opening one twice yields two layers on the
+        same file. Both then save to it, and whichever is saved last wins, silently.
+
+        Keyed on `source_h5` alone: it is the absolute file both layers came from, so a
+        GT and a machine h5 in one folder stay distinct, and a layer without one (a config
+        placeholder, a tracking result) is never matched.
+        """
+        source = (layer.metadata or {}).get("source_h5")
+        if not source:
+            return False
+
+        for managed, _store in self.iter_managed_points():
+            if unwrap(managed) is unwrap(layer):
+                continue
+            if (managed.metadata or {}).get("source_h5") != source:
+                continue
+
+            logger.warning(
+                "Annotations from %s are already loaded as %r; dropping the reloaded copy.",
+                source,
+                getattr(managed, "name", managed),
+            )
+            show_warning(
+                f"These annotations are already open as '{getattr(managed, 'name', managed)}'.\n"
+                "The second copy was closed so both cannot save over each other."
+            )
+            self._single_shot_owned(LAYER_REMOVAL_DELAY_MS, lambda ly=layer: self._remove_layer_if_present(ly))
+            return True
+
+        return False
+
     def _reject_conflicting_dlc_image_layer(self, layer: Image, reason: str) -> None:
         """Reject a conflicting DLC session image safely.
 
@@ -915,6 +949,9 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 return PointsInsertResult.SKIPPED
 
             # KEEP_AS_SEPARATE_LAYER means continue normal setup below.
+
+        if self._reject_reloaded_annotations(layer):
+            return PointsInsertResult.SKIPPED
 
         store = self._wire_points_layer(layer)
         if store is None:
