@@ -389,7 +389,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         dataset = str(root) if root else "its original folder"
         target = self._image_dataset_folder or str(self._image_meta.root or "")
 
-        warned = self._dataset_mismatch_warned.setdefault(layer, set())
+        warned = self._dataset_mismatch_warned.setdefault(unwrap(layer), set())
         if target in warned:
             logger.debug(
                 "Extra dataset-mismatch notification for layer=%r folder=%r",
