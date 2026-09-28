@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from napari.layers import Image, Points
@@ -19,6 +20,8 @@ from .utils import (
     _make_project_with_two_labeled_folders,
     _make_two_projects_sharing_a_video_name,
     _read_h5_keypoints,
+    _write_dlc_config,
+    _write_frames,
 )
 
 
@@ -183,3 +186,85 @@ def test_layer_does_not_follow_a_different_project_using_the_same_video_name(
 
     stray = sorted(p.name for p in proj.folder_b.glob("CollectedData*"))
     assert not stray, f"Annotations from {project_before} were written into project-B: {stray}"
+
+
+def _write_multi_row_gt(path: Path, *, scorer: str, folder_name: str, rows: dict[str, list[float]]) -> Path:
+    """GT file whose row keys may name frames that are not on disk."""
+    cols = pd.MultiIndex.from_product(
+        [[scorer], ["bodypart1", "bodypart2"], ["x", "y"]],
+        names=["scorer", "bodyparts", "coords"],
+    )
+    index = pd.MultiIndex.from_tuples([("labeled-data", folder_name, name) for name in rows])
+    df = pd.DataFrame(list(rows.values()), index=index, columns=cols)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_hdf(path, key="df_with_missing", mode="w")
+    df.to_csv(str(path).replace(".h5", ".csv"))
+    return path
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_keypoints_on_a_deleted_frame_do_not_spread_to_other_frames(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    overwrite_confirm,
+) -> None:
+    """A row key with no file on disk must not be re-keyed onto a frame that does exist.
+
+    Frame association is positional. Re-keying moves those keypoints onto whichever path
+    took their index, and each save walks them one frame further down the folder.
+    """
+    overwrite_confirm.capture()
+
+    project = tmp_path / "project"
+    folder = _write_frames(project / "labeled-data" / "videoA", ("img001.png", "img002.png"))
+    _write_dlc_config(project, bodyparts=("bodypart1", "bodypart2"))
+
+    gt_path = _write_multi_row_gt(
+        folder / "CollectedData_John.h5",
+        scorer="John",
+        folder_name="videoA",
+        rows={
+            "img000.png": [10.0, 20.0, 30.0, 40.0],  # deleted from disk, carries keypoints
+            "img001.png": [np.nan, np.nan, np.nan, np.nan],
+            "img002.png": [np.nan, np.nan, np.nan, np.nan],
+        },
+    )
+
+    _open_folder(viewer, qtbot, folder, expect_points=True)
+    layer = _points_layers(viewer)[0]
+
+    assert len(layer.metadata.get("paths") or []) == 3, "The layer must keep its own frame list, not the folder's"
+
+    viewer.layers.selection.select_only(layer)
+    keypoint_controls._save_layers_dialog(selected=True)
+    qtbot.wait(300)
+
+    df = _read_h5_keypoints(gt_path)
+    annotated = {str(idx[-1]) for idx, row in df.iterrows() if np.isfinite(row.to_numpy(dtype=float)).any()}
+    assert annotated == {"img000.png"}, f"Keypoints spread to frames they were never placed on: {annotated}"
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_frames_added_to_the_folder_still_remap(viewer, keypoint_controls, qtbot, tmp_path) -> None:
+    """The DLC refine loop only adds frames, so it must keep working.
+
+    `extract_outlier_frames` writes new frames into labeled-data/<video> and never removes
+    one, so no annotated row can lose its path.
+    """
+    project = tmp_path / "project"
+    folder = _write_frames(project / "labeled-data" / "videoA", ("img000.png", "img001.png"))
+    _write_dlc_config(project, bodyparts=("bodypart1", "bodypart2"))
+
+    _write_multi_row_gt(
+        folder / "CollectedData_John.h5",
+        scorer="John",
+        folder_name="videoA",
+        rows={"img000.png": [10.0, 20.0, 30.0, 40.0]},
+    )
+
+    _open_folder(viewer, qtbot, folder, expect_points=True)
+    layer = _points_layers(viewer)[0]
+
+    assert len(layer.metadata.get("paths") or []) == 2, "An added frame must not block the remap"
