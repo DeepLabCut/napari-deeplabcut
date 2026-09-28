@@ -401,7 +401,11 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         warned.add(target)
         name = getattr(layer, "name", layer)
 
-        if self._belongs_to_current_dataset(metadata.get("dataset_folder")):
+        # Not `dataset_folder`: an unbound layer passes that check while its `root` names
+        # somewhere else entirely, and it is `root` that receives the save.
+        saves_elsewhere = bool(root) and not is_same_dataset(resolve_dataset_folder(root), target)
+
+        if not saves_elsewhere:
             reason = (
                 f"'{name}' does not match the frames now in {target}.\n\n"
                 "Its annotations are unchanged and still save there."

@@ -913,8 +913,13 @@ def test_frames_replaced_in_the_same_folder_does_not_tell_the_user_to_clear(qtbo
     assert "still save there" in reason
 
 
-def test_unbound_layer_is_not_told_to_clear_when_its_root_is_stale(qtbot):
-    """A layer with no `dataset_folder` adopts whatever is open, so it is never on another folder."""
+def test_unbound_layer_with_a_stale_root_is_told_where_it_will_actually_save(qtbot):
+    """Having no `dataset_folder` does not mean the layer saves into the open folder.
+
+    A rejected remap leaves `root` untouched, so this layer still writes to
+    `C:/elsewhere`. Naming the opened folder here would point the user at a folder that
+    is never written to.
+    """
     layer = _points_bound_to(
         ["labeled-data/videoA/img000.png"],
         root="C:/elsewhere/labeled-data/videoA",
@@ -932,8 +937,9 @@ def test_unbound_layer_is_not_told_to_clear_when_its_root_is_stale(qtbot):
     manager._remap_frame_indices(layer)
 
     reason = rec.dataset_mismatch.calls[0][0]
-    assert "clear" not in reason.lower()
-    assert "still save there" in reason
+    assert "C:/elsewhere/labeled-data/videoA" in reason
+    assert "C:/project/labeled-data/videoA" in reason
+    assert "still save there" not in reason
 
 
 def test_dataset_mismatch_message_names_the_open_folder_not_a_stale_root(qtbot):
