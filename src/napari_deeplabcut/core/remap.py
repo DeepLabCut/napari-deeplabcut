@@ -283,8 +283,16 @@ def remap_layer_data_by_paths(
             False, False, False, False, None, 0, "No overlap between old and new paths; skipping remap.", None
         )
 
+    dup_old = _find_duplicates(old_keys)
+    dup_new = _find_duplicates(new_keys)
+    non_bijective = len(set(idx_map.values())) < len(idx_map)
+
+    # Bare filenames repeat across dataset folders, so equal key lists at depth=1 are no
+    # evidence that the two sides hold the same frames.
+    ambiguous_depth1 = depth == 1 and (bool(dup_old) or bool(dup_new) or non_bijective)
+
     # If ordering already matches, accept metadata paths update but no data remap needed.
-    if old_keys == new_keys:
+    if old_keys == new_keys and not ambiguous_depth1:
         return RemapResult(
             changed=False,
             applied=False,
@@ -298,8 +306,6 @@ def remap_layer_data_by_paths(
 
     warnings: list[str] = []
 
-    dup_old = _find_duplicates(old_keys)
-    dup_new = _find_duplicates(new_keys)
     if dup_old:
         examples = ", ".join(list(dup_old.keys())[:_SAMPLE_N])
         warnings.append(f"Duplicate canonical keys in old_paths at depth={depth} (examples: {examples}).")
@@ -316,7 +322,6 @@ def remap_layer_data_by_paths(
     if mapped_ratio < _WARN_MAPPED_RATIO:
         warnings.append(f"Low mapping coverage: {mapped_ratio:.2f} (mapped={len(idx_map)} of old={len(old_keys)}).")
 
-    non_bijective = len(set(idx_map.values())) < len(idx_map)
     if non_bijective:
         warnings.append("Non-bijective mapping detected (multiple old indices map to the same new index).")
 
@@ -324,7 +329,6 @@ def remap_layer_data_by_paths(
         logger.warning("Remap may be ambiguous/risky: %s", w)
 
     # Reject ambiguous basename-only remaps.
-    ambiguous_depth1 = depth == 1 and (bool(dup_old) or bool(dup_new) or non_bijective)
     if ambiguous_depth1:
         msg = "Rejected ambiguous depth=1 remap; keeping original frame indices and paths."
         logger.warning(msg)

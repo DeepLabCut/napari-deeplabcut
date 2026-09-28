@@ -309,6 +309,30 @@ def test_ambiguous_depth1_remap_is_rejected_and_refuses_paths_update():
     assert res.changed is False
 
 
+def test_fully_colliding_basenames_are_rejected_not_read_as_aligned():
+    """Equal key lists at depth=1 are a name collision, not a match.
+
+    Both sides canonicalize to ["img0.png", "img0.png"], so equality alone cannot tell
+    two folders of identically named frames from one folder in its original order.
+    """
+    old_paths = ["projA/labeled-data/mouse1/img0.png", "projA/labeled-data/mouse2/img0.png"]
+    new_paths = ["projB/labeled-data/catX/img0.png", "projB/labeled-data/catY/img0.png"]
+
+    data = np.array([[0.0, 1.0, 2.0], [1.0, 3.0, 4.0]], dtype=float)
+
+    res = remap_layer_data_by_paths(
+        data=data,
+        old_paths=old_paths,
+        new_paths=new_paths,
+        time_col=0,
+        policy=PathMatchPolicy.ORDERED_DEPTHS,
+    )
+
+    assert res.depth_used == 1
+    assert res.is_ambiguous is True
+    assert res.accept_paths_update is False
+
+
 def test_basename_only_match_is_accepted_and_cannot_prove_identity():
     """`LayerLifecycleManager` gates on `dataset_folder` for that reason."""
     res = remap_layer_data_by_paths(
