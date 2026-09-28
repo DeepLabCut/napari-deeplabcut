@@ -12,6 +12,7 @@ import numpy as np
 from napari.layers import Image, Layer, Points, Tracks
 from napari.utils.events import Event
 from napari.utils.history import update_save_history
+from napari.utils.notifications import show_warning
 from qtpy.QtCore import QObject, Signal
 
 from ...config.keybinds import install_points_layer_keybindings, install_viewer_keybindings
@@ -28,7 +29,7 @@ from ...core.metadata import (
     write_points_meta,
 )
 from ...core.project_paths import PathMatchPolicy, is_same_dataset, resolve_dataset_folder
-from ...core.remap import remap_layer_data_by_paths
+from ...core.remap import LOST_ANNOTATED_FRAMES, remap_layer_data_by_paths
 from ...napari_compat import install_add_wrapper, install_paste_patch, layer_key, unwrap
 from ...napari_compat.points_layer import make_paste_data
 from ...tracking.core.data import TRACKING_LAYER_METADATA_KEY, is_tracking_result_points_layer
@@ -1074,6 +1075,10 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 layer.metadata["paths"] = list(new_paths)
                 if isinstance(layer, Points):
                     mark_layer_presentation_changed(layer)
+
+                for warning in res.warnings:
+                    if warning.startswith(LOST_ANNOTATED_FRAMES):
+                        show_warning(f"'{getattr(layer, 'name', layer)}' — {warning}")
 
             else:
                 # Either no overlap at all, or a match too ambiguous to trust

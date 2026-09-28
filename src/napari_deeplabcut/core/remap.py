@@ -18,6 +18,9 @@ _WARN_OVERLAP_RATIO = 0.80  # Warn if canonicalized path overlap is below this r
 _WARN_MAPPED_RATIO = 0.80  # Warn if mapping coverage of old paths is below this ratio (mapped / old).
 _SAMPLE_N = 5  # Number of examples to include in warnings about duplicate keys.
 
+# Prefix identifying the one remap warning the user is notified about, rather than only logged.
+LOST_ANNOTATED_FRAMES = "Annotated frames lost their path"
+
 
 @dataclass(frozen=True)
 class RemapResult:
@@ -55,6 +58,38 @@ class RemapResult:
     message: str
     data: Any | None
     warnings: tuple[str, ...] = ()
+
+
+def _annotated_frames_without_a_path(
+    *,
+    data: Any,
+    time_col: int,
+    idx_map: Mapping[int, int],
+    n_old: int,
+) -> str | None:
+    """Warn about annotated frames whose old path did not survive the remap.
+
+    Unmapped indices are left unchanged by `_remap_array`, so such a frame keeps its
+    index while `paths` is replaced, and now refers to whatever path holds that position.
+    """
+    unmapped = set(range(n_old)) - set(idx_map)
+    if not unmapped:
+        return None
+
+    try:
+        annotated = sorted(unmapped & {int(t) for t in np.asarray(data)[:, time_col]})
+    except Exception:
+        logger.debug("Could not determine annotated frames for remap diagnostics", exc_info=True)
+        return None
+
+    if not annotated:
+        return None
+
+    return (
+        f"{LOST_ANNOTATED_FRAMES}: {len(annotated)} annotated frame(s) are no longer in the folder "
+        f"(frames {annotated[:_SAMPLE_N]}). Their keypoints now sit on whichever frame took that "
+        f"position, and will save there."
+    )
 
 
 def _remap_array(values: np.ndarray, idx_map: Mapping[int, int]) -> np.ndarray:
@@ -343,6 +378,11 @@ def remap_layer_data_by_paths(
             data=None,
             warnings=tuple(warnings),
         )
+
+    lost = _annotated_frames_without_a_path(data=data, time_col=time_col, idx_map=idx_map, n_old=len(old_keys))
+    if lost:
+        logger.warning(lost)
+        warnings.append(lost)
 
     res = remap_time_indices(data=data, time_col=time_col, idx_map=idx_map)
 
