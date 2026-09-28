@@ -403,7 +403,9 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         # Not `dataset_folder`: an unbound layer passes that check while its `root` names
         # somewhere else entirely, and it is `root` that receives the save.
-        saves_elsewhere = bool(root) and not is_same_dataset(resolve_dataset_folder(root), target)
+        saves_elsewhere = bool(root) and not is_same_dataset(
+            resolve_dataset_folder(root), resolve_dataset_folder(target)
+        )
 
         if not saves_elsewhere:
             reason = (
