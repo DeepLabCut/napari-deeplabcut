@@ -18,8 +18,17 @@ _WARN_OVERLAP_RATIO = 0.80  # Warn if canonicalized path overlap is below this r
 _WARN_MAPPED_RATIO = 0.80  # Warn if mapping coverage of old paths is below this ratio (mapped / old).
 _SAMPLE_N = 5  # Number of examples to include in warnings about duplicate keys.
 
-# Prefix identifying the one remap warning the user is notified about, rather than only logged.
+# Prefix of the message carried by AnnotationFramesMissingError.
 LOST_ANNOTATED_FRAMES = "Annotated frames lost their path"
+
+
+class AnnotationFramesMissingError(RuntimeError):
+    """A layer holds keypoints on a frame the opened folder does not contain.
+
+    Frame association is positional, so re-keying the layer would move those keypoints
+    onto whichever path took their position, and the next save would write them there.
+    No correct mapping exists, so the remap refuses rather than guessing.
+    """
 
 
 @dataclass(frozen=True)
@@ -87,8 +96,8 @@ def _annotated_frames_without_a_path(
 
     return (
         f"{LOST_ANNOTATED_FRAMES}: {len(annotated)} annotated frame(s) are no longer in the folder "
-        f"(frames {annotated[:_SAMPLE_N]}). Their keypoints now sit on whichever frame took that "
-        f"position, and will save there."
+        f"(frames {annotated[:_SAMPLE_N]}). Keypoints on them cannot be matched to the frames now "
+        f"open, and moving them would save annotations onto a frame they do not belong to."
     )
 
 
@@ -383,6 +392,9 @@ def remap_layer_data_by_paths(
     if lost:
         logger.warning(lost)
         warnings.append(lost)
+        # Re-keying the layer would move these rows onto whichever path took their
+        # position, and the next save would write them there.
+        raise AnnotationFramesMissingError(lost)
 
     res = remap_time_indices(data=data, time_col=time_col, idx_map=idx_map)
 

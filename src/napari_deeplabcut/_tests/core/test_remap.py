@@ -1,10 +1,12 @@
 import logging
 
 import numpy as np
+import pytest
 
 from napari_deeplabcut.core.project_paths import PathMatchPolicy
 from napari_deeplabcut.core.remap import (
     LOST_ANNOTATED_FRAMES,
+    AnnotationFramesMissingError,
     build_frame_index_map,
     remap_layer_data_by_paths,
     remap_time_indices,
@@ -334,39 +336,41 @@ def test_fully_colliding_basenames_are_rejected_not_read_as_aligned():
     assert res.accept_paths_update is False
 
 
-def test_annotated_frame_losing_its_path_is_logged(caplog):
-    """A renamed frame is accepted silently, so the log is the only trace.
+def test_annotated_frame_losing_its_path_is_refused(caplog):
+    """A keypoint on a vanished frame has no correct destination, so the remap refuses.
 
-    The point keeps its index while `paths` is replaced, so it now refers to whatever
-    path holds that position.
+    Frame association is positional: re-keying the layer would move those keypoints onto
+    whichever path took their position, and the next save would write them there.
     """
     old_paths = [f"p/labeled-data/vidA/img{i:03d}.png" for i in range(5)]
-    new_paths = list(old_paths)
-    new_paths[2] = "p/labeled-data/vidA/renamed.png"
+    new_paths = [p for p in old_paths if not p.endswith("img002.png")]
 
     with caplog.at_level(logging.WARNING, logger="napari_deeplabcut.core.remap"):
-        res = remap_layer_data_by_paths(
-            data=np.array([[2.0, 10.0, 10.0]]),
-            old_paths=old_paths,
-            new_paths=new_paths,
-            time_col=0,
-        )
+        with pytest.raises(AnnotationFramesMissingError) as excinfo:
+            remap_layer_data_by_paths(
+                data=np.array([[2.0, 10.0, 10.0]]),
+                old_paths=old_paths,
+                new_paths=new_paths,
+                time_col=0,
+            )
+
+    assert str(excinfo.value).startswith(LOST_ANNOTATED_FRAMES)
+    assert "lost their path" in caplog.text
+
+
+def test_frames_vanishing_without_keypoints_are_not_refused():
+    """Only frames carrying keypoints have anything to lose."""
+    old_paths = [f"p/labeled-data/vidA/img{i:03d}.png" for i in range(5)]
+    new_paths = [p for p in old_paths if not p.endswith("img002.png")]
+
+    res = remap_layer_data_by_paths(
+        data=np.array([[0.0, 10.0, 10.0]]),
+        old_paths=old_paths,
+        new_paths=new_paths,
+        time_col=0,
+    )
 
     assert res.accept_paths_update is True
-    assert "lost their path" in caplog.text
-    # The manager selects this warning out of res.warnings to notify the user.
-    assert any(w.startswith(LOST_ANNOTATED_FRAMES) for w in res.warnings)
-
-    caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="napari_deeplabcut.core.remap"):
-        remap_layer_data_by_paths(
-            data=np.array([[0.0, 10.0, 10.0]]),
-            old_paths=old_paths,
-            new_paths=new_paths,
-            time_col=0,
-        )
-
-    assert "lost their path" not in caplog.text
 
 
 def test_basename_only_match_is_accepted_and_cannot_prove_identity():
