@@ -171,6 +171,32 @@ def test_sync_points_from_image_never_rewrites_a_root_that_is_already_set(tmp_pa
     assert synced.root == str(good_points_root)
 
 
+def test_sync_points_from_image_does_not_seed_root_beside_existing_paths(tmp_path: Path):
+    project_root = tmp_path / "project"
+    layer_dataset = project_root / "labeled-data" / "mouse1"
+    opened_dataset = project_root / "labeled-data" / "mouse2"
+    layer_dataset.mkdir(parents=True)
+    opened_dataset.mkdir(parents=True)
+
+    image_meta = ImageMetadata(
+        root=str(opened_dataset),
+        paths=[str(opened_dataset / "img001.png")],
+        shape=[100, 200],
+        name="images",
+    )
+    points_meta = PointsMetadata(paths=[str(layer_dataset / "img001.png")])
+
+    synced = metadata_mod.sync_points_from_image(image_meta, points_meta)
+
+    # root routes the save, paths says what it is indexed against: seeding one beside the
+    # other is the split that sends annotations to a folder they did not come from.
+    assert synced.root is None
+    assert synced.paths == [str(layer_dataset / "img001.png")]
+    # Fields that do not route a save are still seeded.
+    assert tuple(synced.shape) == (100, 200)
+    assert synced.name == "images"
+
+
 def test_ensure_metadata_models_accepts_dicts_and_models():
     ImageMetadata(root="img-root")
     pts_model = PointsMetadata(root="pts-root")

@@ -110,10 +110,15 @@ def sync_points_from_image(image_meta: ImageMetadata, points_meta: PointsMetadat
     Only seeds what is missing. A field already set on the layer is never rewritten here:
     which dataset a layer belongs to is decided by its `dataset_folder`, and rewriting `root`
     behind that decision is what let annotations follow the wrong folder.
+
+    A layer that already has `paths` is not given a `root` either: the two route saves
+    together and must name one dataset. Such a layer takes its `root` from
+    `_remap_frame_indices`, once the paths update is verified.
     """
     updated = points_meta.model_dump(mode="python")
 
-    for key in ("root", "paths", "shape", "name"):
+    keys = ("shape", "name") if updated.get("paths") else ("root", "paths", "shape", "name")
+    for key in keys:
         if updated.get(key) in (None, "", []):
             value = getattr(image_meta, key, None)
             if value not in (None, "", []):

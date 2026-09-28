@@ -1147,20 +1147,18 @@ ADOPTION_ENTRY_POINTS = {
 
 
 @pytest.mark.parametrize("entry_point", sorted(ADOPTION_ENTRY_POINTS))
-@pytest.mark.parametrize("already_has_paths", [False, True], ids=["nothing", "paths_only"])
 def test_taking_context_from_the_open_folder_always_binds_the_layer(
     qtbot,
     fake_store,
     monkeypatch,
     entry_point,
-    already_has_paths,
 ):
     """Whichever entry point hands a layer image context must also record dataset_folder."""
     open_root = "C:/project/labeled-data/videoB"
     open_paths = ["labeled-data/videoB/img000.png"]
 
     layer = make_points("unbound")
-    layer.metadata = {"paths": ["labeled-data/videoA/img000.png"]} if already_has_paths else {}
+    layer.metadata = {}
 
     manager = _manager_showing(layer, paths=open_paths, root=open_root)
 
@@ -1169,3 +1167,34 @@ def test_taking_context_from_the_open_folder_always_binds_the_layer(
     # Guards the assertion below against passing vacuously if adoption stops happening.
     assert layer.metadata.get("root") == open_root
     assert layer.metadata.get("dataset_folder") == open_root
+
+
+@pytest.mark.parametrize("entry_point", sorted(ADOPTION_ENTRY_POINTS))
+def test_a_layer_holding_its_own_paths_takes_no_context_before_remap(
+    qtbot,
+    fake_store,
+    monkeypatch,
+    entry_point,
+):
+    """Neither entry point hands a root to a layer that already lists frames.
+
+    `root` and `paths` route a save together, so a layer that took one folder's root
+    while listing another's frames would save into the first and be indexed against the
+    second. Such a layer takes its root from `_remap_frame_indices`, once the paths
+    update is verified; binding it here would also mark it as belonging to a folder its
+    frames were never checked against, which silences the mismatch report.
+    """
+    open_root = "C:/project/labeled-data/videoB"
+    open_paths = ["labeled-data/videoB/img000.png"]
+    own_paths = ["labeled-data/videoA/img000.png"]
+
+    layer = make_points("unbound")
+    layer.metadata = {"paths": list(own_paths)}
+
+    manager = _manager_showing(layer, paths=open_paths, root=open_root)
+
+    ADOPTION_ENTRY_POINTS[entry_point](manager, layer, monkeypatch)
+
+    assert layer.metadata.get("root") is None
+    assert layer.metadata.get("dataset_folder") is None
+    assert layer.metadata.get("paths") == own_paths
