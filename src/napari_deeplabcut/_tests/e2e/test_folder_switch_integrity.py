@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 from napari.layers import Image, Points
@@ -227,8 +226,8 @@ def test_keypoints_on_a_deleted_frame_do_not_spread_to_other_frames(
         folder_name="videoA",
         rows={
             "img000.png": [10.0, 20.0, 30.0, 40.0],  # deleted from disk, carries keypoints
-            "img001.png": [np.nan, np.nan, np.nan, np.nan],
-            "img002.png": [np.nan, np.nan, np.nan, np.nan],
+            "img001.png": [50.0, 60.0, 70.0, 80.0],
+            "img002.png": [90.0, 100.0, 110.0, 120.0],
         },
     )
 
@@ -242,8 +241,12 @@ def test_keypoints_on_a_deleted_frame_do_not_spread_to_other_frames(
     qtbot.wait(300)
 
     df = _read_h5_keypoints(gt_path)
-    annotated = {str(idx[-1]) for idx, row in df.iterrows() if np.isfinite(row.to_numpy(dtype=float)).any()}
-    assert annotated == {"img000.png"}, f"Keypoints spread to frames they were never placed on: {annotated}"
+    by_frame = {str(idx[-1]): row.to_numpy(dtype=float).tolist() for idx, row in df.iterrows()}
+
+    # Spreading overwrites a real frame with the deleted frame's coordinates.
+    assert by_frame["img000.png"] == [10.0, 20.0, 30.0, 40.0]
+    assert by_frame["img001.png"] == [50.0, 60.0, 70.0, 80.0]
+    assert by_frame["img002.png"] == [90.0, 100.0, 110.0, 120.0]
 
 
 @pytest.mark.usefixtures("qtbot")
