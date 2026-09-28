@@ -6,13 +6,13 @@ from collections.abc import Callable, Iterator
 from enum import Enum
 from types import MethodType
 from typing import TYPE_CHECKING, Any
-from weakref import WeakKeyDictionary
+from weakref import WeakKeyDictionary, WeakSet
 
 import numpy as np
 from napari.layers import Image, Layer, Points, Tracks
 from napari.utils.events import Event
 from napari.utils.history import update_save_history
-from napari.utils.notifications import show_error, show_warning
+from napari.utils.notifications import show_warning
 from qtpy.QtCore import QObject, Signal
 
 from ...config.keybinds import install_points_layer_keybindings, install_viewer_keybindings
@@ -116,6 +116,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         self._project_path: str | None = None
 
         self._dataset_mismatch_warned: WeakKeyDictionary[Layer, set[str]] = WeakKeyDictionary()
+        self._locked_for_dataset_mismatch: WeakSet[Layer] = WeakSet()
 
         self._attached = False
         self.viewer_keybinds_installed = False
@@ -379,15 +380,56 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
         return is_same_dataset(layer_dataset_folder, self._image_dataset_folder)
 
     def _report_layer_left_on_previous_dataset(self, layer: Any) -> None:
-        """Report that a layer did not follow the newly opened folder.
-
-        The remap sweep visits every non-Image layer on every qualifying insert, so one
-        folder open reaches this more than once for the same layer. Report only the first
-        time a given layer fails to follow a given folder; the log records every pass.
-        """
+        """Report that a layer did not follow the newly opened folder."""
         metadata = layer.metadata or {}
         root = metadata.get("root")
         dataset = str(root) if root else "its original folder"
+        target = self._image_dataset_folder or str(self._image_meta.root or "")
+        name = getattr(layer, "name", layer)
+
+        # Not `dataset_folder`: an unbound layer passes that check while its `root` names
+        # somewhere else entirely, and it is `root` that receives the save.
+        saves_elsewhere = bool(root) and not is_same_dataset(
+            resolve_dataset_folder(root), resolve_dataset_folder(target)
+        )
+
+        if not saves_elsewhere:
+            reason = (
+                f"'{name}' does not match the frames now in {target}.\n\n"
+                "The layer annotations are unchanged and still save to their original folder. "
+                "Due to the newly loaded dataset context, it cannot be safely edited and has been locked.\n\n"
+            )
+        else:
+            reason = (
+                f"'{name}' could not be matched to the frames in the folder that was opened.\n\n"
+                f"It will still save to:\n  {dataset}\n"
+                f"not:\n  {target}\n\n"
+                "Due to this, it cannot be safely edited and has been locked.\n\n"
+            )
+        reason += (
+            "To label the folder you just opened:\n"
+            f"  1. Save '{name}' if it has unsaved changes\n"
+            "  2. Clear all layers, including the images\n"
+            "  3. Open the folder again\n"
+            "  4. If it has no annotations yet, drop the project's config.yaml in to get a\n"
+            "     keypoints layer carrying the project's bodyparts\n\n"
+            "If you did not mean to open it, clear all layers and reopen the previous folder."
+        )
+
+        self._notify_dataset_mismatch(layer, reason)
+
+    def _notify_dataset_mismatch(self, layer: Any, reason: str) -> None:
+        """Report that a layer is out of step with the open folder, and lock it.
+
+        Frame association is positional, so an edit made on the frame on screen would be
+        stored against the frame holding that position in the layer's own `paths`.
+        `_unlock_for_current_dataset` reverses the lock.
+
+        The remap sweep revisits every non-Image layer on every qualifying insert, so
+        report only the first time a layer fails to follow a given folder.
+        """
+        self._lock_against_current_dataset(layer)
+
         target = self._image_dataset_folder or str(self._image_meta.root or "")
 
         warned = self._dataset_mismatch_warned.setdefault(unwrap(layer), set())
@@ -400,29 +442,53 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
             return
 
         warned.add(target)
-        name = getattr(layer, "name", layer)
-
-        # Not `dataset_folder`: an unbound layer passes that check while its `root` names
-        # somewhere else entirely, and it is `root` that receives the save.
-        saves_elsewhere = bool(root) and not is_same_dataset(
-            resolve_dataset_folder(root), resolve_dataset_folder(target)
-        )
-
-        if not saves_elsewhere:
-            reason = (
-                f"'{name}' does not match the frames now in {target}.\n\n"
-                "Its annotations are unchanged and still save there."
-            )
-        else:
-            reason = (
-                f"'{name}' could not be matched to the frames in the folder that was opened.\n\n"
-                f"It will still save to:\n  {dataset}\n"
-                f"not:\n  {target}\n\n"
-                "Please clear it before labelling the new folder."
-            )
         self.viewer.status = reason
 
+        # Off the insert stack: this runs inside a layer insertion, and the UI shows a modal.
         self._single_shot_owned(0, lambda: self.layer_dataset_mismatch.emit(reason))
+
+    def _lock_against_current_dataset(self, layer: Any) -> None:
+        """Take editing away from `layer`, and record that we were the ones who did.
+
+        Only Points layers are locked: nothing else here is hand-edited frame by frame.
+        """
+        if not isinstance(unwrap(layer), Points):
+            return
+
+        if self._set_layer_editable(layer, False):
+            self._locked_for_dataset_mismatch.add(unwrap(layer))
+
+    def _unlock_for_current_dataset(self, layer: Any) -> None:
+        """Re-enable editing once a layer's frame indices match the open folder again.
+
+        Only undoes our own lock: a layer left non-editable by the user or by napari is
+        not ours to re-enable.
+        """
+        if unwrap(layer) not in self._locked_for_dataset_mismatch:
+            return
+
+        self._set_layer_editable(layer, True)
+        self._locked_for_dataset_mismatch.discard(unwrap(layer))
+
+    def _set_layer_editable(self, layer: Any, editable: bool) -> bool:
+        """Set `editable`, returning whether the layer is now in that state."""
+        try:
+            if getattr(layer, "editable", editable) is not editable:
+                layer.editable = editable
+                logger.debug(
+                    "Set editable=%s on layer=%r",
+                    editable,
+                    getattr(layer, "name", layer),
+                )
+            return True
+        except Exception:
+            logger.debug(
+                "Could not set editable=%s on layer=%r",
+                editable,
+                getattr(layer, "name", layer),
+                exc_info=True,
+            )
+            return False
 
     def _may_follow_current_dataset(self, layer: Any) -> bool:
         """Whether `layer` may take `root` or `paths` from the folder now open.
@@ -1054,6 +1120,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                     safe_image_meta.pop("paths", None)
                     layer.metadata.update(safe_image_meta)
                     self._record_dataset_folder(layer)
+                    self._unlock_for_current_dataset(layer)
                 except Exception:
                     logger.debug(
                         "Failed to sync non-path image metadata for layer=%r",
@@ -1136,6 +1203,7 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 )
 
         except AnnotationFramesMissingError as exc:
+            stem = (layer.metadata or {}).get("source_h5_stem") or "CollectedData_<ScorerName>"
             # Refused, not failed: the layer keeps its own paths and data, so a save still
             # writes where its keypoints came from. Say so rather than degrade quietly.
             logger.error(
@@ -1143,7 +1211,20 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
                 getattr(layer, "name", str(layer)),
                 exc,
             )
-            show_error(f"'{getattr(layer, 'name', layer)}' — {exc}\n\nThe layer was left on its own frames.")
+            # Reloading the layer or reopening the folder raises this again, so the lock
+            # only lifts once the frame list and the annotation file agree. The message
+            # gives guidance since no in-plugin action clears it.
+            self._notify_dataset_mismatch(
+                layer,
+                f"'{getattr(layer, 'name', layer)}' — {exc}\n\n"
+                "Your annotation file is not modified. The layer has been locked for "
+                "editing: it is still indexed against the frame list it was loaded with, "
+                "so labelling it now would store keypoints against the wrong frames.\n\n"
+                "Restore the frame in the folder, or remove its row:\n"
+                f"  1. Delete the row for the missing frame in {stem}.csv\n"
+                '  2. Run deeplabcut.convertcsv2h5("/path/to/config.yaml")\n'
+                "  3. Reopen the folder",
+            )
 
         except Exception:
             logger.exception("Failed to remap frame indices for layer %s", getattr(layer, "name", str(layer)))

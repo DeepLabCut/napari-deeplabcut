@@ -892,12 +892,8 @@ def test_dataset_mismatch_names_both_folders_in_full(qtbot):
     assert "C:/project-B/labeled-data/mouse1" in reason
 
 
-def test_frames_replaced_in_the_same_folder_does_not_tell_the_user_to_clear(qtbot):
-    """Re-extracting frames leaves the layer where it is, so clearing it would lose labels.
-
-    The layer belongs to the folder that was opened, so naming two folders and telling the
-    user to clear it would name the same folder twice and provide incorrect guidance.
-    """
+def test_frames_replaced_in_the_same_folder_names_one_folder_and_reports_the_lock(qtbot):
+    """Same folder: one folder named, and the lock stated."""
     root = "C:/project/labeled-data/videoA"
     layer = _points_bound_to(["labeled-data/videoA/imgA000.png"], root=root)
 
@@ -909,8 +905,9 @@ def test_frames_replaced_in_the_same_folder_does_not_tell_the_user_to_clear(qtbo
     manager._remap_frame_indices(layer)
 
     reason = rec.dataset_mismatch.calls[0][0]
-    assert "clear" not in reason.lower()
-    assert "still save there" in reason
+    assert "not:" not in reason
+    assert "still save to their original folder" in reason
+    assert "has been locked" in reason
 
 
 def test_unbound_layer_with_a_stale_root_is_told_where_it_will_actually_save(qtbot):
@@ -963,6 +960,97 @@ def test_dataset_mismatch_message_names_the_open_folder_not_a_stale_root(qtbot):
     reason = rec.dataset_mismatch.calls[0][0]
     assert "C:/project/labeled-data/videoA" in reason
     assert "its original folder" not in reason
+
+
+# ---------------------------------------------------------------------------
+# Locking a layer that no longer matches the frames on screen
+# ---------------------------------------------------------------------------
+def test_a_layer_left_on_another_folder_cannot_be_labelled():
+    """Frame association is positional, so an edit would land on the layer's own frame."""
+    layer = _points_bound_to(["labeled-data/videoA/imgA000.png"], root="C:/project/labeled-data/videoA")
+
+    manager = _manager_showing(
+        layer,
+        paths=["labeled-data/videoB/imgB000.png"],
+        root="C:/project/labeled-data/videoB",
+    )
+
+    manager._remap_frame_indices(layer)
+
+    assert layer.editable is False
+
+
+def test_a_layer_whose_frames_were_replaced_in_place_cannot_be_labelled():
+    """Same folder, different frame list: the indices are stale too."""
+    root = "C:/project/labeled-data/videoA"
+    layer = _points_bound_to(["labeled-data/videoA/imgA000.png"], root=root)
+
+    manager = _manager_showing(layer, paths=["labeled-data/videoA/renamed000.png"], root=root)
+
+    manager._remap_frame_indices(layer)
+
+    assert layer.editable is False
+
+
+def test_reopening_the_layers_own_folder_gives_editing_back():
+    """The lock follows the open folder, not the layer."""
+    own_paths = ["labeled-data/videoA/imgA000.png"]
+    layer = _points_bound_to(own_paths, root="C:/project/labeled-data/videoA")
+
+    manager = _manager_showing(
+        layer,
+        paths=["labeled-data/videoB/imgB000.png"],
+        root="C:/project/labeled-data/videoB",
+    )
+    manager._remap_frame_indices(layer)
+    assert layer.editable is False
+
+    manager._image_meta = ImageMetadata(paths=own_paths, root="C:/project/labeled-data/videoA")
+    manager._image_dataset_folder = "C:/project/labeled-data/videoA"
+    manager._remap_frame_indices(layer)
+
+    assert layer.editable is True
+
+
+def test_a_matching_layer_is_never_locked():
+    """A layer that follows the folder stays editable."""
+    new_paths = ["labeled-data/videoA/img001.png", "labeled-data/videoA/img000.png"]
+    layer = _points_bound_to(
+        ["labeled-data/videoA/img000.png", "labeled-data/videoA/img001.png"],
+        root="C:/project/labeled-data/videoA",
+    )
+
+    manager = _manager_showing(layer, paths=new_paths, root="C:/project/labeled-data/videoA")
+
+    manager._remap_frame_indices(layer)
+
+    assert layer.metadata["paths"] == new_paths
+    assert layer.editable is True
+
+
+def test_frames_pruned_from_the_layers_own_folder_lock_and_give_the_remedy(qtbot):
+    """No in-plugin action clears this, so the message carries the fix from the DLC docs.
+
+    The layer holds a keypoint on `imgA001.png`, which is no longer in the folder.
+    """
+    root = "C:/project/labeled-data/videoA"
+    layer = _points_bound_to(
+        ["labeled-data/videoA/imgA000.png", "labeled-data/videoA/imgA001.png"],
+        root=root,
+    )
+    layer.data = np.array([[0, 1, 2], [1, 3, 4]], dtype=float)
+    layer.metadata["source_h5_stem"] = "CollectedData_John"
+
+    manager = _manager_showing(layer, paths=["labeled-data/videoA/imgA000.png"], root=root)
+    rec = connect_signal_recorders(manager)
+
+    manager._remap_frame_indices(layer)
+
+    assert layer.editable is False
+
+    reason = rec.dataset_mismatch.calls[0][0]
+    assert "CollectedData_John.csv" in reason
+    assert "convertcsv2h5" in reason
 
 
 # ---------------------------------------------------------------------------
