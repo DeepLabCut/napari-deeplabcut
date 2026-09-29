@@ -126,3 +126,98 @@ def test_read_hdf_single_metadata_contains_root_and_name(tmp_path: Path):
     assert meta["name"] == "CollectedData_John"
     assert meta["metadata"]["root"] == str(h5.parent)
     assert meta["metadata"]["name"] == "CollectedData_John"
+
+
+def _write_h5_multi_animal(path: Path, *, individuals, scorer: str = "John", frames: int = 3):
+    """Write a multi-animal file whose 'individuals' level takes the type given."""
+    bodyparts = ["head", "tail"]
+    cols = pd.MultiIndex.from_product(
+        [[scorer], list(individuals), bodyparts, ["x", "y"]],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
+    index = [f"img{i:03d}.png" for i in range(frames)]
+    values = np.arange(frames * len(cols), dtype=float).reshape(frames, len(cols))
+    df = pd.DataFrame(values, index=index, columns=cols)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_hdf(path, key="df_with_missing", mode="w")
+    return frames * len(individuals) * len(bodyparts)
+
+
+def test_read_hdf_single_multi_animal_string_individuals(tmp_path: Path):
+    """Control for the regression below: string individuals load every annotation."""
+    h5 = tmp_path / "CollectedData_John.h5"
+    expected = _write_h5_multi_animal(h5, individuals=["ind1", "ind2"])
+
+    data, _, _ = read_hdf_single(h5)[0]
+    assert len(data) == expected
+
+
+def test_read_hdf_single_multi_animal_numeric_individuals(tmp_path: Path):
+    """Individuals named 1, 2 load like any other.
+
+    Regression: DLCHeaderModel string-normalises every header level, so header.individuals
+    is ['1','2'] while the file's level stays int64. Before _normalise_column_levels, the
+    reindex in read_hdf_single matched nothing and the layer loaded silently empty.
+    """
+    h5 = tmp_path / "CollectedData_John.h5"
+    expected = _write_h5_multi_animal(h5, individuals=[1, 2])
+
+    data, _, _ = read_hdf_single(h5)[0]
+    assert len(data) == expected
+
+
+def test_read_hdf_single_warns_only_when_column_levels_are_not_text(tmp_path: Path, monkeypatch):
+    """Notify for a numeric level, stay silent otherwise.
+
+    Regression: the level check originally tested dtype. pandas 3 gives string levels a
+    dedicated `str` dtype rather than `object`, so every level looked coerced and every
+    file opened with a spurious notification.
+    """
+    seen: list[str] = []
+    monkeypatch.setattr("napari_deeplabcut.core.io.show_warning", seen.append)
+
+    text = tmp_path / "text" / "CollectedData_John.h5"
+    _write_h5_multi_animal(text, individuals=["ind1", "ind2"])
+    read_hdf_single(text)
+    assert seen == [], "a file with text keypoint names must not notify"
+
+    numeric = tmp_path / "numeric" / "CollectedData_John.h5"
+    _write_h5_multi_animal(numeric, individuals=[1, 2])
+    read_hdf_single(numeric)
+    assert len(seen) == 1
+    assert "individuals" in seen[0]
+
+
+def _write_h5_multi_scorer(path: Path, *, scorers, frames: int = 3):
+    """Write a two-scorer file with a likelihood coord, so the scorers are merged on read."""
+    individuals = ["ind1", "ind2"]
+    bodyparts = ["head", "tail"]
+    cols = pd.MultiIndex.from_product(
+        [list(scorers), individuals, bodyparts, ["x", "y", "likelihood"]],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
+    index = [f"img{i:03d}.png" for i in range(frames)]
+    values = np.arange(frames * len(cols), dtype=float).reshape(frames, len(cols))
+    df = pd.DataFrame(values, index=index, columns=cols)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_hdf(path, key="df_with_missing", mode="w")
+    return frames * len(individuals) * len(bodyparts)
+
+
+def test_read_hdf_single_does_not_warn_for_a_discarded_numeric_scorer(tmp_path: Path, monkeypatch):
+    """A numeric scorer that merging drops must not be reported as a coerced level.
+
+    Regression: the level check read columns.levels, which keeps values no column uses.
+    merge_multiple_scorers selects one scorer block by boolean mask, so the discarded
+    scorer's numeric name stayed in the level and every such file notified the user that
+    its keypoint names had been rewritten.
+    """
+    seen: list[str] = []
+    monkeypatch.setattr("napari_deeplabcut.core.io.show_warning", seen.append)
+
+    h5 = tmp_path / "CollectedData_John.h5"
+    expected = _write_h5_multi_scorer(h5, scorers=["John", 2])
+
+    data, _, _ = read_hdf_single(h5)[0]
+    assert len(data) == expected
+    assert seen == [], f"every keypoint name is text; got {seen!r}"
