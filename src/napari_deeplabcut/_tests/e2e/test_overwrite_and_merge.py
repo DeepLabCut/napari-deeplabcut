@@ -3,7 +3,7 @@ import logging
 import numpy as np
 import pandas as pd
 import pytest
-from napari.layers import Points
+from napari.layers import Image, Points
 
 from napari_deeplabcut.config.models import AnnotationKind, DLCHeaderModel
 from napari_deeplabcut.core.io import _read_hdf_any_key
@@ -17,6 +17,9 @@ from .utils import (
     _make_project_config_and_frames_no_gt,
     _seed_gt_and_machine_outlier_dataset,
     _set_or_add_bodypart_xy,
+    _write_dlc_config,
+    _write_frames,
+    _write_keypoints_h5,
 )
 
 logger = logging.getLogger(__name__)
@@ -654,4 +657,182 @@ def test_machine_label_promotion_preserves_existing_gt_after_frame_remap(
         machine_after,
         machine_before,
         check_dtype=False,
+    )
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_opening_the_same_folder_twice_keeps_one_annotation_layer(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+) -> None:
+    """A folder open re-reads its h5, so opening one twice would load it twice.
+
+    Two layers on one file both save to it, and whichever is saved last wins. Save
+    routing branches on the selection, so the duplicate does not block a save; it makes
+    the stale copy selectable and indistinguishable from the live one.
+    """
+    _project, _config_path, labeled, _h5_path = _make_minimal_dlc_project(tmp_path)
+
+    viewer.open(str(labeled), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: len([ly for ly in viewer.layers if isinstance(ly, Points)]) == 1, timeout=10_000)
+    original = next(ly for ly in viewer.layers if isinstance(ly, Points))
+
+    for image_layer in [ly for ly in viewer.layers if not isinstance(ly, Points)]:
+        viewer.layers.remove(image_layer)
+    qtbot.wait(100)
+
+    viewer.open(str(labeled), plugin="napari-deeplabcut")
+    qtbot.wait(600)  # the reloaded copy is removed on a deferred timer
+
+    points_layers = [ly for ly in viewer.layers if isinstance(ly, Points)]
+    assert len(points_layers) == 1, f"Expected the reloaded copy to be dropped, got {[ly.name for ly in points_layers]}"
+    assert points_layers[0] is original, "The surviving layer must be the one already loaded, not the reloaded copy"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "Removing a bodypart from config.yaml and loading that config drops its annotations. "
+        "The merge prompt keys on added keypoints only, so a removal applies silently, and "
+        "restore_dlc_on_disk_header_shape then drops the column on save. Remove this marker "
+        "when the plugin refuses or reports the removal."
+    ),
+)
+@pytest.mark.usefixtures("qtbot")
+def test_config_dropping_a_bodypart_does_not_delete_its_annotations(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    overwrite_confirm,
+) -> None:
+    """A config edit must not silently delete annotations already on disk.
+
+    DeepLabCut itself treats the config as a view: `merge_annotateddatasets` reindexes to
+    `cfg["bodyparts"]` and leaves labeled-data untouched. The plugin must not be more
+    destructive than that.
+    """
+    overwrite_confirm.capture()
+
+    project, _config_path, labeled, h5_path = _make_minimal_dlc_project(tmp_path)
+    _write_keypoints_h5(
+        h5_path,
+        scorer="John",
+        img_rel=("labeled-data", "test", "img000.png"),
+        bodyparts=("bodypart1", "bodypart2"),
+        values=[10.0, 20.0, 30.0, 40.0],
+    )
+
+    viewer.open(str(labeled), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=10_000)
+
+    # The project now declares only bodypart1.
+    reduced_config = _write_dlc_config(project, bodyparts=("bodypart1",))
+    viewer.open(str(reduced_config), plugin="napari-deeplabcut")
+    qtbot.wait(600)
+
+    layer = _get_points_layer_with_data(viewer)
+    viewer.layers.selection.select_only(layer)
+    keypoint_controls._save_layers_dialog(selected=True)
+    qtbot.wait(300)
+
+    saved = _read_hdf_any_key(h5_path)
+    bodyparts = set(saved.columns.get_level_values("bodyparts"))
+    assert "bodypart2" in bodyparts, "Annotations for a bodypart removed from config were deleted"
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_opening_a_folder_does_not_take_bodyparts_from_config(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+    overwrite_confirm,
+) -> None:
+    """Opening a folder reads the header from the h5, never from the nearby config.
+
+    `read_hdf_single` consults the nearest config for the colormap only. Widening that to
+    bodyparts would make every folder open silently drop annotations the config no longer
+    declares, with no user action at all.
+    """
+    overwrite_confirm.capture()
+
+    project, _config_path, labeled, h5_path = _make_minimal_dlc_project(tmp_path)
+    _write_keypoints_h5(
+        h5_path,
+        scorer="John",
+        img_rel=("labeled-data", "test", "img000.png"),
+        bodyparts=("bodypart1", "bodypart2"),
+        values=[10.0, 20.0, 30.0, 40.0],
+    )
+    # The project config declares fewer bodyparts than the annotations hold.
+    _write_dlc_config(project, bodyparts=("bodypart1",))
+
+    viewer.open(str(labeled), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=10_000)
+
+    layer = _get_points_layer_with_data(viewer)
+    hdr = layer.metadata.get("header")
+    hdr = hdr if isinstance(hdr, DLCHeaderModel) else DLCHeaderModel.model_validate(hdr)
+    assert "bodypart2" in hdr.bodyparts, "Header was taken from config.yaml instead of the annotation file"
+
+    viewer.layers.selection.select_only(layer)
+    keypoint_controls._save_layers_dialog(selected=True)
+    qtbot.wait(300)
+
+    saved = _read_hdf_any_key(h5_path)
+    # Guards against a vacuous pass: an aborted save would leave the file untouched.
+    assert set(saved.columns.get_level_values("bodyparts")) == {"bodypart1", "bodypart2"}
+    assert np.isfinite(saved.to_numpy(dtype=float)).all(), "Save did not write both bodyparts back"
+
+
+@pytest.mark.usefixtures("qtbot")
+def test_opening_a_second_folder_does_not_change_the_first_layers_header(
+    viewer,
+    keypoint_controls,
+    qtbot,
+    tmp_path,
+) -> None:
+    """Opening another folder must never reduce an existing layer's keypoints.
+
+    Guards the planned config auto-population: a config discovered for the folder being
+    opened must not reach a layer that belongs to a different one. Without this, opening a
+    folder whose project declares fewer bodyparts would erase the others on the next save.
+    """
+    project_a = tmp_path / "projectA"
+    folder_a = _write_frames(project_a / "labeled-data" / "videoA", ("img000.png",))
+    _write_dlc_config(project_a, bodyparts=("bodypart1", "bodypart2"))
+    _write_keypoints_h5(
+        folder_a / "CollectedData_John.h5",
+        scorer="John",
+        img_rel=("labeled-data", "videoA", "img000.png"),
+        bodyparts=("bodypart1", "bodypart2"),
+        values=[10.0, 20.0, 30.0, 40.0],
+    )
+
+    project_b = tmp_path / "projectB"
+    folder_b = _write_frames(project_b / "labeled-data" / "videoB", ("img100.png",))
+    _write_dlc_config(project_b, bodyparts=("bodypart1",))
+
+    viewer.open(str(folder_a), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: any(isinstance(ly, Points) for ly in viewer.layers), timeout=10_000)
+    layer = _get_points_layer_with_data(viewer)
+
+    # The documented way to switch: clear the images, keep the annotation layer. Opening B
+    # with A's images still loaded is refused outright, which would make this test vacuous.
+    for image_layer in [ly for ly in viewer.layers if isinstance(ly, Image)]:
+        viewer.layers.remove(image_layer)
+    qtbot.wait(100)
+
+    viewer.open(str(folder_b), plugin="napari-deeplabcut")
+    qtbot.waitUntil(lambda: any(isinstance(ly, Image) for ly in viewer.layers), timeout=10_000)
+    qtbot.wait(300)
+
+    hdr = layer.metadata.get("header")
+    hdr = hdr if isinstance(hdr, DLCHeaderModel) else DLCHeaderModel.model_validate(hdr)
+    assert "bodypart2" in hdr.bodyparts, (
+        "Opening another folder reduced the keypoints of a layer belonging to the first one"
     )

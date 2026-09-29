@@ -18,6 +18,18 @@ _WARN_OVERLAP_RATIO = 0.80  # Warn if canonicalized path overlap is below this r
 _WARN_MAPPED_RATIO = 0.80  # Warn if mapping coverage of old paths is below this ratio (mapped / old).
 _SAMPLE_N = 5  # Number of examples to include in warnings about duplicate keys.
 
+# Prefix of the message carried by AnnotationFramesMissingError.
+LOST_ANNOTATED_FRAMES = "Annotated frames lost their path"
+
+
+class AnnotationFramesMissingError(RuntimeError):
+    """A layer holds keypoints on a frame the opened folder does not contain.
+
+    Frame association is positional, so re-keying the layer would move those keypoints
+    onto whichever path took their position, and the next save would write them there.
+    No correct mapping exists, so the remap refuses rather than guessing.
+    """
+
 
 @dataclass(frozen=True)
 class RemapResult:
@@ -55,6 +67,38 @@ class RemapResult:
     message: str
     data: Any | None
     warnings: tuple[str, ...] = ()
+
+
+def _annotated_frames_without_a_path(
+    *,
+    data: Any,
+    time_col: int,
+    idx_map: Mapping[int, int],
+    n_old: int,
+) -> str | None:
+    """Warn about annotated frames whose old path did not survive the remap.
+
+    Unmapped indices are left unchanged by `_remap_array`, so such a frame keeps its
+    index while `paths` is replaced, and now refers to whatever path holds that position.
+    """
+    unmapped = set(range(n_old)) - set(idx_map)
+    if not unmapped:
+        return None
+
+    try:
+        annotated = sorted(unmapped & {int(t) for t in np.asarray(data)[:, time_col]})
+    except Exception:
+        logger.debug("Could not determine annotated frames for remap diagnostics", exc_info=True)
+        return None
+
+    if not annotated:
+        return None
+
+    return (
+        f"{LOST_ANNOTATED_FRAMES}: {len(annotated)} annotated frame(s) are no longer in the folder "
+        f"(frames {annotated[:_SAMPLE_N]}). Keypoints on them cannot be matched to the frames now "
+        f"open, and moving them would save annotations onto a frame they do not belong to."
+    )
 
 
 def _remap_array(values: np.ndarray, idx_map: Mapping[int, int]) -> np.ndarray:
@@ -283,8 +327,16 @@ def remap_layer_data_by_paths(
             False, False, False, False, None, 0, "No overlap between old and new paths; skipping remap.", None
         )
 
+    dup_old = _find_duplicates(old_keys)
+    dup_new = _find_duplicates(new_keys)
+    non_bijective = len(set(idx_map.values())) < len(idx_map)
+
+    # Bare filenames repeat across dataset folders, so equal key lists at depth=1 are no
+    # evidence that the two sides hold the same frames.
+    ambiguous_depth1 = depth == 1 and (bool(dup_old) or bool(dup_new) or non_bijective)
+
     # If ordering already matches, accept metadata paths update but no data remap needed.
-    if old_keys == new_keys:
+    if old_keys == new_keys and not ambiguous_depth1:
         return RemapResult(
             changed=False,
             applied=False,
@@ -298,8 +350,6 @@ def remap_layer_data_by_paths(
 
     warnings: list[str] = []
 
-    dup_old = _find_duplicates(old_keys)
-    dup_new = _find_duplicates(new_keys)
     if dup_old:
         examples = ", ".join(list(dup_old.keys())[:_SAMPLE_N])
         warnings.append(f"Duplicate canonical keys in old_paths at depth={depth} (examples: {examples}).")
@@ -316,7 +366,6 @@ def remap_layer_data_by_paths(
     if mapped_ratio < _WARN_MAPPED_RATIO:
         warnings.append(f"Low mapping coverage: {mapped_ratio:.2f} (mapped={len(idx_map)} of old={len(old_keys)}).")
 
-    non_bijective = len(set(idx_map.values())) < len(idx_map)
     if non_bijective:
         warnings.append("Non-bijective mapping detected (multiple old indices map to the same new index).")
 
@@ -324,7 +373,6 @@ def remap_layer_data_by_paths(
         logger.warning("Remap may be ambiguous/risky: %s", w)
 
     # Reject ambiguous basename-only remaps.
-    ambiguous_depth1 = depth == 1 and (bool(dup_old) or bool(dup_new) or non_bijective)
     if ambiguous_depth1:
         msg = "Rejected ambiguous depth=1 remap; keeping original frame indices and paths."
         logger.warning(msg)
@@ -339,6 +387,14 @@ def remap_layer_data_by_paths(
             data=None,
             warnings=tuple(warnings),
         )
+
+    lost = _annotated_frames_without_a_path(data=data, time_col=time_col, idx_map=idx_map, n_old=len(old_keys))
+    if lost:
+        logger.warning(lost)
+        warnings.append(lost)
+        # Re-keying the layer would move these rows onto whichever path took their
+        # position, and the next save would write them there.
+        raise AnnotationFramesMissingError(lost)
 
     res = remap_time_indices(data=data, time_col=time_col, idx_map=idx_map)
 
