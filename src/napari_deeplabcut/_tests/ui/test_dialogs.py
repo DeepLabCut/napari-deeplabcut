@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -141,6 +142,21 @@ def test_shortcuts_dialog_disconnects_from_viewer_on_close(dialog_parent, qtbot)
     qtbot.wait(0)
 
     assert emitter._callbacks == []
+
+
+def test_shortcuts_dialog_opens_without_torch(monkeypatch, dialog_parent, qtbot):
+    monkeypatch.setitem(sys.modules, "torch", None)
+    for name in [m for m in sys.modules if m.startswith("napari_deeplabcut.tracking")]:
+        monkeypatch.delitem(sys.modules, name)
+
+    viewer = _DummyViewer(active=_points_layer())
+    dlg = Shortcuts(dialog_parent, viewer=viewer)
+    qtbot.addWidget(dlg)
+
+    tracking_rows = [row for row in dlg.findChildren(ShortcutRow) if row.spec.scope == "tracking-points-layer"]
+    assert tracking_rows, "expected at least one tracking-points-layer shortcut row"
+    for row in tracking_rows:
+        assert "Tracking widget is not open." in row.toolTip()
 
 
 # -----------------------------------------------------------------------------
