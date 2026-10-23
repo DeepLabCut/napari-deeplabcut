@@ -7,6 +7,7 @@ NOTE: could be split into dialogs/tutorial.py, dialogs/shortcuts.py, dialogs/con
 from __future__ import annotations
 
 import html
+import sys
 from collections import defaultdict, namedtuple
 from dataclasses import dataclass
 from enum import Enum
@@ -243,9 +244,11 @@ class Shortcuts(QDialog):
         if self.viewer is None:
             return False
 
-        from napari_deeplabcut.tracking._widgets import TrackingControls
+        tracking_widgets = sys.modules.get("napari_deeplabcut.tracking._widgets")
+        if tracking_widgets is None:
+            return False
 
-        controls = TrackingControls.get_existing(self.viewer)
+        controls = tracking_widgets.TrackingControls.get_existing(self.viewer)
         return controls is not None and controls.isVisible()
 
     def _build_rows(self) -> None:
