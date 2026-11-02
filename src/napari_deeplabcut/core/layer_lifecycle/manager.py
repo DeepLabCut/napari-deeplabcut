@@ -539,8 +539,8 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         Keyed on `source_h5` alone: it is the absolute file both layers came from, so a
         GT and a machine h5 in one folder stay distinct, and a layer without one (a config
-        placeholder) is never matched. Tracking results are exempt: they inherit the
-        source layer's `source_h5` but never save to it.
+        placeholder) is never matched. Tracking results are exempt on both sides: they
+        inherit the source layer's `source_h5` but never save to it.
         """
         if LayerLifecycleManager.is_tracking_result_layer(layer):
             return False
@@ -551,6 +551,8 @@ class LayerLifecycleManager(QObject, OwnedTimersMixin):
 
         for managed, _store in self.iter_managed_points():
             if unwrap(managed) is unwrap(layer):
+                continue
+            if LayerLifecycleManager.is_tracking_result_layer(managed):
                 continue
             if (managed.metadata or {}).get("source_h5") != source:
                 continue

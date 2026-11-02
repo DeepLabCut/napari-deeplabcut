@@ -563,6 +563,25 @@ def test_reload_guard_keeps_a_tracking_result_of_the_loaded_layer(qtbot):
     assert manager._reject_reloaded_annotations(tracked) is False
 
 
+def test_reload_guard_accepts_the_h5_when_only_a_tracking_result_holds_it(qtbot):
+    manager, loaded = _manager_with_loaded_annotations()
+
+    tracked = make_points("[Tracked v1] CollectedData_John")
+    tracked.metadata = build_tracking_result_metadata(
+        loaded.metadata,
+        tracker_name="test-tracker",
+        source_layer_name=loaded.name,
+        query_frame=0,
+    )
+    manager.register_managed_points_layer(tracked, object())
+    manager.unregister_managed_layer(loaded)
+
+    reloaded = make_points("CollectedData_John")
+    reloaded.metadata = dict(loaded.metadata)
+
+    assert manager._reject_reloaded_annotations(reloaded) is False
+
+
 def test_setup_points_layer_applies_display_settings(
     qtbot,
     fake_store,
