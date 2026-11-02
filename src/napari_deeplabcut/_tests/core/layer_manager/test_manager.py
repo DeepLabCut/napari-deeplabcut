@@ -531,6 +531,57 @@ def test_manager_tracking_display_role_takes_precedence_over_machine_kind(qtbot)
     assert manager.points_display_role(layer) is PointsDisplaySource.TRACKING_RESULT
 
 
+def _manager_with_loaded_annotations(source_h5="C:/project/labeled-data/test/CollectedData_John.h5"):
+    loaded = make_points("CollectedData_John")
+    loaded.metadata = {"source_h5": source_h5}
+    manager = LayerLifecycleManager(viewer=DummyViewer([loaded]))
+    manager.register_managed_points_layer(loaded, object())
+    return manager, loaded
+
+
+def test_reload_guard_rejects_a_second_layer_on_the_same_h5(qtbot):
+    manager, loaded = _manager_with_loaded_annotations()
+
+    reloaded = make_points("CollectedData_John [1]")
+    reloaded.metadata = dict(loaded.metadata)
+
+    assert manager._reject_reloaded_annotations(reloaded) is True
+
+
+def test_reload_guard_keeps_a_tracking_result_of_the_loaded_layer(qtbot):
+    manager, loaded = _manager_with_loaded_annotations()
+
+    tracked = make_points("[Tracked v1] CollectedData_John")
+    tracked.metadata = build_tracking_result_metadata(
+        loaded.metadata,
+        tracker_name="test-tracker",
+        source_layer_name=loaded.name,
+        query_frame=0,
+    )
+
+    assert tracked.metadata["source_h5"] == loaded.metadata["source_h5"]
+    assert manager._reject_reloaded_annotations(tracked) is False
+
+
+def test_reload_guard_accepts_the_h5_when_only_a_tracking_result_holds_it(qtbot):
+    manager, loaded = _manager_with_loaded_annotations()
+
+    tracked = make_points("[Tracked v1] CollectedData_John")
+    tracked.metadata = build_tracking_result_metadata(
+        loaded.metadata,
+        tracker_name="test-tracker",
+        source_layer_name=loaded.name,
+        query_frame=0,
+    )
+    manager.register_managed_points_layer(tracked, object())
+    manager.unregister_managed_layer(loaded)
+
+    reloaded = make_points("CollectedData_John")
+    reloaded.metadata = dict(loaded.metadata)
+
+    assert manager._reject_reloaded_annotations(reloaded) is False
+
+
 def test_setup_points_layer_applies_display_settings(
     qtbot,
     fake_store,
